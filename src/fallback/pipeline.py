@@ -11,16 +11,14 @@ from __future__ import annotations
 
 import io
 import os
-import struct
 import time
 import wave
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-import numpy as np
-
 from src.common.audio import record_clip, DEFAULT_SAMPLE_RATE
+from src.common.lang import build_instructions, LANG_NAMES
 from src.common.logging_utils import get_logger
 
 logger = get_logger("fallback.pipeline")
@@ -29,39 +27,27 @@ RECORDINGS_DIR = Path(__file__).resolve().parents[2] / "recordings"
 DEFAULT_TRANSCRIBE_MODEL = "whisper-1"
 DEFAULT_CHAT_MODEL = "gpt-4o-mini"
 
-TRANSLATION_SYSTEM_PROMPT = (
-    "You are a bilingual interpreter between Vietnamese and English. "
-    "Detect the language of the input text. "
-    "If Vietnamese, translate to English. "
-    "If English, translate to Vietnamese. "
-    "Output the translation ONLY. No labels, no explanations."
-)
-
 
 def _pcm_to_wav_bytes(pcm_bytes: bytes, sample_rate: int, channels: int = 1) -> bytes:
-    """Wrap raw PCM16 bytes into a WAV container in memory."""
     buf = io.BytesIO()
     with wave.open(buf, "wb") as wf:
         wf.setnchannels(channels)
-        wf.setsampwidth(2)  # 16-bit = 2 bytes
+        wf.setsampwidth(2)
         wf.setframerate(sample_rate)
         wf.writeframes(pcm_bytes)
     return buf.getvalue()
 
 
 def _save_wav(pcm_bytes: bytes, sample_rate: int) -> Path:
-    """Save PCM bytes as a timestamped WAV file and return the path."""
     RECORDINGS_DIR.mkdir(parents=True, exist_ok=True)
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     path = RECORDINGS_DIR / f"clip_{ts}.wav"
-    wav_bytes = _pcm_to_wav_bytes(pcm_bytes, sample_rate)
-    path.write_bytes(wav_bytes)
+    path.write_bytes(_pcm_to_wav_bytes(pcm_bytes, sample_rate))
     logger.info(f"Saved recording to {path}")
     return path
 
 
 def _transcribe(wav_path: Path, api_key: str, model: str) -> str:
-    """Call OpenAI Whisper transcription and return transcript text."""
     import openai
     client = openai.OpenAI(api_key=api_key)
     t0 = time.monotonic()
@@ -77,8 +63,7 @@ def _transcribe(wav_path: Path, api_key: str, model: str) -> str:
     return transcript
 
 
-def _translate(transcript: str, api_key: str, model: str) -> str:
-    """Call OpenAI chat API to translate transcript and return translated text."""
+def _translate(transcript: str, api_key: str, model: str, system_prompt: str) -> str:
     import openai
     client = openai.OpenAI(api_key=api_key)
     t0 = time.monotonic()
@@ -86,7 +71,7 @@ def _translate(transcript: str, api_key: str, model: str) -> str:
         model=model,
         temperature=0.3,
         messages=[
-            {"role": "system", "content": TRANSLATION_SYSTEM_PROMPT},
+            {"role": "system", "content": system_prompt},
             {"role": "user", "content": transcript},
         ],
     )
@@ -103,23 +88,41 @@ def run_fallback(
     api_key: Optional[str] = None,
     transcribe_model: str = DEFAULT_TRANSCRIBE_MODEL,
     chat_model: str = DEFAULT_CHAT_MODEL,
+    src_lang: str = "auto",
+    tgt_lang: str = "auto",
+    meeting_mode: str = "locked",
 ) -> str:
     """
     Full fallback pipeline: record -> transcribe -> translate.
     Returns the final translation string.
+
+    meeting_mode="locked": build routing from src/tgt before recording; never change.
+    meeting_mode="auto":   detect language from transcript, then route dynamically.
     """
     if api_key is None:
         api_key = os.environ.get("OPENAI_API_KEY", "")
     if not api_key:
         raise ValueError("OPENAI_API_KEY is not set.")
 
-    logger.info(f"Recording {seconds}s from device {mic_device} at {sample_rate}Hz...")
+    # In locked mode with explicit src/tgt, build instructions upfront.
+    # In auto mode (or locked+auto src/tgt), we build after transcription.
+    upfront_prompt: Optional[str] = None
+    if meeting_mode == "locked" and src_lang != "auto" and tgt_lang != "auto":
+        upfront_prompt = build_instructions(src_lang, tgt_lang)
+        print(f"[MeetingMode] locked | src={src_lang} tgt={tgt_lang}", flush=True)
+    elif meeting_mode == "locked":
+        print(f"[MeetingMode] locked | src={src_lang} tgt={tgt_lang} (will detect on transcript)", flush=True)
+    else:
+        print(f"[MeetingMode] auto | src={src_lang} tgt={tgt_lang} (sticky enabled)", flush=True)
+
+    logger.info(
+        f"Recording {seconds}s | src={src_lang} tgt={tgt_lang} | meeting_mode={meeting_mode} | device={mic_device}"
+    )
     print(f"Recording for {seconds:.0f} seconds... Speak now!", flush=True)
 
     t0 = time.monotonic()
     pcm = record_clip(seconds=seconds, device=mic_device, sample_rate=sample_rate)
-    record_elapsed = time.monotonic() - t0
-    logger.info(f"Recorded {len(pcm)} bytes in {record_elapsed:.2f}s")
+    logger.info(f"Recorded {len(pcm)} bytes in {time.monotonic() - t0:.2f}s")
 
     wav_path = _save_wav(pcm, sample_rate)
 
@@ -130,8 +133,11 @@ def run_fallback(
         logger.warning("Empty transcript. No speech detected.")
         return ""
 
-    print(f"Transcript: {transcript}", flush=True)
+    print(f"[You] {transcript}", flush=True)
     print("Translating...", flush=True)
-    translation = _translate(transcript, api_key, chat_model)
+
+    # Resolve system prompt: use upfront if locked+explicit, else build from src/tgt (model detects)
+    system_prompt = upfront_prompt if upfront_prompt is not None else build_instructions(src_lang, tgt_lang)
+    translation = _translate(transcript, api_key, chat_model, system_prompt)
 
     return translation

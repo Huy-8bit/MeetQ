@@ -72,6 +72,16 @@ python app.py --mode realtime --no-speaker
 python app.py --mode realtime --debug
 ```
 
+**Fixed meeting language — Japanese → English, locked for whole session:**
+```bash
+python app.py --mode realtime --meeting-mode locked --src ja --tgt en
+```
+
+**Auto-detect mode — language can switch mid-session:**
+```bash
+python app.py --mode realtime --meeting-mode auto
+```
+
 **Fallback mode — record 8 seconds then translate:**
 ```bash
 python app.py --mode fallback --seconds 8
@@ -99,8 +109,11 @@ python app.py --help
 | `--model` | `gpt-4o-realtime-preview-2024-12-17` | Realtime model ID |
 | `--transcribe-model` | `whisper-1` | Fallback transcription model |
 | `--chat-model` | `gpt-4o-mini` | Fallback translation model |
-| `--input-lang LANG` | `auto` | Language hint (informational) |
-| `--output-lang LANG` | `auto` | Language hint (informational) |
+| `--src {auto,vi,en,ja}` | `auto` | Source language |
+| `--tgt {auto,vi,en,ja}` | `auto` | Target language |
+| `--meeting-mode {locked,auto}` | `locked` | `locked`: fix routing after first detection; `auto`: re-detect mid-session |
+| `--pairs PAIRS` | all | Restrict routing, e.g. `"vi<->en,ja<->en"` |
+| `--show-input` | off | Always print `[You]` transcript |
 
 ---
 

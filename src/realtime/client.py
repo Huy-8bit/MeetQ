@@ -2,12 +2,11 @@
 src/realtime/client.py
 OpenAI Realtime API WebSocket client for live voice-to-voice interpretation.
 
-Behavior:
-  - User speaks Vietnamese → assistant responds in English (text + audio)
-  - User speaks English   → assistant responds in Vietnamese (text + audio)
-  - Barge-in: new user speech cancels in-progress assistant response immediately
-  - Text translation streams to stdout; audio plays through speaker in real time
-  - --debug flag enables verbose event logging
+Supports Vietnamese, English, and Japanese with configurable src/tgt routing.
+- Auto-detection via lightweight heuristic on input transcript (sticky per session).
+- Barge-in: new user speech cancels in-progress assistant response immediately.
+- Text streams to stdout; audio plays through speaker in real time.
+- --debug flag enables verbose event logging.
 
 Protocol reference: docs/realtime_protocol.md
 """
@@ -23,6 +22,15 @@ import websockets
 from websockets.exceptions import ConnectionClosedError, ConnectionClosedOK
 
 from src.common.audio import MicCapture, SpeakerPlayer
+from src.common.lang import (
+    build_instructions,
+    detect_lang,
+    pair_allowed,
+    parse_pairs,
+    resolve_tgt,
+    DEFAULT_TGT,
+    LANG_NAMES,
+)
 from src.common.logging_utils import get_logger, print_translation
 
 # ---------------------------------------------------------------------------
@@ -36,14 +44,6 @@ SPEAKER_SAMPLE_RATE = 24000   # Realtime API outputs PCM16 at 24kHz
 MAX_RECONNECT_ATTEMPTS = 5
 RECONNECT_BASE_DELAY = 1.0
 
-TRANSLATION_INSTRUCTIONS = (
-    "You are a live bilingual interpreter between Vietnamese and English. "
-    "Detect whether the user spoke Vietnamese or English. "
-    "If Vietnamese, output ONLY the English translation. "
-    "If English, output ONLY the Vietnamese translation. "
-    "Output the translation text only. No explanations, no labels, no commentary."
-)
-
 logger = get_logger("realtime.client")
 
 
@@ -51,11 +51,11 @@ logger = get_logger("realtime.client")
 # Session config
 # ---------------------------------------------------------------------------
 
-def _build_session_update(enable_audio: bool) -> dict:
+def _build_session_update(instructions: str, enable_audio: bool) -> dict:
     modalities = ["text", "audio"] if enable_audio else ["text"]
     session: dict = {
         "modalities": modalities,
-        "instructions": TRANSLATION_INSTRUCTIONS,
+        "instructions": instructions,
         "input_audio_format": "pcm16",
         "input_audio_transcription": {"model": "whisper-1"},
         "turn_detection": {
@@ -80,6 +80,7 @@ class RealtimeClient:
     """
     Manages the WebSocket session to OpenAI Realtime API.
     Streams mic audio in, receives translated text + audio out.
+    Supports vi/en/ja with auto-detection and sticky language.
     """
 
     def __init__(
@@ -91,6 +92,11 @@ class RealtimeClient:
         enable_speaker: bool = True,
         speaker_device: Optional[int] = None,
         debug: bool = False,
+        src_lang: str = "auto",
+        tgt_lang: str = "auto",
+        allowed_pairs: set = None,
+        show_input: bool = False,
+        meeting_mode: str = "locked",  # "locked" | "auto"
     ) -> None:
         self.api_key = api_key
         self.model = model
@@ -99,14 +105,25 @@ class RealtimeClient:
         self.enable_speaker = enable_speaker
         self.speaker_device = speaker_device
         self.debug = debug
+        self.src_lang = src_lang
+        self.tgt_lang = tgt_lang
+        self.allowed_pairs = allowed_pairs if allowed_pairs is not None else set()
+        self.show_input = show_input
+        self.meeting_mode = meeting_mode  # "locked" | "auto"
+
         self._running = False
         self._ws = None
-        # Speaker player — created per session
         self._player: Optional[SpeakerPlayer] = None
-        # Tracks whether assistant is currently speaking (for barge-in)
         self._assistant_speaking = False
-        # Current response_id for cancel events
         self._current_response_id: Optional[str] = None
+        # Sticky language: last confidently detected source language
+        self._last_detected_src: Optional[str] = None
+        # True once routing is committed (always True in locked mode after first detection)
+        self._routing_locked: bool = (
+            self.meeting_mode == "locked"
+            and self.src_lang != "auto"
+            and self.tgt_lang != "auto"
+        )
 
     # ------------------------------------------------------------------
     # Public entry point
@@ -129,13 +146,25 @@ class RealtimeClient:
     # ------------------------------------------------------------------
 
     def _log(self, msg: str) -> None:
-        """Info-level log — always shown."""
         logger.info(msg)
 
     def _dbg(self, msg: str) -> None:
-        """Debug-level log — only shown with --debug."""
         if self.debug:
             logger.debug(msg)
+
+    # ------------------------------------------------------------------
+    # Instructions for current routing
+    # ------------------------------------------------------------------
+
+    def _current_instructions(self) -> str:
+        """
+        Build instructions using the effective src.
+        If src=auto and we have a sticky detected language, use that.
+        """
+        effective_src = self.src_lang
+        if effective_src == "auto" and self._last_detected_src:
+            effective_src = self._last_detected_src
+        return build_instructions(effective_src, self.tgt_lang)
 
     # ------------------------------------------------------------------
     # Retry loop
@@ -178,7 +207,6 @@ class RealtimeClient:
             "OpenAI-Beta": "realtime=v1",
         }
 
-        # Create a fresh player for this session
         if self.enable_speaker:
             self._player = SpeakerPlayer(
                 device=self.speaker_device,
@@ -192,7 +220,8 @@ class RealtimeClient:
             ) as ws:
                 self._ws = ws
                 self._log(f"ws_connected model={self.model}")
-                await ws.send(json.dumps(_build_session_update(self.enable_speaker)))
+                instructions = self._current_instructions()
+                await ws.send(json.dumps(_build_session_update(instructions, self.enable_speaker)))
 
                 try:
                     await asyncio.gather(
@@ -213,7 +242,6 @@ class RealtimeClient:
     # ------------------------------------------------------------------
 
     async def _send_audio(self, ws) -> None:
-        """Read from mic and stream PCM16 chunks to the WebSocket."""
         loop = asyncio.get_running_loop()
         cap = MicCapture(device=self.mic_device, sample_rate=self.sample_rate)
         audio_q: asyncio.Queue[Optional[str]] = asyncio.Queue(maxsize=300)
@@ -231,9 +259,21 @@ class RealtimeClient:
         t = threading.Thread(target=_capture_thread, daemon=True)
         t.start()
 
-        speaker_label = " | speaker ON" if self.enable_speaker else " | speaker OFF"
+        src_label = self.src_lang if self.src_lang != "auto" else "auto-detect"
+        tgt_label = self.tgt_lang if self.tgt_lang != "auto" else "auto"
+        speaker_label = "speaker ON" if self.enable_speaker else "speaker OFF"
+
+        if self.meeting_mode == "locked":
+            if self._routing_locked:
+                mode_line = f"[MeetingMode] locked | src={self.src_lang} tgt={self.tgt_lang}"
+            else:
+                mode_line = "[MeetingMode] locked | waiting for first confident detection to lock routing"
+        else:
+            mode_line = f"[MeetingMode] auto | src=auto tgt=auto (sticky enabled)"
+
+        print(f"\n{mode_line}", flush=True)
         print(
-            f"\n[Listening... speak Vietnamese or English.{speaker_label} Ctrl+C to quit.]\n",
+            f"[Listening... src={src_label} tgt={tgt_label} | {speaker_label} | Ctrl+C to quit.]\n",
             flush=True,
         )
         self._log("Mic capture started.")
@@ -254,18 +294,16 @@ class RealtimeClient:
             cap.stop()
 
     # ------------------------------------------------------------------
-    # Event receiver (websocket -> terminal + speaker)
+    # Event receiver
     # ------------------------------------------------------------------
 
     async def _receive_events(self, ws) -> None:
-        """Dispatch server events to the appropriate handler."""
         async for raw in ws:
             try:
                 event = json.loads(raw)
             except json.JSONDecodeError:
                 logger.warning("Non-JSON message from server — ignoring.")
                 continue
-
             etype = event.get("type", "")
             await self._handle_event(ws, etype, event)
 
@@ -281,7 +319,6 @@ class RealtimeClient:
         # ---- VAD / input buffer ----
         elif etype == "input_audio_buffer.speech_started":
             self._log("vad_speech_started")
-            # Barge-in: cancel any in-progress response and stop speaker
             if self._assistant_speaking:
                 await self._cancel_response(ws)
 
@@ -300,17 +337,13 @@ class RealtimeClient:
         elif etype == "conversation.item.input_audio_transcription.completed":
             transcript = event.get("transcript", "").strip()
             if transcript:
-                if self.debug:
-                    print(f"\r[You] {transcript}\n", flush=True)
-                else:
-                    print(f"[You] {transcript}", flush=True)
+                await self._handle_input_transcript(ws, transcript)
 
         # ---- Response lifecycle ----
         elif etype == "response.created":
             self._current_response_id = event.get("response", {}).get("id")
             self._assistant_speaking = True
             self._dbg(f"response.created id={self._current_response_id}")
-            # Blank line before each new translation block
             print_translation("\n[Interp] ", end="")
 
         elif etype in (
@@ -334,19 +367,17 @@ class RealtimeClient:
             self._log(f"response.text.done text={text!r}")
             print_translation("\n", end="")
 
-        # ---- Audio output (speaker) ----
+        # ---- Audio output ----
         elif etype == "response.audio.delta":
             encoded = event.get("delta", "")
             if encoded and self._player:
-                pcm = base64.b64decode(encoded)
-                self._player.push(pcm)
+                self._player.push(base64.b64decode(encoded))
 
         elif etype == "response.audio.done":
             self._dbg("response.audio.done")
             if self._player:
                 self._player.flush()
 
-        # ---- Output audio transcript (model's spoken text, for debug) ----
         elif etype == "response.audio_transcript.delta":
             self._dbg(f"audio_transcript.delta={event.get('delta', '')!r}")
 
@@ -374,25 +405,83 @@ class RealtimeClient:
             self._dbg(f"unhandled_event type={etype}")
 
     # ------------------------------------------------------------------
-    # Barge-in helper
+    # Input transcript handling + language routing
+    # ------------------------------------------------------------------
+
+    async def _handle_input_transcript(self, ws, transcript: str) -> None:
+        """
+        Called when a complete input transcript arrives.
+        Detects language (heuristic), updates sticky src, reprints [You] label,
+        and re-sends session.update if routing changed.
+        """
+        # Print [You] line
+        if self.show_input or self.debug:
+            if self.debug:
+                print(f"\r[You] {transcript}\n", flush=True)
+            else:
+                print(f"[You] {transcript}", flush=True)
+        else:
+            # Always show [You] line (matches spec default behavior)
+            print(f"[You] {transcript}", flush=True)
+
+        # If routing is already locked, skip detection entirely (just log in debug)
+        if self._routing_locked:
+            self._dbg(f"lang_detect: routing locked, skipping detection for {transcript!r}")
+            return
+
+        # Skip language detection if src is explicitly set (not auto)
+        if self.src_lang != "auto":
+            return
+
+        detected = detect_lang(transcript)
+        if detected is None:
+            self._dbg(f"lang_detect: uncertain for {transcript!r}, keeping sticky={self._last_detected_src}")
+            return  # keep previous sticky to avoid flip-flopping
+
+        if detected == self._last_detected_src:
+            # In locked mode, first detection sets the lock even if it's the same as sticky
+            if self.meeting_mode == "locked":
+                self._routing_locked = True
+                effective_tgt = resolve_tgt(detected, self.tgt_lang)
+                print(f"[MeetingMode] locked | src={detected} tgt={effective_tgt}", flush=True)
+            return  # no routing change needed
+
+        self._log(f"lang_detect: {self._last_detected_src!r} -> {detected!r}")
+        self._last_detected_src = detected
+
+        # Check pair is allowed
+        effective_tgt = resolve_tgt(detected, self.tgt_lang)
+        if not pair_allowed(detected, effective_tgt, self.allowed_pairs):
+            self._log(f"pair {detected}<->{effective_tgt} not in --pairs, skipping session update")
+            return
+
+        # In locked mode: commit routing now and never change again
+        if self.meeting_mode == "locked":
+            self._routing_locked = True
+            print(f"[MeetingMode] locked | src={detected} tgt={effective_tgt}", flush=True)
+
+        # Re-send session.update with updated instructions
+        new_instructions = build_instructions(detected, self.tgt_lang)
+        self._log(f"routing: {LANG_NAMES[detected]} -> {LANG_NAMES[effective_tgt]}")
+        try:
+            await ws.send(json.dumps(
+                _build_session_update(new_instructions, self.enable_speaker)
+            ))
+        except Exception as exc:
+            logger.warning(f"Could not re-send session.update: {exc}")
+
+    # ------------------------------------------------------------------
+    # Barge-in
     # ------------------------------------------------------------------
 
     async def _cancel_response(self, ws) -> None:
-        """Cancel in-progress response and clear speaker buffer."""
         self._log("barge_in — cancelling assistant response")
-
-        # Stop speaker immediately
         if self._player:
             self._player.restart()
-
-        # Tell the API to cancel
-        cancel_msg: dict = {"type": "response.cancel"}
         try:
-            await ws.send(json.dumps(cancel_msg))
+            await ws.send(json.dumps({"type": "response.cancel"}))
         except Exception as exc:
             logger.warning(f"Could not send response.cancel: {exc}")
-
         self._assistant_speaking = False
         self._current_response_id = None
-        # Reprint the [Interp] prefix on a new line so barge-in is visually clean
         print_translation("\n", end="")

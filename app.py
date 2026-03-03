@@ -61,16 +61,27 @@ def build_parser() -> argparse.ArgumentParser:
         help="Operation mode: 'realtime' (streaming WebSocket) or 'fallback' (clip-based). Default: realtime",
     )
     p.add_argument(
-        "--input-lang",
+        "--src",
         default="auto",
-        metavar="LANG",
-        help="Input language hint (default: auto). Informational only — model auto-detects.",
+        choices=["auto", "vi", "en", "ja"],
+        help="Source language: auto (default), vi, en, ja.",
     )
     p.add_argument(
-        "--output-lang",
+        "--tgt",
         default="auto",
-        metavar="LANG",
-        help="Output language hint (default: auto). Informational only — model auto-detects.",
+        choices=["auto", "vi", "en", "ja"],
+        help="Target language: auto (default), vi, en, ja.",
+    )
+    p.add_argument(
+        "--pairs",
+        default="",
+        metavar="PAIRS",
+        help='[realtime] Allowed pairs, e.g. "vi<->en,ja<->en". Default: all.',
+    )
+    p.add_argument(
+        "--show-input",
+        action="store_true",
+        help="[realtime] Always print recognized input transcript.",
     )
     p.add_argument(
         "--mic",
@@ -136,6 +147,15 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="[realtime only] Enable verbose event logging and show input transcripts.",
     )
+    p.add_argument(
+        "--meeting-mode",
+        default="locked",
+        choices=["locked", "auto"],
+        help=(
+            "locked (default): fix language routing after first detection, never change mid-session. "
+            "auto: re-detect and re-route dynamically throughout the session."
+        ),
+    )
     return p
 
 
@@ -173,9 +193,11 @@ def main() -> int:
         model = args.model or DEFAULT_MODEL
         logger.info(
             f"Mode: realtime | model={model} | mic={args.mic} | rate={args.sample_rate} "
+            f"| src={args.src} tgt={args.tgt} "
             f"| speaker={'on' if args.speaker else 'off'} | debug={args.debug}"
         )
 
+        from src.common.lang import parse_pairs
         client = RealtimeClient(
             api_key=api_key,
             model=model,
@@ -184,6 +206,11 @@ def main() -> int:
             enable_speaker=args.speaker,
             speaker_device=args.speaker_device,
             debug=args.debug,
+            src_lang=args.src,
+            tgt_lang=args.tgt,
+            allowed_pairs=parse_pairs(args.pairs),
+            show_input=args.show_input,
+            meeting_mode=args.meeting_mode,
         )
         try:
             client.run()
@@ -208,6 +235,9 @@ def main() -> int:
                 api_key=api_key,
                 transcribe_model=args.transcribe_model,
                 chat_model=args.chat_model,
+                src_lang=args.src,
+                tgt_lang=args.tgt,
+                meeting_mode=args.meeting_mode,
             )
         except KeyboardInterrupt:
             print("\nInterrupted.", file=sys.stderr)

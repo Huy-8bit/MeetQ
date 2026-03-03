@@ -1,8 +1,8 @@
 # STATE
 
 ## Current Status
-Voice-to-voice upgrade complete. Realtime mode now plays translated audio through speaker,
-supports barge-in, has --debug flag, and shows [You]/[Interp] labels.
+Meeting mode added. --meeting-mode locked (default) fixes routing after first detection;
+--meeting-mode auto preserves dynamic switching. All modes: realtime + fallback.
 
 ## Key Assumptions / Decisions
 - Python 3.10+
@@ -85,3 +85,5 @@ brseAI/
 - 2026-03-03: MVP COMPLETE. All tasks done.
 - 2026-03-03: BUGFIX done: temperature 0.3→0.8, audio event no-ops added. Text now prints.
 - 2026-03-03: TASK-11 done: Voice-to-voice upgrade — SpeakerPlayer, barge-in, --debug, [You]/[Interp] labels.
+- 2026-03-03: TASK-12 done: Japanese + language routing — src/common/lang.py, --src/--tgt/--pairs/--show-input.
+- 2026-03-03: TASK-13 done: Meeting mode — --meeting-mode locked|auto, routing lock, [MeetingMode] banner.

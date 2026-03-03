@@ -157,3 +157,47 @@ streamed `response.audio.delta` instead of `response.text.delta`.
 - [ ] Ctrl+C exits without errors or hung threads
 
 ---
+
+## TASK-12: Japanese + configurable language routing
+**Status:** DONE
+**Files changed:**
+- `src/common/lang.py` (new) — language constants, heuristic detector, instruction builder, pair validator
+- `src/realtime/client.py` — src/tgt/pairs/show_input params, auto-detection + sticky, session.update on lang change
+- `src/realtime/main.py` — `--src`, `--tgt`, `--pairs`, `--show-input` flags
+- `src/fallback/pipeline.py` — `src_lang`/`tgt_lang` params, dynamic prompt
+- `src/fallback/main.py` — `--src`, `--tgt` flags
+- `app.py` — all four flags wired through both modes
+
+**Acceptance criteria:**
+- [x] Japanese → English by default (src=auto detects ja via Unicode heuristic)
+- [x] Vietnamese → English by default
+- [x] English → Vietnamese by default
+- [x] `--src ja --tgt vi` translates Japanese → Vietnamese
+- [x] `--src vi --tgt ja` translates Vietnamese → Japanese (丁寧語 tone)
+- [x] `--pairs "vi<->en"` blocks ja<->en routing
+- [x] `--show-input` always prints [You] transcript
+- [x] Sticky language: no flip-flop if heuristic uncertain (< 2 marker chars)
+- [x] Fallback mode respects --src/--tgt for dynamic prompt
+- [x] No extra commentary in output
+
+---
+
+## TASK-13: Meeting mode (--meeting-mode locked|auto)
+**Status:** DONE
+**Files changed:**
+- `src/realtime/client.py` — `meeting_mode` param, `_routing_locked` flag, lock-on-first-detection logic, `[MeetingMode]` banner
+- `src/realtime/main.py` — `--meeting-mode` flag
+- `src/fallback/pipeline.py` — `meeting_mode` param, upfront prompt for locked+explicit, banner
+- `src/fallback/main.py` — `--meeting-mode` flag
+- `app.py` — flag wired through both modes
+- `README.md` — new examples + flags table entry
+
+**Acceptance criteria:**
+- [x] `--meeting-mode locked --src ja --tgt en`: prints `[MeetingMode] locked | src=ja tgt=en` immediately; routing never changes
+- [x] `--meeting-mode locked --src auto --tgt auto`: prints "waiting for first detection", locks on first confident transcript, prints confirmed lock line
+- [x] After lock, further detect_lang calls are skipped (no `session.update` sent)
+- [x] `--meeting-mode auto`: behavior unchanged from TASK-12 (sticky + dynamic session.update)
+- [x] Fallback mode: `locked+explicit` builds prompt before recording; shows banner
+- [x] `--debug` still logs detection attempts even after lock
+
+---

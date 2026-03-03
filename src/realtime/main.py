@@ -11,6 +11,7 @@ import os
 import sys
 
 from src.common.audio import print_input_devices, print_output_devices
+from src.common.lang import SUPPORTED_LANGS, parse_pairs
 from src.common.logging_utils import get_logger
 from src.realtime.client import DEFAULT_MODEL, RealtimeClient
 
@@ -36,6 +37,19 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                    help="List output devices and exit")
     p.add_argument("--debug", action="store_true",
                    help="Enable verbose event logging and show input transcripts")
+    p.add_argument("--src", default="auto", choices=sorted(SUPPORTED_LANGS),
+                   help="Source language (default: auto). auto=detect from speech.")
+    p.add_argument("--tgt", default="auto", choices=sorted(SUPPORTED_LANGS),
+                   help="Target language (default: auto). auto=infer from source.")
+    p.add_argument("--pairs", default="", metavar="PAIRS",
+                   help='Allowed translation pairs, e.g. "vi<->en,ja<->en". Default: all allowed.')
+    p.add_argument("--show-input", action="store_true",
+                   help="Always print recognized input transcript (implied by --debug).")
+    p.add_argument("--meeting-mode", default="locked", choices=["locked", "auto"],
+                   help=(
+                       "locked (default): fix language routing after first detection, never change mid-session. "
+                       "auto: re-detect and re-route dynamically throughout the session."
+                   ))
     return p.parse_args(argv)
 
 
@@ -56,8 +70,12 @@ def main(argv: list[str] | None = None) -> int:
         print("Error: OPENAI_API_KEY is not set.", file=sys.stderr)
         return 1
 
+    allowed_pairs = parse_pairs(args.pairs)
+
     logger.info(
         f"Starting realtime interpreter | model={args.model} | mic={args.mic} "
+        f"| src={args.src} tgt={args.tgt} | pairs={args.pairs or 'all'} "
+        f"| meeting_mode={args.meeting_mode} "
         f"| speaker={'on' if args.speaker else 'off'} | debug={args.debug}"
     )
 
@@ -69,6 +87,11 @@ def main(argv: list[str] | None = None) -> int:
         enable_speaker=args.speaker,
         speaker_device=args.speaker_device,
         debug=args.debug,
+        src_lang=args.src,
+        tgt_lang=args.tgt,
+        allowed_pairs=allowed_pairs,
+        show_input=args.show_input,
+        meeting_mode=args.meeting_mode,
     )
     client.run()
     return 0
