@@ -2,14 +2,20 @@
 src/common/audio.py
 Microphone capture and speaker playback using sounddevice.
 
-MicCapture  — yields PCM16 chunks (~20ms) via a thread-safe queue.
+AudioInput  — abstract base class for all audio input sources.
+MicInput    — local microphone input (implements AudioInput).
+DeviceLoopbackInput — captures from any sounddevice input device (e.g.
+              BlackHole / Loopback / VB-Cable / Stereo Mix).
+MicCapture  — legacy thin wrapper kept for compatibility.
 SpeakerPlayer — streams PCM16 chunks to speaker in real time.
 """
 from __future__ import annotations
 
+import abc
 import queue
 import threading
-from typing import Generator, Optional
+from dataclasses import dataclass, field
+from typing import Generator, Iterator, Optional
 
 import numpy as np
 import sounddevice as sd
@@ -81,11 +87,225 @@ def print_output_devices() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Mic capture
+# AudioInput abstraction
+# ---------------------------------------------------------------------------
+
+@dataclass
+class AudioMetadata:
+    """Metadata that any AudioInput implementation must expose."""
+    sample_rate: int
+    channels: int
+    speaker_id: Optional[str] = field(default=None)
+
+
+class AudioInput(abc.ABC):
+    """
+    Common contract for all audio input sources consumed by RealtimeClient.
+
+    Implementations: MicInput (local mic), DeviceLoopbackInput (any sounddevice
+    input device, e.g. BlackHole/Loopback virtual devices for meeting capture).
+
+    Usage:
+        inp = MicInput(device=0, sample_rate=16000)
+        inp.start()
+        for chunk in inp.stream_frames():
+            # chunk is PCM16 bytes (~20ms worth)
+            ...
+        inp.stop()
+    """
+
+    @property
+    @abc.abstractmethod
+    def metadata(self) -> AudioMetadata:
+        ...
+
+    @abc.abstractmethod
+    def start(self) -> None:
+        """Open the audio input and begin buffering frames."""
+
+    @abc.abstractmethod
+    def stop(self) -> None:
+        """Stop buffering and release the audio input."""
+
+    @abc.abstractmethod
+    def stream_frames(self) -> Iterator[bytes]:
+        """Yield PCM16 byte chunks until stop() is called."""
+
+
+# ---------------------------------------------------------------------------
+# MicInput — local microphone, implements AudioInput
+# ---------------------------------------------------------------------------
+
+class MicInput(AudioInput):
+    """
+    Local microphone input that satisfies the AudioInput contract.
+
+    Internally uses sounddevice.InputStream with a thread-safe queue so
+    stream_frames() can be iterated from the audio thread.
+    """
+
+    def __init__(
+        self,
+        device: Optional[int] = None,
+        sample_rate: int = DEFAULT_SAMPLE_RATE,
+        chunk_ms: int = CHUNK_MS,
+    ) -> None:
+        self._device = device
+        self._sample_rate = sample_rate
+        self._chunk_frames = int(sample_rate * chunk_ms / 1000)
+        self._q: queue.Queue[Optional[bytes]] = queue.Queue(maxsize=200)
+        self._stream: Optional[sd.InputStream] = None
+        self._stop_event = threading.Event()
+
+    @property
+    def metadata(self) -> AudioMetadata:
+        return AudioMetadata(sample_rate=self._sample_rate, channels=DEFAULT_CHANNELS)
+
+    def _callback(self, indata: np.ndarray, frames: int, time_info, status) -> None:
+        if status:
+            import sys
+            print(f"[audio] sounddevice status: {status}", file=sys.stderr)
+        pcm = indata.copy() if indata.dtype == np.int16 else (indata * 32767).astype(np.int16)
+        try:
+            self._q.put_nowait(pcm.tobytes())
+        except queue.Full:
+            pass
+
+    def start(self) -> None:
+        self._stop_event.clear()
+        self._stream = sd.InputStream(
+            device=self._device,
+            samplerate=self._sample_rate,
+            channels=DEFAULT_CHANNELS,
+            dtype=DTYPE,
+            blocksize=self._chunk_frames,
+            callback=self._callback,
+        )
+        self._stream.start()
+
+    def stop(self) -> None:
+        self._stop_event.set()
+        if self._stream is not None:
+            self._stream.stop()
+            self._stream.close()
+            self._stream = None
+        try:
+            self._q.put_nowait(None)
+        except queue.Full:
+            pass
+
+    def stream_frames(self) -> Iterator[bytes]:
+        while not self._stop_event.is_set():
+            try:
+                chunk = self._q.get(timeout=0.1)
+            except queue.Empty:
+                continue
+            if chunk is None:
+                break
+            yield chunk
+
+
+# ---------------------------------------------------------------------------
+# DeviceLoopbackInput — any sounddevice input device, implements AudioInput
+# ---------------------------------------------------------------------------
+
+class DeviceLoopbackInput(AudioInput):
+    """
+    Captures audio from any sounddevice input device by index.
+
+    This is the Path B "pragmatic MVP" input for Google Meet capture:
+    route meeting audio to a virtual audio device (BlackHole, Loopback,
+    VB-Cable, Stereo Mix, etc.) then point --input-device at it.
+
+    Usage:
+        # List devices: python app.py --list-input-devices
+        # Pick the virtual device index shown, e.g. 4 for BlackHole 2ch
+        inp = DeviceLoopbackInput(device=4, sample_rate=16000)
+        inp.start()
+        for chunk in inp.stream_frames():
+            process(chunk)
+        inp.stop()
+
+    NOTE: Production use requires participant consent and legal review.
+    """
+
+    def __init__(
+        self,
+        device: int,
+        sample_rate: int = DEFAULT_SAMPLE_RATE,
+        chunk_ms: int = CHUNK_MS,
+    ) -> None:
+        self._device = device
+        self._sample_rate = sample_rate
+        self._chunk_frames = int(sample_rate * chunk_ms / 1000)
+        self._q: queue.Queue[Optional[bytes]] = queue.Queue(maxsize=200)
+        self._stream: Optional[sd.InputStream] = None
+        self._stop_event = threading.Event()
+
+    @property
+    def metadata(self) -> AudioMetadata:
+        return AudioMetadata(sample_rate=self._sample_rate, channels=DEFAULT_CHANNELS)
+
+    def _callback(self, indata: np.ndarray, frames: int, time_info, status) -> None:
+        if status:
+            import sys
+            print(f"[loopback] sounddevice status: {status}", file=sys.stderr)
+        if indata.shape[1] > 1:
+            # Mix down to mono
+            mono = indata.mean(axis=1, keepdims=True)
+        else:
+            mono = indata
+        pcm = mono.copy() if mono.dtype == np.int16 else (mono * 32767).astype(np.int16)
+        try:
+            self._q.put_nowait(pcm.tobytes())
+        except queue.Full:
+            pass
+
+    def start(self) -> None:
+        self._stop_event.clear()
+        dev_info = sd.query_devices(self._device)
+        channels = min(int(dev_info["max_input_channels"]), 2)  # up to stereo, then mix to mono
+        self._stream = sd.InputStream(
+            device=self._device,
+            samplerate=self._sample_rate,
+            channels=channels,
+            dtype=DTYPE,
+            blocksize=self._chunk_frames,
+            callback=self._callback,
+        )
+        self._stream.start()
+
+    def stop(self) -> None:
+        self._stop_event.set()
+        if self._stream is not None:
+            self._stream.stop()
+            self._stream.close()
+            self._stream = None
+        try:
+            self._q.put_nowait(None)
+        except queue.Full:
+            pass
+
+    def stream_frames(self) -> Iterator[bytes]:
+        while not self._stop_event.is_set():
+            try:
+                chunk = self._q.get(timeout=0.1)
+            except queue.Empty:
+                continue
+            if chunk is None:
+                break
+            yield chunk
+
+
+# ---------------------------------------------------------------------------
+# MicCapture (legacy — kept for compatibility; prefer MicInput for new code)
 # ---------------------------------------------------------------------------
 
 class MicCapture:
     """
+    Legacy mic capture class — kept for backwards compatibility.
+    New code should use MicInput (implements AudioInput contract).
+
     Captures microphone audio and exposes it as an iterable of PCM16 byte chunks.
 
     Usage:
@@ -190,26 +410,40 @@ class SpeakerPlayer:
         self,
         device: Optional[int] = None,
         sample_rate: int = 24000,   # Realtime API audio output is 24kHz PCM16
-        channels: int = 1,
     ) -> None:
         self.device = device
         self.sample_rate = sample_rate
-        self.channels = channels
+        self._channels = 1          # resolved to device minimum in start()
         # Queue holds numpy int16 arrays; sentinel None = stop
         self._q: queue.Queue = queue.Queue(maxsize=500)
         self._stream: Optional[sd.OutputStream] = None
         self._thread: Optional[threading.Thread] = None
         self._active = threading.Event()
 
+    def _to_device_channels(self, mono: np.ndarray) -> np.ndarray:
+        """Upmix a flat mono int16 array to the device's channel count."""
+        if self._channels <= 1:
+            return mono
+        return np.column_stack([mono] * self._channels)
+
     def start(self) -> None:
         """Open the output stream and start the playback thread."""
         if self._thread and self._thread.is_alive():
             return
+        # Query the device's minimum supported output channel count.
+        # Many speakers/headphones only accept stereo (2ch) and reject mono.
+        if self.device is not None:
+            dev_info = sd.query_devices(self.device)
+            self._channels = max(1, int(dev_info["max_output_channels"]))
+        else:
+            # For the system default device, query it by kind
+            dev_info = sd.query_devices(kind="output")
+            self._channels = max(1, int(dev_info["max_output_channels"]))
         self._active.set()
         self._stream = sd.OutputStream(
             device=self.device,
             samplerate=self.sample_rate,
-            channels=self.channels,
+            channels=self._channels,
             dtype="int16",
             blocksize=0,  # let sounddevice choose optimal block size
         )
@@ -222,6 +456,7 @@ class SpeakerPlayer:
         if not self._active.is_set():
             return
         arr = np.frombuffer(pcm_bytes, dtype=np.int16)
+        arr = self._to_device_channels(arr)
         try:
             self._q.put_nowait(arr)
         except queue.Full:
@@ -233,7 +468,8 @@ class SpeakerPlayer:
         Inserts a small silence pad so the last syllable isn't cut off.
         Non-blocking — playback continues draining in the background.
         """
-        silence = np.zeros(int(self.sample_rate * 0.05), dtype=np.int16)  # 50ms silence
+        frames = int(self.sample_rate * 0.05)  # 50ms silence
+        silence = self._to_device_channels(np.zeros(frames, dtype=np.int16))
         try:
             self._q.put_nowait(silence)
         except queue.Full:

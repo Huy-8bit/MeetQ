@@ -21,7 +21,7 @@ from typing import Optional
 import websockets
 from websockets.exceptions import ConnectionClosedError, ConnectionClosedOK
 
-from src.common.audio import MicCapture, SpeakerPlayer
+from src.common.audio import AudioInput, MicInput, SpeakerPlayer
 from src.common.lang import (
     build_instructions,
     detect_lang,
@@ -97,6 +97,7 @@ class RealtimeClient:
         allowed_pairs: set = None,
         show_input: bool = False,
         meeting_mode: str = "locked",  # "locked" | "auto"
+        audio_input: Optional[AudioInput] = None,  # Phase 2: plug in any AudioInput
     ) -> None:
         self.api_key = api_key
         self.model = model
@@ -110,6 +111,8 @@ class RealtimeClient:
         self.allowed_pairs = allowed_pairs if allowed_pairs is not None else set()
         self.show_input = show_input
         self.meeting_mode = meeting_mode  # "locked" | "auto"
+        # audio_input overrides mic_device/sample_rate when provided
+        self._audio_input: Optional[AudioInput] = audio_input
 
         self._running = False
         self._ws = None
@@ -243,17 +246,22 @@ class RealtimeClient:
 
     async def _send_audio(self, ws) -> None:
         loop = asyncio.get_running_loop()
-        cap = MicCapture(device=self.mic_device, sample_rate=self.sample_rate)
+
+        # Use the injected AudioInput, or fall back to MicInput for the given device
+        audio_in: AudioInput = self._audio_input or MicInput(
+            device=self.mic_device, sample_rate=self.sample_rate
+        )
+
         audio_q: asyncio.Queue[Optional[str]] = asyncio.Queue(maxsize=300)
 
         def _capture_thread() -> None:
-            cap.start()
+            audio_in.start()
             try:
-                for chunk in cap.iter_chunks():
+                for chunk in audio_in.stream_frames():
                     encoded = base64.b64encode(chunk).decode("utf-8")
                     asyncio.run_coroutine_threadsafe(audio_q.put(encoded), loop)
             finally:
-                cap.stop()
+                audio_in.stop()
                 asyncio.run_coroutine_threadsafe(audio_q.put(None), loop)
 
         t = threading.Thread(target=_capture_thread, daemon=True)
@@ -263,20 +271,24 @@ class RealtimeClient:
         tgt_label = self.tgt_lang if self.tgt_lang != "auto" else "auto"
         speaker_label = "speaker ON" if self.enable_speaker else "speaker OFF"
 
+        # Show the input source in the banner
+        input_label = type(audio_in).__name__
+
         if self.meeting_mode == "locked":
             if self._routing_locked:
                 mode_line = f"[MeetingMode] locked | src={self.src_lang} tgt={self.tgt_lang}"
             else:
                 mode_line = "[MeetingMode] locked | waiting for first confident detection to lock routing"
         else:
-            mode_line = f"[MeetingMode] auto | src=auto tgt=auto (sticky enabled)"
+            mode_line = "[MeetingMode] auto | src=auto tgt=auto (sticky enabled)"
 
         print(f"\n{mode_line}", flush=True)
         print(
-            f"[Listening... src={src_label} tgt={tgt_label} | {speaker_label} | Ctrl+C to quit.]\n",
+            f"[Listening... input={input_label} src={src_label} tgt={tgt_label}"
+            f" | {speaker_label} | Ctrl+C to quit.]\n",
             flush=True,
         )
-        self._log("Mic capture started.")
+        self._log(f"Audio capture started: {input_label}")
 
         try:
             while self._running:
@@ -291,7 +303,7 @@ class RealtimeClient:
                     "audio": encoded,
                 }))
         finally:
-            cap.stop()
+            audio_in.stop()
 
     # ------------------------------------------------------------------
     # Event receiver

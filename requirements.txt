@@ -1,3 +1,4 @@
+# Core
 annotated-types==0.7.0
 anyio==4.12.1
 certifi==2026.2.25
@@ -20,3 +21,11 @@ tqdm==4.67.3
 typing-inspection==0.4.2
 typing_extensions==4.15.0
 websockets==16.0
+
+# Meet-bot mode (Phase 2 Path B)
+playwright>=1.44.0
+
+# SCK audio capture — macOS 13+ only, no virtual audio device needed
+# Install: pip install pyobjc-framework-ScreenCaptureKit pyobjc-framework-CoreMedia
+pyobjc-framework-ScreenCaptureKit>=10.0
+pyobjc-framework-CoreMedia>=10.0

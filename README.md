@@ -160,19 +160,156 @@ brseAI/
 │   ├── architecture.md        Mermaid diagrams
 │   ├── realtime_protocol.md   WebSocket event reference
 │   ├── security.md            Security notes
+│   ├── phase2_google_meet.md  Phase 2 design + compliance spec
 │   └── next_steps_google_meet.md
 ├── src/
 │   ├── common/
-│   │   ├── audio.py           MicCapture, record_clip, list_input_devices
+│   │   ├── audio.py           AudioInput ABC, MicInput, DeviceLoopbackInput, SpeakerPlayer
+│   │   ├── lang.py            Language detection + routing
 │   │   └── logging_utils.py   Timestamped logger
 │   ├── realtime/
 │   │   ├── client.py          RealtimeClient (WebSocket)
 │   │   └── main.py            Realtime entrypoint
-│   └── fallback/
-│       ├── pipeline.py        Record → transcribe → translate
-│       └── main.py            Fallback entrypoint
+│   ├── fallback/
+│   │   ├── pipeline.py        Record → transcribe → translate
+│   │   └── main.py            Fallback entrypoint
+│   └── meet/
+│       ├── bot.py             MeetBot Playwright joiner
+│       ├── audio.py           MeetAudioListenerInput, MeetAudioMicOutput
+│       ├── selectors.py       Resilient Meet DOM selector map
+│       └── main.py            Meet-bot entrypoint
 ├── recordings/                WAV clips (fallback mode output)
 └── logs/                      Log files
+```
+
+---
+
+## Google Meet Bot Mode
+
+> **Internal use only.** Requires participant consent and legal review before
+> any production or third-party meeting deployment.
+> See `docs/phase2_google_meet.md` for compliance constraints.
+
+The bot joins a Google Meet as a visible participant, listens to meeting audio
+through a virtual loopback device, translates speech in real time, and speaks
+the translation back into the meeting through a second virtual device configured
+as the bot's microphone input.
+
+### Prerequisites
+
+| Requirement | macOS install |
+|---|---|
+| Python 3.10+ venv | (already set up) |
+| PortAudio | `brew install portaudio` |
+| Playwright + Chromium | `pip install playwright && playwright install chromium` |
+| Virtual audio device | [BlackHole 2ch](https://existential.audio/blackhole/) (free) or [Loopback](https://rogueamoeba.com/loopback/) (paid) |
+
+### Virtual Audio Device Setup (macOS)
+
+You need **two virtual audio devices**:
+
+1. **Meet → Bot capture device** (e.g. BlackHole 2ch)
+   - In Chrome: `⋮` → Settings → Sound → set **Output** to BlackHole 2ch
+   - Meeting audio flows: Chrome speaker → BlackHole → bot's `--meet-speaker-device`
+
+2. **Bot TTS → Meet mic device** (e.g. a second BlackHole or Loopback virtual device)
+   - In Chrome: set **Input** (microphone) to this device
+   - TTS audio flows: bot `--meet-mic-device` → virtual device → Chrome mic → participants
+
+```bash
+# Find device indexes
+python app.py --list-audio-devices
+```
+
+### First-Time Google Sign-In
+
+Run once to save your Google credentials in a persistent profile:
+
+```bash
+python app.py --mode meet-bot \
+  --setup-profile \
+  --profile-dir ~/.brseai_profile
+```
+
+A browser window opens. Sign in to Google, then close the browser.
+The profile is saved to `~/.brseai_profile` and reused on all future runs.
+
+### Run the Bot
+
+```bash
+python app.py --mode meet-bot \
+  --meeting-url https://meet.google.com/abc-defg-hij \
+  --profile-dir ~/.brseai_profile \
+  --meet-speaker-device 4 \
+  --meet-mic-device 5 \
+  --src ja --tgt vi \
+  --meeting-mode locked
+```
+
+**Japanese → English, auto-detect, no bot speech output (listen only):**
+```bash
+python app.py --mode meet-bot \
+  --meeting-url https://meet.google.com/abc-defg-hij \
+  --profile-dir ~/.brseai_profile \
+  --meet-speaker-device 4 \
+  --src ja --tgt en
+```
+
+**Auto-leave after 2 hours:**
+```bash
+python app.py --mode meet-bot \
+  --meeting-url https://meet.google.com/abc-defg-hij \
+  --profile-dir ~/.brseai_profile \
+  --meet-speaker-device 4 \
+  --meet-mic-device 5 \
+  --leave-after-minutes 120
+```
+
+### Meet-Bot CLI Flags
+
+| Flag | Default | Description |
+|---|---|---|
+| `--meeting-url URL` | required | Google Meet URL |
+| `--profile-dir PATH` | `~/.brseai_profile` | Persistent Chromium profile directory |
+| `--setup-profile` | off | First-time sign-in helper; opens browser, then exits |
+| `--headless` / `--no-headless` | false | Run Chromium headless (not recommended; Meet may block) |
+| `--display-name NAME` | `Interpreter Bot` | Bot's name shown in meeting |
+| `--join-timeout-seconds N` | 90 | Seconds to wait for admission |
+| `--leave-after-minutes N` | off | Auto-leave after N minutes |
+| `--meet-speaker-device INDEX` | required | Loopback INPUT device to capture meeting audio |
+| `--meet-mic-device INDEX` | off | Virtual OUTPUT device to send bot TTS into Meet mic |
+| `--meet-sample-rate HZ` | 48000 | Capture sample rate (match device native rate) |
+| `--list-audio-devices` | — | Print all I/O devices and exit |
+| `--src` | `auto` | Source language (`auto`, `vi`, `en`, `ja`) |
+| `--tgt` | `auto` | Target language |
+| `--meeting-mode` | `locked` | `locked` / `auto` |
+| `--debug` | off | Verbose Playwright + audio event logs |
+
+### Troubleshooting: Meet Bot
+
+**Bot never gets past waiting room:**
+- Ask the meeting host to admit the bot, or make sure your Google account is
+  allowed to join without approval (Google Workspace setting).
+- Increase `--join-timeout-seconds`.
+
+**No audio captured (bot produces no translations):**
+- Confirm Chrome's audio OUTPUT is set to your loopback device.
+- `python app.py --list-audio-devices` — verify `--meet-speaker-device` index.
+- Check macOS `System Settings → Sound → Output` is not overriding Chrome's setting.
+
+**Bot TTS not heard in meeting:**
+- Confirm Chrome's microphone INPUT is set to your virtual mic device.
+- Verify `--meet-mic-device` index is the OUTPUT side of the virtual device.
+- Use `--debug` to see if `response.audio.delta` events are received.
+
+**Meet blocks automated browser:**
+- Use `--no-headless` (default). Fully headless Chromium is often blocked.
+- Ensure `--profile-dir` points to a profile where you are already signed in.
+
+**`playwright` not installed:**
+```bash
+pip install playwright
+playwright install chromium
 ```
 
 ---

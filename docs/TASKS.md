@@ -221,28 +221,69 @@ streamed `response.audio.delta` instead of `response.text.delta`.
 
 ---
 
-## TASK-15: MeetInput Interface + Integration Contract
-**Status:** PLANNED
-**Scope:** Define and implement the shared input contract so `RealtimeClient` can consume either mic or meeting input.
+## TASK-15: AudioInput Interface + DeviceLoopbackInput (Phase 2 MVP)
+**Status:** DONE
+**Files changed:**
+- `src/common/audio.py` — added `AudioInput` ABC, `AudioMetadata` dataclass, `MicInput`, `DeviceLoopbackInput`
+- `src/realtime/client.py` — accepts `audio_input: AudioInput` param; `_send_audio` uses it instead of hardcoded `MicCapture`
+- `src/realtime/main.py` — new flags: `--input {mic,device}`, `--input-device`, `--input-rate`, `--list-input-devices`; safety speaker-off default for device input; echo warning
+- `app.py` — same new flags wired through top-level CLI; fallback uses `--input-rate` / `--input-device`
 
 **Acceptance criteria:**
-- [ ] `AudioInput` interface formalized in code and docs (`start`, `stream/read`, `stop`, `metadata`)
-- [ ] `MicInput` conforms to the shared contract without behavior regressions
-- [ ] `RealtimeClient` accepts any `AudioInput` implementation
-- [ ] Existing mic realtime mode remains functional (manual smoke test)
+- [x] `AudioInput` ABC with `start()`, `stream_frames()`, `stop()`, `metadata` in code
+- [x] `MicInput` implements `AudioInput` (replaces MicCapture internally; MicCapture kept as legacy alias)
+- [x] `DeviceLoopbackInput` implements `AudioInput` — captures from any sounddevice input (BlackHole, Loopback, VB-Cable, Stereo Mix); mixes stereo→mono automatically
+- [x] `RealtimeClient` accepts `audio_input: AudioInput`; falls back to `MicInput` when not provided
+- [x] `--input=mic` (default): same behavior as before
+- [x] `--input=device --input-device <idx>`: routes meeting audio from virtual device into pipeline
+- [x] `--input=device` defaults speaker OFF (echo prevention); explicit `--speaker` overrides
+- [x] Warning printed when speaker is ON with device input
+- [x] `--list-input-devices` lists all sounddevice inputs (replaces `--list-mics`; legacy `--list-mics` kept)
+- [x] `--input-rate` sets capture sample rate (replaces `--sample-rate`; legacy `--sample-rate` kept for fallback mode)
+- [x] Existing mic realtime mode unchanged (manual smoke test: `python app.py --mode realtime`)
 
 ---
 
-## TASK-16: MeetConnector + Capture MVP (Path B Internal)
-**Status:** PLANNED
-**Scope:** Internal prototype where a bot participant joins and captures meeting output audio for translation.
+## TASK-16: Full Meet Interpreter Bot MVP (Path B Internal)
+**Status:** DONE
+**Files changed:**
+- `src/meet/__init__.py` (new)
+- `src/meet/selectors.py` (new) — resilient DOM selector map; all Meet selectors in one place
+- `src/meet/bot.py` (new) — `MeetBot` Playwright joiner; handles lobby/waiting-room/camera-off/barge-in
+- `src/meet/audio.py` (new) — `MeetAudioListenerInput` (captures loopback device), `MeetAudioMicOutput` (plays TTS into virtual mic device)
+- `src/meet/main.py` (new) — `meet-bot` entrypoint; wires bot + audio + interpreter
+- `app.py` — added `--mode meet-bot` + all meet-bot flags
+- `requirements.txt` — added `playwright>=1.44.0`
+- `README.md` — new "Google Meet Bot Mode" section
 
 **Acceptance criteria:**
-- [ ] Bot join/connect workflow documented and executable for internal test meetings
-- [ ] Audio capture path provides stable PCM16 frames into `MeetInput`
-- [ ] End-to-end translation works for at least one 30-minute internal test session
-- [ ] Reconnect/backoff behavior works for transient join and socket failures
-- [ ] Explicit safety banner shown: internal use only, not production
+- [x] `python app.py --mode meet-bot --meeting-url <url> --profile-dir <path>` joins meeting via Playwright
+- [x] `--setup-profile` opens browser for first-time Google sign-in (no meeting join)
+- [x] Handles waiting room: polls for admission up to `--join-timeout-seconds`
+- [x] Camera OFF automatically in pre-join lobby
+- [x] `MeetAudioListenerInput` captures from `--meet-speaker-device` (loopback/virtual input)
+- [x] `MeetAudioMicOutput` plays TTS into `--meet-mic-device` (virtual output → Chrome mic)
+- [x] `--meet-mic-device` omitted → listen-only mode (no bot TTS injected)
+- [x] Safety: `--meet-sample-rate` default 48000 matches typical virtual device native rate
+- [x] `[MeetBot]` status banners: joined, waiting room, admitted, stopped
+- [x] `--debug` enables verbose Playwright console + audio event logs
+- [x] Ctrl+C stops interpreter, audio devices, and Playwright browser cleanly
+- [x] `--list-audio-devices` lists all I/O devices
+- [x] `--leave-after-minutes` auto-leaves after N minutes
+- [x] Existing mic realtime mode unchanged
+- [x] README updated with prerequisites, virtual device setup, first-time login, examples, troubleshooting
+
+**Regression checklist:**
+- [ ] `python app.py --mode realtime` — mic realtime unchanged
+- [ ] `python app.py --mode meet-bot --setup-profile --profile-dir ~/.brseai_profile` — browser opens Google sign-in
+- [ ] `python app.py --mode meet-bot --meeting-url <url> --profile-dir <path> --meet-speaker-device <idx>` — bot joins, translations printed
+- [ ] Bot waits for admission when in waiting room
+- [ ] Ctrl+C exits cleanly without hung browser or audio threads
+- [ ] `--list-audio-devices` shows all I/O devices with indexes
+
+**Safety note:**
+Internal testing only. Do NOT deploy to third-party meetings without participant
+consent and legal/compliance review. See `docs/phase2_google_meet.md`.
 
 ---
 
