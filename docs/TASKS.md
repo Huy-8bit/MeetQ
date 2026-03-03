@@ -1,0 +1,159 @@
+# TASKS
+
+Task breakdown for the realtime interpreter MVP.
+
+---
+
+## TASK-01: Planning + Skeleton Docs
+**Status:** DONE
+**Acceptance criteria:**
+- [x] docs/TASKS.md exists with all tasks
+- [x] docs/STATE.md exists with initial state and assumptions
+
+---
+
+## TASK-02: Common — Audio Capture Module
+**Status:** DONE
+**File:** `src/common/audio.py`
+**Acceptance criteria:**
+- [x] `list_input_devices()` returns formatted device list
+- [x] `MicCapture` class opens sounddevice input stream at 16kHz or 24kHz, 16-bit PCM
+- [x] Yields ~20ms chunks via queue
+- [x] Supports specifying device by index
+- [x] Handles callback errors gracefully
+
+---
+
+## TASK-03: Common — Logging Utilities
+**Status:** DONE
+**File:** `src/common/logging_utils.py`
+**Acceptance criteria:**
+- [x] Timestamped structured log lines
+- [x] Console + optional file handler
+- [x] Functions: `get_logger(name)`, convenience wrappers
+- [x] No secrets leaked in log output
+
+---
+
+## TASK-04: Realtime — WebSocket Client
+**Status:** DONE
+**File:** `src/realtime/client.py`
+**Acceptance criteria:**
+- [x] Opens `wss://api.openai.com/v1/realtime?model=...`
+- [x] Sends `session.update` on connect with VAD + translation instructions
+- [x] Streams audio chunks via `input_audio_buffer.append`
+- [x] Handles all relevant server events (speech_started, speech_stopped, text deltas, errors)
+- [x] Reconnect retry with exponential backoff
+- [x] Prints translation deltas to stdout (no extra text)
+- [x] Ctrl+C clean shutdown
+
+---
+
+## TASK-05: Realtime — Main Entrypoint
+**Status:** DONE
+**File:** `src/realtime/main.py`
+**Acceptance criteria:**
+- [x] Parses CLI flags: --mic, --list-mics
+- [x] Wires MicCapture -> RealtimeClient
+- [x] Graceful shutdown on Ctrl+C
+
+---
+
+## TASK-06: Fallback — Pipeline
+**Status:** DONE
+**File:** `src/fallback/pipeline.py`
+**Acceptance criteria:**
+- [x] Records N seconds from mic (default 5–10s)
+- [x] Saves to `recordings/` with timestamp filename
+- [x] Calls OpenAI transcription API
+- [x] Calls OpenAI chat API for translation (VI->EN or EN->VI auto-detect)
+- [x] Returns final translation string
+
+---
+
+## TASK-07: Fallback — Main Entrypoint
+**Status:** DONE
+**File:** `src/fallback/main.py`
+**Acceptance criteria:**
+- [x] Parses --seconds, --mic, --list-mics
+- [x] Runs fallback pipeline
+- [x] Prints final translation clearly
+
+---
+
+## TASK-08: App — Top-Level CLI Entrypoint
+**Status:** DONE
+**File:** `app.py`
+**Acceptance criteria:**
+- [x] --mode realtime|fallback
+- [x] --input-lang auto (default)
+- [x] --output-lang auto (default)
+- [x] --mic <index>
+- [x] --list-mics
+- [x] --seconds (for fallback)
+- [x] Routes to correct entrypoint
+
+---
+
+## TASK-09: requirements.txt + README
+**Status:** DONE
+**Acceptance criteria:**
+- [x] requirements.txt has all needed packages with minimum versions
+- [x] README has quickstart, troubleshooting, env setup
+
+---
+
+## TASK-10: Bugfix — Realtime text not printing to terminal
+**Status:** DONE
+**File:** `src/realtime/client.py`
+**Root cause:** `temperature: 0.3` was below the API minimum of 0.6, causing `session.update`
+to be rejected. The session fell back to default config (audio modality active), so the server
+streamed `response.audio.delta` instead of `response.text.delta`.
+
+**Acceptance criteria:**
+- [x] `temperature` set to `0.8` (>= 0.6 minimum)
+- [x] `session.updated` log confirms config applied (no error after this fix)
+- [x] `response.text.delta` events received and printed to stdout
+- [x] No `unhandled_event` log spam for known audio/lifecycle events
+- [x] Fallback mode unchanged
+
+**Regression checklist:**
+- [ ] Run `python app.py --mode realtime --mic <idx>`, speak Vietnamese → English appears
+- [ ] Run `python app.py --mode realtime --mic <idx>`, speak English → Vietnamese appears
+- [ ] Logs show `session.updated — config applied` (no temperature error)
+- [ ] Ctrl+C exits cleanly
+- [ ] `python app.py --mode fallback --seconds 5` still works independently
+
+---
+
+## TASK-11: Voice-to-voice upgrade (speaker playback + barge-in + debug mode)
+**Status:** DONE
+**Files changed:**
+- `src/common/audio.py` — added `SpeakerPlayer`, `list_output_devices`, `print_output_devices`
+- `src/realtime/client.py` — audio playback, barge-in, debug flag, [You]/[Interp] labels
+- `src/realtime/main.py` — `--speaker`, `--no-speaker`, `--speaker-device`, `--list-speakers`, `--debug`
+- `app.py` — same flags wired through top-level CLI
+- `docs/realtime_protocol.md` — audio events, barge-in flow, format table
+
+**Acceptance criteria:**
+- [x] `response.audio.delta` PCM16 decoded and played through SpeakerPlayer in real time
+- [x] `response.audio.done` triggers 50ms silence pad (flush) for clean tail
+- [x] Barge-in: `speech_started` while assistant speaking → `response.cancel` + SpeakerPlayer.restart()
+- [x] `--no-speaker` disables audio, falls back to text-only (modalities: ["text"])
+- [x] `--speaker-device INDEX` selects output device
+- [x] `--list-speakers` lists output devices and exits
+- [x] `--debug` enables verbose event logs and prints input transcripts
+- [x] Normal mode shows `[You] <transcript>` and `[Interp] <translation>` only
+- [x] Fallback mode unchanged
+- [x] Ctrl+C cleanly stops both mic and speaker streams
+
+**Regression checklist:**
+- [ ] Speak Vietnamese → terminal shows `[You] ...` then `[Interp] <English>`, audio plays
+- [ ] Speak English → terminal shows `[You] ...` then `[Interp] <Vietnamese>`, audio plays
+- [ ] Start speaking mid-response → previous audio stops, new turn begins
+- [ ] `--no-speaker` → text still appears, no audio playback
+- [ ] `--list-speakers` lists output devices
+- [ ] `--debug` shows per-event log lines
+- [ ] Ctrl+C exits without errors or hung threads
+
+---
