@@ -1,57 +1,66 @@
-# Next Steps: Google Meet Audio Ingestion (Phased Plan)
+# Next Steps: Google Meet Listener Execution Plan
 
-This plan extends the local mic demo into Google Meet scenarios without implementing Meet integration yet.
+Detailed technical design lives in `docs/phase2_google_meet.md`.
 
-## Phase 0: Stabilize Local Demo
+This file is the execution-oriented roadmap for Phase 2.
 
-- Finalize realtime mic interpreter flow with robust logs and reconnection.
-- Validate fallback mode reliability under poor network conditions.
-- Add basic test harnesses for event parsing and language-direction policy.
+## Current Status
 
-Exit criteria:
-- Realtime mode handles 30+ minute sessions without crash.
-- Fallback mode succeeds for common mic formats.
+- Phase 1 local mic realtime interpreter: complete and working.
+- Phase 2 Google Meet Listener: planned.
 
-## Phase 1: Desktop Loopback Prototype (No Meet API Yet)
+## Decision Gate: Path Selection
 
-- Ingest meeting audio from system loopback device.
-- macOS options: BlackHole/Loopback virtual device.
-- Linux options: PulseAudio/PipeWire monitor source.
-- Reuse same chunking, VAD, and translation output pipeline.
+Choose one primary path after discovery:
 
-Exit criteria:
-- Can translate mixed EN/VI audio played from local meeting app.
+- Path A: official/compliant media integration (availability may depend on access and admin policy).
+- Path B: bot participant + loopback capture (internal MVP only; legal review required before production).
 
-## Phase 2: Multi-Channel and Speaker Context
+## Milestones
 
-- Separate local microphone vs remote meeting audio channels.
-- Add speaker labeling heuristics if channel metadata is available.
-- Improve turn segmentation for overlapping speech.
+## M1: Discovery + Compliance Gate
+
+Deliverables:
+- Capability matrix validated with internal assumptions clearly marked.
+- Consent and participant notification requirements documented.
+- Retention and logging redaction policy approved.
 
 Exit criteria:
-- Translation output is clearly attributable (self vs remote).
+- Clear go/no-go for Path A feasibility.
+- Legal/compliance sign-off for allowed prototype scope.
 
-## Phase 3: Meet-Native Integration Design
+## M2: Architecture Freeze
 
-- Evaluate Google Meet ingestion options (bot participant or approved APIs).
-- Define auth, consent UX, and participant notification requirements.
-- Define buffering and latency budget per stage.
-
-Exit criteria:
-- Approved architecture doc with legal/security review.
-
-## Phase 4: Production-Readiness Work
-
-- Add robust retries, backoff, and rate-limit handling.
-- Add metrics dashboard (latency, error rate, speech-to-text quality).
-- Add configurable privacy controls and retention settings.
+Deliverables:
+- `AudioInput` contract approved.
+- `MeetInput` lifecycle and state machine documented.
+- Failure/retry policy documented.
 
 Exit criteria:
-- Controlled pilot with observability and incident runbook.
+- Engineering sign-off on architecture and operational constraints.
 
-## Risks To Resolve Before Meet Integration
+## M3: Internal MVP Build (Path B or Path A if available)
 
-- Legal and consent requirements for recording/transcribing meetings.
-- Audio quality variance across devices and conferencing setups.
-- Latency growth with multi-hop streaming and translation.
-- Cross-platform audio routing complexity.
+Deliverables:
+- Meeting audio can be ingested into the existing realtime translation pipeline.
+- Basic runbook for join failures, no-audio, and reconnect.
+- Echo prevention checklist enforced.
+
+Exit criteria:
+- Stable 30-minute internal test with acceptable latency and no crash.
+
+## M4: Controlled Pilot Readiness
+
+Deliverables:
+- Observability metrics and incident playbook.
+- Transcript handling and storage controls implemented.
+- Deployment guardrails documented.
+
+Exit criteria:
+- Pilot-ready package approved by engineering + legal + security stakeholders.
+
+## Operational Guardrails
+
+- Do not claim audio injection/send into Meet is supported unless explicitly confirmed for our access level.
+- Do not run in production without participant consent and legal approval.
+- Default to receive-only architecture until capability confirmation is documented.

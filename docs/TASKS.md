@@ -201,3 +201,83 @@ streamed `response.audio.delta` instead of `response.text.delta`.
 - [x] `--debug` still logs detection attempts even after lock
 
 ---
+
+## TASK-14: Phase 2 Documentation Package
+**Status:** DONE
+**Files changed:**
+- `docs/phase2_google_meet.md`
+- `docs/architecture.md`
+- `docs/next_steps_google_meet.md`
+- `docs/TASKS.md`
+- `docs/STATE.md`
+
+**Acceptance criteria:**
+- [x] Phase 2 main spec exists with Path A and Path B
+- [x] Path A capability statements include explicit uncertainty/depends-on-access notes
+- [x] Path B includes fragility, ToS, and legal-review warnings
+- [x] Architecture docs include `AudioInput` -> `MicInput`/`MeetInput` model
+- [x] Mermaid diagrams added: architecture, phase2 dataflow, failure/retry
+- [x] Operational considerations include latency, buffering, echo, failure modes, privacy
+
+---
+
+## TASK-15: MeetInput Interface + Integration Contract
+**Status:** PLANNED
+**Scope:** Define and implement the shared input contract so `RealtimeClient` can consume either mic or meeting input.
+
+**Acceptance criteria:**
+- [ ] `AudioInput` interface formalized in code and docs (`start`, `stream/read`, `stop`, `metadata`)
+- [ ] `MicInput` conforms to the shared contract without behavior regressions
+- [ ] `RealtimeClient` accepts any `AudioInput` implementation
+- [ ] Existing mic realtime mode remains functional (manual smoke test)
+
+---
+
+## TASK-16: MeetConnector + Capture MVP (Path B Internal)
+**Status:** PLANNED
+**Scope:** Internal prototype where a bot participant joins and captures meeting output audio for translation.
+
+**Acceptance criteria:**
+- [ ] Bot join/connect workflow documented and executable for internal test meetings
+- [ ] Audio capture path provides stable PCM16 frames into `MeetInput`
+- [ ] End-to-end translation works for at least one 30-minute internal test session
+- [ ] Reconnect/backoff behavior works for transient join and socket failures
+- [ ] Explicit safety banner shown: internal use only, not production
+
+---
+
+## TASK-17: Official Path A Feasibility Gate
+**Status:** PLANNED
+**Scope:** Validate whether official Google Meet media integration is available for this org and what operations are permitted.
+
+**Acceptance criteria:**
+- [ ] Access prerequisites documented (admin, policy, org approvals)
+- [ ] Confirmed capability matrix captured (receive vs send/inject)
+- [ ] Any unsupported/uncertain capability explicitly marked in docs
+- [ ] Go/no-go decision documented with stakeholders
+
+---
+
+## TASK-18: Privacy, Consent, and Retention Controls
+**Status:** PLANNED
+**Scope:** Operationalize compliance requirements for meeting capture.
+
+**Acceptance criteria:**
+- [ ] Participant notification text approved and documented
+- [ ] Transcript storage policy (location, retention, deletion) approved
+- [ ] Log redaction rules implemented and verified
+- [ ] Access control model for transcript visibility documented
+
+---
+
+## TASK-19: Pilot Readiness Runbook
+**Status:** PLANNED
+**Scope:** Prepare reliable operations for controlled pilot.
+
+**Acceptance criteria:**
+- [ ] Failure playbooks exist for join failure, no-audio, permission errors, and reconnect loops
+- [ ] Latency SLO and alert thresholds documented
+- [ ] Echo/feedback validation checklist added to preflight
+- [ ] Operator checklist validated in at least one rehearsal session
+
+---

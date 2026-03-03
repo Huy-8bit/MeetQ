@@ -2,35 +2,67 @@
 
 ## Goal
 
-Build a low-latency local interpreter demo:
-- Input: live microphone speech (Vietnamese or English)
-- Output: translated text in the opposite language, streamed in real time
-- Transport: OpenAI Realtime API over WebSocket
-- Fallback: non-realtime clip recording -> transcribe -> translate
+Build a low-latency interpreter system that translates Vietnamese <-> English in real time and can ingest either local microphone audio (Phase 1) or Google Meet audio (Phase 2).
 
-## Components
+## Current vs Target
+
+- Phase 1 (complete): `MicInput` -> Realtime translation pipeline.
+- Phase 2 (planned): add `MeetInput` while keeping the same translation pipeline.
+
+## Core Components
 
 | Component | Responsibility |
 |---|---|
-| `Mic Capture` | Capture PCM16 audio frames via `sounddevice` |
-| `Chunker` | Split to ~20ms chunks for streaming |
-| `Realtime WS Client` | Maintain WebSocket session and send/receive events |
-| `Turn Detection` | Server-side VAD (`server_vad`) for conversational turns |
-| `Translator Behavior` | Enforce VI->EN and EN->VI with translation-only output |
-| `Terminal UI` | Print timestamped logs + translated text deltas |
-| `Fallback Pipeline` | Record short clip, transcribe, then translate |
+| `AudioInput` (interface) | Common input contract for all audio sources |
+| `MicInput` | Existing local microphone source |
+| `MeetInput` | New meeting audio source (official media path or bot loopback path) |
+| `Frame Normalizer + Chunker` | Convert to PCM16 and emit ~20ms chunks |
+| `RealtimeClient` | OpenAI Realtime WS session, VAD turns, translation stream |
+| `Terminal Output` | Print translated text in real time |
+| `Optional Speaker Output` | Play model audio output when enabled |
+| `Fallback Pipeline` | Record short clip -> transcribe -> translate |
 
-## Realtime Data Flow
+## AudioInput Contract
+
+Minimum methods/fields:
+- `start()`
+- `read_frames()` or `stream_frames()`
+- `stop()`
+- `metadata` with `sample_rate`, `channels`, optional `speaker_id`
+
+## Updated System Architecture
 
 ```mermaid
 flowchart LR
-    mic[Microphone] --> cap[Capture PCM16\n16kHz or 24kHz]
-    cap --> chunk[Chunker\n~20ms]
-    chunk --> ws[WebSocket Client]
-    ws -->|session.update + input_audio_buffer.append| rt[OpenAI Realtime API]
-    rt -->|server_vad events| ws
-    rt -->|response.output_text.delta| ui[Terminal Translation Output]
-    rt -->|optional response.output_audio.delta| spk[Speaker Output Optional]
+    subgraph InputLayer[Input Layer]
+        mic[MicInput]
+        meet[MeetInput]
+    end
+
+    mic --> ai[AudioInput Interface]
+    meet --> ai
+
+    ai --> chunk[Frame Normalizer + Chunker\nPCM16, ~20ms]
+    chunk --> ws[RealtimeClient\nOpenAI Realtime WebSocket]
+
+    ws --> txt[Translation Text Output]
+    ws --> outa[Optional Audio Output]
+
+    meetc[MeetConnector] --> meet
+    cap[AudioCapture\nLoopback or Media Track] --> meet
+    diar[SpeakerDiarization\nFuture] --> meet
+```
+
+## Realtime Data Flow (Phase 1 + Phase 2)
+
+```mermaid
+flowchart LR
+    src[Audio Source: MicInput or MeetInput] --> norm[Normalize PCM16]
+    norm --> ch[Chunk ~20ms]
+    ch --> rt[Realtime API]
+    rt -->|VAD turn events| app[RealtimeClient]
+    rt -->|response.output_text.delta| ui[Terminal]
+    rt -->|optional response.audio.delta| spk[Speaker]
 ```
 
 ## Fallback Data Flow
@@ -45,8 +77,8 @@ flowchart LR
     tr --> out[Final Translation Printed]
 ```
 
-## Runtime Notes
+## Notes
 
-- Realtime path prioritizes low latency and smooth turn-taking.
-- Fallback path prioritizes reliability if realtime session is unavailable.
-- Both paths share logging conventions and language-direction rules.
+- Translation policy remains output-only translation text (no extra commentary).
+- In meeting mode, avoid audio-loop feedback by separating capture and playback routes.
+- For detailed Phase 2 design and compliance constraints, see `docs/phase2_google_meet.md`.
