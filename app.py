@@ -1,30 +1,37 @@
 #!/usr/bin/env python3
 """
-app.py — Main CLI entrypoint for the brseAI interpreter demo.
+app.py — brseAI Google Meet interpreter bot.
 
 Usage:
-    python app.py --mode realtime [--mic INDEX] [--list-mics]
-    python app.py --mode fallback [--seconds 5] [--mic INDEX] [--list-mics]
-    python app.py --list-mics
+    python app.py --meeting-url "https://meet.google.com/xxx-xxxx-xxx"
 
 Environment:
     OPENAI_API_KEY   Required. Your OpenAI API key.
 
 Examples:
-    # List available microphones
-    python app.py --list-mics
+    # List audio devices
+    python app.py --list-audio-devices
 
-    # Start realtime interpreter with default mic
-    python app.py --mode realtime
+    # First-time Google sign-in (run once before joining meetings)
+    python app.py --setup-profile
 
-    # Start realtime interpreter with mic #2
-    python app.py --mode realtime --mic 2
+    # Join a meeting (manual-join: browser opens, you click Join)
+    python app.py --meeting-url "https://meet.google.com/abc-defg-hij"
 
-    # Run fallback mode (record 8 seconds, then translate)
-    python app.py --mode fallback --seconds 8
+    # Join with auto-click (may need selector updates if Meet UI changes)
+    python app.py --meeting-url "https://meet.google.com/abc-defg-hij" --no-manual-join
 
-    # Run fallback with specific mic
-    python app.py --mode fallback --mic 1 --seconds 10
+    # Join with TTS speak-back via virtual mic output device
+    python app.py --meeting-url "https://meet.google.com/abc-defg-hij" --meet-mic-device 3
+
+Migration from --mode meet-bot:
+    Old: python app.py --mode meet-bot --meeting-url URL ...
+    New: python app.py --meeting-url URL ...
+    (--mode meet-bot still works for backward compatibility.)
+
+Note:
+    --mode realtime and --mode fallback are no longer supported in app.py.
+    Use python -m src.realtime.main or python -m src.fallback.pipeline directly.
 """
 from __future__ import annotations
 
@@ -47,8 +54,10 @@ def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="app.py",
         description=(
-            "brseAI — Real-time bilingual interpreter (Vietnamese <-> English)\n"
-            "Streams mic audio to OpenAI Realtime API and prints translation.\n"
+            "brseAI — Google Meet interpreter bot (Vietnamese / English / Japanese)\n"
+            "Joins a meeting and translates speech in real time.\n\n"
+            "Quick start:\n"
+            "  python app.py --meeting-url \"https://meet.google.com/xxx-xxxx-xxx\"\n"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
@@ -56,67 +65,69 @@ def build_parser() -> argparse.ArgumentParser:
 
     p.add_argument(
         "--mode",
-        choices=["realtime", "fallback", "meet-bot"],
-        default="realtime",
+        choices=["meet-bot", "realtime", "fallback"],
+        default="meet-bot",
         help=(
-            "Operation mode: 'realtime' (streaming WebSocket), "
-            "'fallback' (clip-based), or 'meet-bot' (Google Meet interpreter bot). "
-            "Default: realtime"
+            "Operation mode. Default and only supported mode: 'meet-bot'. "
+            "'realtime' and 'fallback' are legacy; use src.realtime.main / "
+            "src.fallback.pipeline directly."
         ),
     )
 
-    # ---- Meet-bot flags (only used when --mode meet-bot) ----
+    # ---- Meet-bot flags ----
     p.add_argument(
         "--meeting-url",
         default=None,
         metavar="URL",
-        help="[meet-bot] Google Meet URL to join.",
+        help="Google Meet URL to join. Required for normal operation.",
     )
     p.add_argument(
         "--profile-dir",
         default=None,
         metavar="PATH",
-        help="[meet-bot] Persistent Chromium profile directory (for Google sign-in).",
+        help="Persistent Chromium profile directory (for Google sign-in). "
+             "Default: ~/.brseai_profile",
     )
     p.add_argument(
         "--setup-profile",
         action="store_true",
-        help="[meet-bot] Open browser for first-time Google sign-in, then exit.",
+        help="Open browser for first-time Google sign-in, then exit.",
     )
     p.add_argument(
         "--headless",
         action=argparse.BooleanOptionalAction,
         default=False,
-        help="[meet-bot] Run Chromium headless. Default: false.",
+        help="Run Chromium headless. Default: false.",
     )
     p.add_argument(
         "--display-name",
         default="Interpreter Bot",
         metavar="NAME",
-        help="[meet-bot] Bot display name in meeting. Default: 'Interpreter Bot'.",
+        help="Bot display name in meeting. Default: 'Interpreter Bot'.",
     )
     p.add_argument(
         "--join-timeout-seconds",
         type=int,
         default=90,
         metavar="N",
-        help="[meet-bot] Seconds to wait for meeting admission. Default: 90.",
+        help="Seconds to wait for meeting admission. Default: 90.",
     )
     p.add_argument(
         "--leave-after-minutes",
         type=int,
         default=None,
         metavar="N",
-        help="[meet-bot] Auto-leave after N minutes. Default: run until Ctrl+C.",
+        help="Auto-leave after N minutes. Default: run until Ctrl+C.",
     )
     p.add_argument(
         "--manual-join",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
+        default=True,
         help=(
-            "[meet-bot] Do not auto-click the Join button. Open the meeting URL "
-            "in the browser and wait for the user to join by hand. "
-            "Interpreter pipeline starts once in-call state is detected. "
-            "See --manual-join-timeout."
+            "Open the meeting URL in the browser and wait for the user to click "
+            "Join by hand. Interpreter pipeline starts once in-call state is detected. "
+            "Default: ON (more reliable than auto-click). "
+            "Use --no-manual-join to enable auto-click."
         ),
     )
     p.add_argument(
@@ -125,7 +136,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=300,
         metavar="N",
         help=(
-            "[meet-bot] With --manual-join: seconds to wait for the user to "
+            "With --manual-join: seconds to wait for the user to "
             "complete the join before giving up. Default: 300."
         ),
     )
@@ -133,7 +144,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--sck",
         action="store_true",
         help=(
-            "[meet-bot] Use macOS ScreenCaptureKit to capture system audio directly — "
+            "Use macOS ScreenCaptureKit to capture system audio directly — "
             "no virtual audio device (BlackHole/Loopback) required. "
             "Requires macOS 13+ and Screen Recording permission. "
             "When set, --meet-speaker-device is ignored."
@@ -144,7 +155,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         metavar="BUNDLE_ID",
         help=(
-            "[meet-bot] With --sck: capture only this app's audio (e.g. com.google.Chrome). "
+            "With --sck: capture only this app's audio (e.g. com.google.Chrome). "
             "Default: capture all system audio."
         ),
     )
@@ -153,14 +164,15 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=None,
         metavar="INDEX",
-        help="[meet-bot] Input device index to capture meeting audio from (loopback device).",
+        help="Input device index to capture meeting audio from (loopback device).",
     )
     p.add_argument(
         "--meet-mic-device",
         type=int,
         default=None,
         metavar="INDEX",
-        help="[meet-bot] Output device index to send translated TTS into (virtual mic device).",
+        help="Output device index to send translated TTS into (virtual mic device). "
+             "Required to enable audio speak-back; omit for text-only translation.",
     )
     p.add_argument(
         "--meet-sample-rate",
@@ -168,12 +180,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=48000,
         choices=[16000, 24000, 44100, 48000],
         metavar="HZ",
-        help="[meet-bot] Meeting audio capture sample rate. Default: 48000.",
+        help="Meeting audio capture sample rate. Default: 48000.",
     )
     p.add_argument(
         "--list-audio-devices",
         action="store_true",
-        help="[meet-bot] List all audio devices (input + output) and exit.",
+        help="List all audio devices (input + output) and exit.",
     )
     p.add_argument(
         "--src",
@@ -191,100 +203,93 @@ def build_parser() -> argparse.ArgumentParser:
         "--pairs",
         default="",
         metavar="PAIRS",
-        help='[realtime] Allowed pairs, e.g. "vi<->en,ja<->en". Default: all.',
+        help='Allowed pairs, e.g. "vi<->en,ja<->en". Default: all.',
     )
     p.add_argument(
         "--show-input",
         action="store_true",
-        help="[realtime] Always print recognized input transcript.",
+        help="Always print recognized input transcript.",
     )
+    # ---- Legacy / realtime flags (kept for parser parity; not executed) ----
     p.add_argument(
         "--input",
         choices=["mic", "device"],
         default="mic",
         dest="input_source",
-        help=(
-            "Audio input source: 'mic' (default) = local microphone; "
-            "'device' = any sounddevice input (e.g. BlackHole/Loopback for meeting capture). "
-            "Requires --input-device <index>."
-        ),
+        help=argparse.SUPPRESS,
     )
     p.add_argument(
         "--input-device",
         type=int,
         default=None,
         metavar="INDEX",
-        help="Device index for --input=device (use --list-input-devices to discover).",
+        help=argparse.SUPPRESS,
     )
     p.add_argument(
         "--input-rate",
         type=int,
         default=16000,
         metavar="HZ",
-        help="[realtime] Sample rate for audio input in Hz. Default: 16000.",
+        help=argparse.SUPPRESS,
     )
     p.add_argument(
         "--list-input-devices",
         action="store_true",
-        help="Print all input devices (mic and virtual/loopback) and exit.",
+        help="Print all input devices and exit.",
     )
     p.add_argument(
         "--mic",
         type=int,
         default=None,
         metavar="INDEX",
-        help="[Legacy] Microphone device index. Equivalent to --input=mic --input-device INDEX.",
+        help="[Legacy] Microphone device index.",
     )
     p.add_argument(
         "--list-mics",
         action="store_true",
-        help="[Legacy] Print available input devices and exit. Equivalent to --list-input-devices.",
+        help="[Legacy] Print available input devices and exit.",
     )
     p.add_argument(
         "--seconds",
         type=float,
         default=5.0,
         metavar="N",
-        help="[fallback only] Duration in seconds to record. Default: 5.",
+        help=argparse.SUPPRESS,
     )
     p.add_argument(
         "--sample-rate",
         type=int,
         default=None,
         metavar="HZ",
-        help="[Legacy] Audio sample rate in Hz. For realtime use --input-rate instead.",
+        help=argparse.SUPPRESS,
     )
     p.add_argument(
         "--model",
         default=None,
-        help="[realtime only] Override realtime model ID.",
+        help="Override realtime model ID.",
     )
     p.add_argument(
         "--transcribe-model",
         default="whisper-1",
-        help="[fallback only] Transcription model. Default: whisper-1.",
+        help=argparse.SUPPRESS,
     )
     p.add_argument(
         "--chat-model",
         default="gpt-4o-mini",
-        help="[fallback only] Translation chat model. Default: gpt-4o-mini.",
+        help=argparse.SUPPRESS,
     )
     p.add_argument(
         "--speaker",
         action=argparse.BooleanOptionalAction,
         default=None,
-        help=(
-            "[realtime only] Enable audio playback. "
-            "Default: ON for --input=mic, OFF for --input=device (echo prevention). "
-            "Override with --speaker or --no-speaker."
-        ),
+        help=argparse.SUPPRESS,
     )
     p.add_argument(
         "--speaker-device",
         type=int,
         default=None,
         metavar="INDEX",
-        help="[realtime only] Output device index (use --list-speakers to discover).",
+        help=argparse.SUPPRESS,
     )
     p.add_argument(
         "--list-speakers",
@@ -294,15 +299,15 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--debug",
         action="store_true",
-        help="[realtime only] Enable verbose event logging and show input transcripts.",
+        help="Enable verbose event logging.",
     )
     p.add_argument(
         "--meeting-mode",
         default="locked",
         choices=["locked", "auto"],
         help=(
-            "locked (default): fix language routing after first detection, never change mid-session. "
-            "auto: re-detect and re-route dynamically throughout the session."
+            "locked (default): fix language routing after first detection. "
+            "auto: re-detect dynamically throughout the session."
         ),
     )
     return p
@@ -312,7 +317,7 @@ def main() -> int:
     parser = build_parser()
     args = parser.parse_args()
 
-    # Device listing can work without an API key
+    # --- Early-exit utilities (no API key needed) ---
     if args.list_input_devices or args.list_mics:
         from src.common.audio import print_input_devices
         print_input_devices()
@@ -328,7 +333,6 @@ def main() -> int:
         print_all_audio_devices()
         return 0
 
-    # Setup profile can work without an API key
     if args.setup_profile:
         import asyncio
         from src.meet.main import _run_setup_profile
@@ -336,7 +340,17 @@ def main() -> int:
         asyncio.run(_run_setup_profile(profile_dir))
         return 0
 
-    # Validate API key early
+    # --- Reject unsupported legacy modes ---
+    if args.mode in ("realtime", "fallback"):
+        print(
+            f"Error: --mode {args.mode!r} is not supported in app.py.\n"
+            f"  For realtime: python -m src.realtime.main ...\n"
+            f"  For fallback: python -m src.fallback.pipeline ...",
+            file=sys.stderr,
+        )
+        return 1
+
+    # --- Validate API key ---
     api_key = os.environ.get("OPENAI_API_KEY", "")
     if not api_key:
         print(
@@ -347,121 +361,35 @@ def main() -> int:
         )
         return 1
 
-    if args.mode == "realtime":
-        from src.realtime.client import DEFAULT_MODEL, RealtimeClient
-        from src.realtime.main import _resolve_audio_input, _resolve_speaker
-        from src.common.logging_utils import get_logger
-        from src.common.lang import parse_pairs
-
-        logger = get_logger("app")
-        model = args.model or DEFAULT_MODEL
-
-        audio_input, sample_rate = _resolve_audio_input(args)
-        enable_speaker = _resolve_speaker(args)
-
-        if args.input_source == "device" and enable_speaker:
-            print(
-                "[WARNING] Speaker ON with device input — risk of echo/feedback loop. "
-                "Use --no-speaker to suppress.",
-                flush=True,
-            )
-
-        logger.info(
-            f"Mode: realtime | model={model} | input={type(audio_input).__name__} "
-            f"| rate={sample_rate} | src={args.src} tgt={args.tgt} "
-            f"| speaker={'on' if enable_speaker else 'off'} | debug={args.debug}"
+    # --- meet-bot is the only remaining mode ---
+    if not args.meeting_url:
+        print(
+            "Error: --meeting-url is required.\n"
+            "  Example: python app.py --meeting-url https://meet.google.com/abc-defg-hij",
+            file=sys.stderr,
         )
+        return 1
 
-        client = RealtimeClient(
-            api_key=api_key,
-            model=model,
-            enable_speaker=enable_speaker,
-            speaker_device=args.speaker_device,
-            debug=args.debug,
-            src_lang=args.src,
-            tgt_lang=args.tgt,
-            allowed_pairs=parse_pairs(args.pairs),
-            show_input=args.show_input,
-            meeting_mode=args.meeting_mode,
-            audio_input=audio_input,
-        )
-        try:
-            client.run()
-        except KeyboardInterrupt:
-            pass
-        return 0
+    import asyncio
+    from src.meet.main import _run_meet_bot
+    from src.common.logging_utils import get_logger
 
-    elif args.mode == "fallback":
-        from src.fallback.pipeline import run_fallback
-        from src.common.logging_utils import get_logger, print_translation
+    logger = get_logger("app")
 
-        logger = get_logger("app")
-        fallback_rate = args.sample_rate or args.input_rate or 16000
-        fallback_mic = args.mic or args.input_device
-        logger.info(
-            f"Mode: fallback | seconds={args.seconds} | mic={fallback_mic} | rate={fallback_rate}"
-        )
+    profile_dir = args.profile_dir or str(Path.home() / ".brseai_profile")
+    args.profile_dir = profile_dir
 
-        try:
-            translation = run_fallback(
-                seconds=args.seconds,
-                mic_device=fallback_mic,
-                sample_rate=fallback_rate,
-                api_key=api_key,
-                transcribe_model=args.transcribe_model,
-                chat_model=args.chat_model,
-                src_lang=args.src,
-                tgt_lang=args.tgt,
-                meeting_mode=args.meeting_mode,
-            )
-        except KeyboardInterrupt:
-            print("\nInterrupted.", file=sys.stderr)
-            return 1
-        except Exception as exc:
-            print(f"Error: {exc}", file=sys.stderr)
-            return 1
+    join_mode = f"manual(timeout={args.manual_join_timeout}s)" if args.manual_join else "auto"
+    logger.info(
+        f"Mode: meet-bot | url={args.meeting_url} | profile={profile_dir} "
+        f"| src={args.src} tgt={args.tgt} | meeting_mode={args.meeting_mode} "
+        f"| join={join_mode}"
+    )
 
-        if translation:
-            print("\n--- Translation ---")
-            print_translation(translation, end="\n")
-        else:
-            print("\n[No speech detected or empty transcript]")
-
-        return 0
-
-    elif args.mode == "meet-bot":
-        import asyncio
-        from src.meet.main import _run_meet_bot, parse_args as _meet_parse_args
-        from src.common.logging_utils import get_logger
-
-        logger = get_logger("app")
-
-        if not args.meeting_url:
-            print(
-                "Error: --meeting-url is required for meet-bot mode.\n"
-                "Example: python app.py --mode meet-bot "
-                "--meeting-url https://meet.google.com/abc-defg-hij "
-                "--profile-dir ~/.brseai_profile",
-                file=sys.stderr,
-            )
-            return 1
-
-        # Re-parse using meet.main's parser to fill any defaults it knows about,
-        # then pass the current args object directly since it has all the same attrs.
-        profile_dir = args.profile_dir or str(Path.home() / ".brseai_profile")
-        args.profile_dir = profile_dir
-
-        logger.info(
-            f"Mode: meet-bot | url={args.meeting_url} | profile={profile_dir} "
-            f"| src={args.src} tgt={args.tgt} | meeting_mode={args.meeting_mode}"
-        )
-
-        try:
-            asyncio.run(_run_meet_bot(args, api_key))
-        except KeyboardInterrupt:
-            print("\n[MeetBot] Interrupted.", flush=True)
-
-        return 0
+    try:
+        asyncio.run(_run_meet_bot(args, api_key))
+    except KeyboardInterrupt:
+        print("\n[MeetBot] Interrupted.", flush=True)
 
     return 0
 

@@ -239,10 +239,12 @@ class TestManualJoinCLIParity:
         return parse_args(argv)
 
     def test_app_parser_has_manual_join(self):
+        # app.py defaults manual_join to True (stable join path for end-user).
+        # src/meet/main.py keeps False (advanced entrypoint, explicit flag required).
         args = self._app_parse(["--mode", "meet-bot",
                                 "--meeting-url", "https://meet.google.com/x"])
         assert hasattr(args, "manual_join")
-        assert args.manual_join is False
+        assert args.manual_join is True
 
     def test_app_parser_manual_join_flag(self):
         args = self._app_parse(["--mode", "meet-bot",
@@ -281,10 +283,13 @@ class TestManualJoinCLIParity:
         assert args.manual_join_timeout == 60
 
     def test_defaults_are_identical_across_parsers(self):
-        """manual_join and manual_join_timeout defaults must match in both parsers."""
+        """manual_join_timeout default must match; manual_join differs intentionally."""
         app_args = self._app_parse(["--mode", "meet-bot",
                                     "--meeting-url", "https://meet.google.com/x"])
         meet_args = self._meet_parse(["--meeting-url", "https://meet.google.com/x"])
 
-        assert app_args.manual_join == meet_args.manual_join
+        # app.py defaults to True (user-friendly); meet/main.py defaults to False (advanced).
+        assert app_args.manual_join is True
+        assert meet_args.manual_join is False
+        # Timeout default must still match.
         assert app_args.manual_join_timeout == meet_args.manual_join_timeout

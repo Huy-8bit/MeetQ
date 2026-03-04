@@ -1,11 +1,7 @@
-# brseAI - Realtime Interpreter (VI/EN/JA)
+# brseAI - Google Meet Interpreter Bot (VI/EN/JA)
 
-Realtime speech translation on top of OpenAI Realtime, plus a fallback record/transcribe/translate path.
-
-Implemented runtimes:
-- `realtime`: stream audio chunks over WebSocket, print translated text, optional audio playback.
-- `fallback`: record fixed-length clip, transcribe, then translate.
-- `meet-bot`: Playwright Google Meet participant + meeting audio capture + realtime interpreter.
+Realtime speech translation for Google Meet, powered by the OpenAI Realtime API.
+Joins a meeting as a browser participant, captures meeting audio, and streams translated text (and optionally TTS audio) to the terminal.
 
 ## Quickstart
 
@@ -13,12 +9,11 @@ Implemented runtimes:
 
 - Python 3.10+
 - PortAudio (`sounddevice` backend)
-- Optional for meet-bot:
-  - `playwright` + Chromium
-  - Virtual audio device (BlackHole/Loopback) if not using ScreenCaptureKit path
-  - macOS 13+ + Screen Recording permission if using `--sck`
+- `playwright` + Chromium
+- Virtual audio device (BlackHole/Loopback) if not using ScreenCaptureKit path
+- macOS 13+ + Screen Recording permission if using `--sck`
 
-macOS example:
+macOS:
 
 ```bash
 brew install python@3.12 portaudio
@@ -31,11 +26,6 @@ python3.12 -m venv .venv
 source .venv/bin/activate
 pip install --upgrade pip
 pip install -r requirements.txt
-```
-
-Install Chromium for meet-bot:
-
-```bash
 playwright install chromium
 ```
 
@@ -52,63 +42,72 @@ or:
 export OPENAI_API_KEY="sk-..."
 ```
 
-### 4) List audio devices
+### 4) First-time sign-in (once)
 
 ```bash
-python app.py --list-input-devices
-python app.py --list-speakers
-python app.py --list-audio-devices
+python app.py --setup-profile
 ```
 
-`--list-mics` is a legacy alias of `--list-input-devices`.
+This opens a Chromium window. Sign in to your Google account, then close the window. Your session is saved to `~/.brseai_profile`.
 
 ### 5) Run
 
-#### Realtime mic interpreter
-
 ```bash
-python app.py --mode realtime
+python app.py --meeting-url "https://meet.google.com/xxx-xxxx-xxx"
 ```
 
-Verbose logging + streamed event details:
+The browser opens. Click **Join** (or **Ask to join**) yourself — the interpreter pipeline starts automatically once you're in the call. Translation text prints to the terminal.
+
+#### With audio speak-back (TTS into meeting via virtual mic)
 
 ```bash
-python app.py --mode realtime --debug
+python app.py \
+  --meeting-url "https://meet.google.com/xxx-xxxx-xxx" \
+  --meet-mic-device <OUTPUT_INDEX>
 ```
 
-#### Realtime device input (loopback / virtual device)
+#### With loopback audio capture (instead of default SCK)
 
 ```bash
-python app.py --mode realtime \
-  --input device \
-  --input-device <INPUT_INDEX> \
-  --input-rate 48000 \
-  --no-speaker
+python app.py \
+  --meeting-url "https://meet.google.com/xxx-xxxx-xxx" \
+  --meet-speaker-device <INPUT_INDEX>
 ```
 
-Note: speaker defaults to `OFF` when `--input device` is used (echo prevention).
-
-#### Fallback mode
+#### List audio devices
 
 ```bash
-python app.py --mode fallback --seconds 8
+python app.py --list-audio-devices
+python app.py --list-input-devices
+python app.py --list-speakers
 ```
 
-With explicit language routing:
+#### Auto-click join (instead of manual-join default)
 
 ```bash
-python app.py --mode fallback --seconds 8 --src ja --tgt en --meeting-mode locked
+python app.py \
+  --meeting-url "https://meet.google.com/xxx-xxxx-xxx" \
+  --no-manual-join
 ```
 
-#### Meet-bot / connect_to_meet mode
+### Migration from `--mode meet-bot`
 
-Use the meet module entrypoint:
-
+Old usage (still works):
 ```bash
-python -m src.meet.main --setup-profile --profile-dir ~/.brseai_profile
+python app.py --mode meet-bot --meeting-url https://meet.google.com/xxx ...
 ```
 
-Then run bot (loopback device path):
+New usage (preferred):
+```bash
+python app.py --meeting-url https://meet.google.com/xxx ...
+```
+
+`--mode realtime` and `--mode fallback` are no longer supported in `app.py`.
+Use `python -m src.realtime.main` or `python -m src.fallback.pipeline` directly.
+
+### Advanced: `src.meet.main` entrypoint
+
+For programmatic use or advanced flags:
 
 ```bash
 python -m src.meet.main \
@@ -118,7 +117,7 @@ python -m src.meet.main \
   --src auto --tgt auto --meeting-mode locked
 ```
 
-Optional bot speak-back (virtual mic output device):
+Optional speak-back:
 
 ```bash
 python -m src.meet.main \
