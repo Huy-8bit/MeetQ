@@ -1,49 +1,61 @@
 # STATE
 
-## Current Status
+## Current Status (2026-03-04)
 
-- Phase 1 local mic interpreter: complete and working.
-- Phase 2 AudioInput abstraction + DeviceLoopbackInput: complete (TASK-15).
-- Phase 2 Full Meet Interpreter Bot MVP: complete (TASK-16).
-  - `python app.py --mode meet-bot` — joins Google Meet via Playwright, listens via loopback device, translates, optionally speaks back via virtual mic device.
-  - Requires: `playwright`, virtual audio device (BlackHole/Loopback), persistent browser profile.
-- Production deployment blocked pending legal/privacy review and participant consent controls.
+### Phase 1
+- Realtime mic interpreter: implemented.
+- Realtime device-input interpreter (`--input device`): implemented.
+- Fallback clip pipeline: implemented.
+- Language routing options (`--src`, `--tgt`, `--pairs`, `--meeting-mode`): implemented.
+
+### Phase 2 (Google Meet)
+Implemented for internal testing:
+- Playwright join/waiting-room/leave bot (`src/meet/bot.py`).
+- Meet audio capture adapters (`src/meet/audio.py`).
+- Meet runtime wiring to `RealtimeClient` (`src/meet/main.py`).
+
+Not yet hardened for production:
+- End-to-end reliability testing and preflight checks.
+- Compliance controls (consent, retention, access policy).
+- Official Google Meet media API path validation.
 
 ## Milestones
 
 | Milestone | Status | Notes |
 |---|---|---|
-| Phase 1: Local mic realtime interpreter | COMPLETE | Realtime + fallback modes are implemented |
-| Phase 2: Google Meet Listener design | COMPLETE | Spec and planning docs created |
-| Phase 2: AudioInput abstraction + DeviceLoopbackInput | COMPLETE | `AudioInput` ABC, `MicInput`, `DeviceLoopbackInput` implemented; CLI flags added |
-| Phase 2: Full Meet Interpreter Bot MVP (TASK-16) | COMPLETE | Playwright bot + virtual audio routing + TTS injection; `--mode meet-bot` |
+| M1 Phase 1 realtime interpreter | DONE | Mic + device input + dynamic language routing |
+| M2 Fallback interpreter path | DONE | WAV recording + transcription + translation |
+| M3 Meet bot MVP wiring | DONE (internal) | Join + capture + realtime translation path exists |
+| M4 Meet hardening and compliance gate | IN PROGRESS | Stability tests, policy controls, parser unification pending |
 
-## Key Assumptions / Constraints
+## Known Implementation Caveats
 
-- Python 3.10+ runtime remains baseline.
-- Existing translation pipeline continues to use OpenAI Realtime WebSocket.
-- `AudioInput` will be the shared abstraction for mic and meeting sources.
-- Google Meet official media capabilities may depend on access approval, Workspace admin controls, and policy constraints.
-- Audio send/injection into Meet is treated as uncertain unless explicitly confirmed during official-path discovery.
-- Phase 2 default posture is receive/listen only.
-- Production deployment is blocked pending legal/privacy review and participant consent controls.
+- `app.py --mode meet-bot` does not expose the complete meet parser surface from `src/meet/main.py`; meet operations should currently use `python -m src.meet.main`.
+- ScreenCaptureKit path (`--sck`) exists but is less validated than loopback-device capture.
+- Fallback mode always persists WAV clips in `recordings/`.
+
+## Resume Checklist
+
+1. Use `python app.py --mode realtime` for core interpreter smoke tests.
+2. Use `python app.py --mode realtime --input device --input-device <idx> --no-speaker` for loopback tests.
+3. Use `python -m src.meet.main ...` for meet-bot tests.
+4. Track remaining hardening/compliance items in `docs/TASKS.md`.
 
 ## File Map
 
 ```text
 brseAI/
 ├── app.py
-├── requirements.txt
 ├── README.md
-├── .env.example
+├── requirements.txt
 ├── docs/
-│   ├── TASKS.md
-│   ├── STATE.md
 │   ├── architecture.md
 │   ├── realtime_protocol.md
 │   ├── security.md
+│   ├── phase2_google_meet.md
 │   ├── next_steps_google_meet.md
-│   └── phase2_google_meet.md
+│   ├── TASKS.md
+│   └── STATE.md
 ├── src/
 │   ├── common/
 │   ├── realtime/
@@ -53,23 +65,10 @@ brseAI/
 └── logs/
 ```
 
-## Active Planning Docs
+## Change Log
 
-- `docs/phase2_google_meet.md`: Phase 2 main design and operational spec.
-- `docs/architecture.md`: updated architecture with `AudioInput`, `MicInput`, and `MeetInput`.
-- `docs/next_steps_google_meet.md`: execution plan and milestone gates.
-
-## How To Resume
-
-1. Read `docs/phase2_google_meet.md` for compliance constraints.
-2. All current MVP tasks (TASK-15, TASK-16) are DONE.
-3. Next planned tasks: TASK-17 (Path A feasibility), TASK-18 (privacy/consent controls), TASK-19 (pilot runbook).
-4. For bot testing: install `playwright`, set up virtual audio device, run `--setup-profile` once, then `--mode meet-bot`.
-
-## Log
-
-- 2026-03-03: Phase 1 implementation completed (mic realtime + fallback).
-- 2026-03-03: Meeting mode and language routing enhancements completed.
-- 2026-03-03: Phase 2 documentation package added (`phase2_google_meet.md` + related doc updates).
-- 2026-03-03: Phase 2 MVP implemented — `AudioInput` ABC, `MicInput`, `DeviceLoopbackInput`; `RealtimeClient` accepts any `AudioInput`; `--input`, `--input-device`, `--input-rate`, `--list-input-devices` CLI flags added.
-- 2026-03-03: Full Meet Interpreter Bot MVP implemented (TASK-16) — `src/meet/` package: `MeetBot` (Playwright joiner), `MeetAudioListenerInput`, `MeetAudioMicOutput`, `selectors.py`; `--mode meet-bot` in `app.py`; README updated.
+- 2026-03-03: Phase 1 realtime + fallback interpreter path completed.
+- 2026-03-03: Language routing and meeting-mode behavior added (`locked`/`auto`, pair filters).
+- 2026-03-03: Device loopback input added for realtime (`--input device`).
+- 2026-03-03: Meet bot MVP modules added (`src/meet/*`) and integrated.
+- 2026-03-04: Documentation synchronized to current implementation and known limitations.

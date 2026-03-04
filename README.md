@@ -1,359 +1,267 @@
-# brseAI — Real-Time Bilingual Interpreter (Vietnamese ↔ English)
+# brseAI - Realtime Interpreter (VI/EN/JA)
 
-Stream microphone audio to the OpenAI Realtime API and get live translated text printed to your terminal. Supports both a low-latency **realtime** mode (WebSocket streaming) and a simpler **fallback** mode (record → transcribe → translate).
+Realtime speech translation on top of OpenAI Realtime, plus a fallback record/transcribe/translate path.
 
----
+Implemented runtimes:
+- `realtime`: stream audio chunks over WebSocket, print translated text, optional audio playback.
+- `fallback`: record fixed-length clip, transcribe, then translate.
+- `meet-bot`: Playwright Google Meet participant + meeting audio capture + realtime interpreter.
 
 ## Quickstart
 
-### 1. Prerequisites
+### 1) Prerequisites
 
-| Dependency | Install |
-|---|---|
-| Python 3.10+ | `brew install python@3.12` (macOS) |
-| PortAudio | `brew install portaudio` (macOS) or `sudo apt-get install portaudio19-dev` |
-| ffmpeg (optional) | `brew install ffmpeg` |
+- Python 3.10+
+- PortAudio (`sounddevice` backend)
+- Optional for meet-bot:
+  - `playwright` + Chromium
+  - Virtual audio device (BlackHole/Loopback) if not using ScreenCaptureKit path
+  - macOS 13+ + Screen Recording permission if using `--sck`
 
-### 2. Clone and set up environment
+macOS example:
 
 ```bash
-cd brseAI
+brew install python@3.12 portaudio
+```
 
-# Create virtual environment with Python 3.12
+### 2) Install
+
+```bash
 python3.12 -m venv .venv
 source .venv/bin/activate
-
 pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
-### 3. Configure API key
+Install Chromium for meet-bot:
+
+```bash
+playwright install chromium
+```
+
+### 3) Configure API key
 
 ```bash
 cp .env.example .env
-# Edit .env and set OPENAI_API_KEY=sk-...
+# edit .env and set OPENAI_API_KEY=...
 ```
 
-Or export directly:
+or:
 
 ```bash
-export OPENAI_API_KEY="sk-your-key-here"
+export OPENAI_API_KEY="sk-..."
 ```
 
-### 4. Run
+### 4) List audio devices
 
-**List microphones:**
 ```bash
-python app.py --list-mics
-```
-
-**List speakers:**
-```bash
+python app.py --list-input-devices
 python app.py --list-speakers
+python app.py --list-audio-devices
 ```
 
-**Realtime interpreter — voice + text (default):**
+`--list-mics` is a legacy alias of `--list-input-devices`.
+
+### 5) Run
+
+#### Realtime mic interpreter
+
 ```bash
 python app.py --mode realtime
 ```
 
-**Realtime with specific mic and speaker:**
-```bash
-python app.py --mode realtime --mic 3 --speaker-device 1
-```
+Verbose logging + streamed event details:
 
-**Realtime — text only (disable audio playback):**
-```bash
-python app.py --mode realtime --no-speaker
-```
-
-**Realtime — verbose debug mode (shows all events + input transcripts):**
 ```bash
 python app.py --mode realtime --debug
 ```
 
-**Fixed meeting language — Japanese → English, locked for whole session:**
+#### Realtime device input (loopback / virtual device)
+
 ```bash
-python app.py --mode realtime --meeting-mode locked --src ja --tgt en
+python app.py --mode realtime \
+  --input device \
+  --input-device <INPUT_INDEX> \
+  --input-rate 48000 \
+  --no-speaker
 ```
 
-**Auto-detect mode — language can switch mid-session:**
-```bash
-python app.py --mode realtime --meeting-mode auto
-```
+Note: speaker defaults to `OFF` when `--input device` is used (echo prevention).
 
-**Fallback mode — record 8 seconds then translate:**
+#### Fallback mode
+
 ```bash
 python app.py --mode fallback --seconds 8
 ```
 
----
+With explicit language routing:
 
-## All CLI Flags
-
-```
-python app.py --help
+```bash
+python app.py --mode fallback --seconds 8 --src ja --tgt en --meeting-mode locked
 ```
 
-| Flag | Default | Description |
+#### Meet-bot / connect_to_meet mode
+
+Use the meet module entrypoint:
+
+```bash
+python -m src.meet.main --setup-profile --profile-dir ~/.brseai_profile
+```
+
+Then run bot (loopback device path):
+
+```bash
+python -m src.meet.main \
+  --meeting-url https://meet.google.com/abc-defg-hij \
+  --profile-dir ~/.brseai_profile \
+  --meet-speaker-device <INPUT_INDEX> \
+  --src auto --tgt auto --meeting-mode locked
+```
+
+Optional bot speak-back (virtual mic output device):
+
+```bash
+python -m src.meet.main \
+  --meeting-url https://meet.google.com/abc-defg-hij \
+  --profile-dir ~/.brseai_profile \
+  --meet-speaker-device <INPUT_INDEX> \
+  --meet-mic-device <OUTPUT_INDEX>
+```
+
+## Language Routing
+
+Supported languages: `auto`, `vi`, `en`, `ja`.
+
+Key flags:
+- `--src`: source language (`auto` by default)
+- `--tgt`: target language (`auto` by default)
+- `--pairs`: allowed pair filter (example: `"vi<->en,ja<->en"`)
+- `--meeting-mode locked|auto`:
+  - `locked` (default): keep one routing after lock
+  - `auto`: re-detect during session
+
+Default auto table in code:
+- `vi -> en`
+- `en -> vi`
+- `ja -> en`
+
+## CLI Flags (Current)
+
+### `app.py` (realtime + fallback + shared helpers)
+
+| Flag | Default | Notes |
 |---|---|---|
-| `--mode` | `realtime` | `realtime` or `fallback` |
-| `--mic INDEX` | system default | Mic device index from `--list-mics` |
-| `--list-mics` | — | Print input devices and exit |
-| `--speaker` / `--no-speaker` | on | Enable/disable audio playback |
-| `--speaker-device INDEX` | system default | Speaker device index from `--list-speakers` |
-| `--list-speakers` | — | Print output devices and exit |
-| `--debug` | off | Verbose event logging + show input transcripts |
-| `--seconds N` | `5` | Fallback only: recording duration |
-| `--sample-rate HZ` | `16000` | Audio sample rate |
-| `--model` | `gpt-4o-realtime-preview-2024-12-17` | Realtime model ID |
-| `--transcribe-model` | `whisper-1` | Fallback transcription model |
-| `--chat-model` | `gpt-4o-mini` | Fallback translation model |
-| `--src {auto,vi,en,ja}` | `auto` | Source language |
-| `--tgt {auto,vi,en,ja}` | `auto` | Target language |
-| `--meeting-mode {locked,auto}` | `locked` | `locked`: fix routing after first detection; `auto`: re-detect mid-session |
-| `--pairs PAIRS` | all | Restrict routing, e.g. `"vi<->en,ja<->en"` |
-| `--show-input` | off | Always print `[You]` transcript |
+| `--mode` | `realtime` | `realtime`, `fallback`, `meet-bot` |
+| `--input` | `mic` | `mic` or `device` (realtime) |
+| `--input-device` | `None` | required with `--input device` |
+| `--input-rate` | `16000` | realtime input sample rate |
+| `--list-input-devices` | off | list input devices and exit |
+| `--mic` | `None` | legacy alias for input device |
+| `--list-mics` | off | legacy alias for `--list-input-devices` |
+| `--speaker/--no-speaker` | dynamic | realtime default: ON for mic, OFF for device input |
+| `--speaker-device` | `None` | output device index |
+| `--list-speakers` | off | list output devices and exit |
+| `--seconds` | `5.0` | fallback clip duration |
+| `--sample-rate` | `None` | legacy; fallback uses `sample-rate` or `input-rate` |
+| `--model` | `None` | falls back to `gpt-4o-realtime-preview-2024-12-17` |
+| `--transcribe-model` | `whisper-1` | fallback only |
+| `--chat-model` | `gpt-4o-mini` | fallback only |
+| `--src` | `auto` | language source |
+| `--tgt` | `auto` | language target |
+| `--pairs` | empty | empty means all pairs allowed |
+| `--meeting-mode` | `locked` | `locked` or `auto` |
+| `--show-input` | off | explicit input transcript flag |
+| `--debug` | off | verbose runtime logs |
+| `--list-audio-devices` | off | lists full I/O table via `src.meet.audio` |
+| `--setup-profile` | off | opens profile sign-in flow and exits |
 
----
+### `src.meet.main` (recommended meet-bot entrypoint)
 
-## How It Works
-
-### Realtime Mode
-```
-Mic → PCM16 chunks (20ms) → WebSocket → OpenAI Realtime API
-                                              ↓ server VAD
-                                   response.text.delta   → [Interp] terminal
-                                   response.audio.delta  → SpeakerPlayer → speaker
-```
-- Server-side VAD detects speech start/stop automatically.
-- Text translation streams to terminal; audio plays through speaker simultaneously.
-- **Barge-in**: if you speak while the interpreter is talking, playback stops immediately and the new turn begins.
-- `[You] <transcript>` shown after each of your turns; `[Interp] <translation>` streams in real time.
-- Reconnects automatically on WebSocket drops (up to 5 attempts).
-
-### Fallback Mode
-```
-Mic → record N seconds → WAV file → Whisper transcription → GPT translation → terminal
-```
-- Reliable alternative when Realtime API is unavailable.
-- Recordings saved to `recordings/` with timestamps.
-
-### Translation Behavior
-The model is instructed (via system prompt / session instructions):
-- If user speaks **Vietnamese** → output **English** only
-- If user speaks **English** → output **Vietnamese** only
-- No labels, no commentary — translation text only
-
----
-
-## Repo Structure
-
-```
-brseAI/
-├── app.py                     Main CLI entrypoint
-├── requirements.txt
-├── .env.example
-├── docs/
-│   ├── TASKS.md               Task breakdown
-│   ├── STATE.md               Progress log (resume point)
-│   ├── architecture.md        Mermaid diagrams
-│   ├── realtime_protocol.md   WebSocket event reference
-│   ├── security.md            Security notes
-│   ├── phase2_google_meet.md  Phase 2 design + compliance spec
-│   └── next_steps_google_meet.md
-├── src/
-│   ├── common/
-│   │   ├── audio.py           AudioInput ABC, MicInput, DeviceLoopbackInput, SpeakerPlayer
-│   │   ├── lang.py            Language detection + routing
-│   │   └── logging_utils.py   Timestamped logger
-│   ├── realtime/
-│   │   ├── client.py          RealtimeClient (WebSocket)
-│   │   └── main.py            Realtime entrypoint
-│   ├── fallback/
-│   │   ├── pipeline.py        Record → transcribe → translate
-│   │   └── main.py            Fallback entrypoint
-│   └── meet/
-│       ├── bot.py             MeetBot Playwright joiner
-│       ├── audio.py           MeetAudioListenerInput, MeetAudioMicOutput
-│       ├── selectors.py       Resilient Meet DOM selector map
-│       └── main.py            Meet-bot entrypoint
-├── recordings/                WAV clips (fallback mode output)
-└── logs/                      Log files
-```
-
----
-
-## Google Meet Bot Mode
-
-> **Internal use only.** Requires participant consent and legal review before
-> any production or third-party meeting deployment.
-> See `docs/phase2_google_meet.md` for compliance constraints.
-
-The bot joins a Google Meet as a visible participant, listens to meeting audio
-through a virtual loopback device, translates speech in real time, and speaks
-the translation back into the meeting through a second virtual device configured
-as the bot's microphone input.
-
-### Prerequisites
-
-| Requirement | macOS install |
-|---|---|
-| Python 3.10+ venv | (already set up) |
-| PortAudio | `brew install portaudio` |
-| Playwright + Chromium | `pip install playwright && playwright install chromium` |
-| Virtual audio device | [BlackHole 2ch](https://existential.audio/blackhole/) (free) or [Loopback](https://rogueamoeba.com/loopback/) (paid) |
-
-### Virtual Audio Device Setup (macOS)
-
-You need **two virtual audio devices**:
-
-1. **Meet → Bot capture device** (e.g. BlackHole 2ch)
-   - In Chrome: `⋮` → Settings → Sound → set **Output** to BlackHole 2ch
-   - Meeting audio flows: Chrome speaker → BlackHole → bot's `--meet-speaker-device`
-
-2. **Bot TTS → Meet mic device** (e.g. a second BlackHole or Loopback virtual device)
-   - In Chrome: set **Input** (microphone) to this device
-   - TTS audio flows: bot `--meet-mic-device` → virtual device → Chrome mic → participants
-
-```bash
-# Find device indexes
-python app.py --list-audio-devices
-```
-
-### First-Time Google Sign-In
-
-Run once to save your Google credentials in a persistent profile:
-
-```bash
-python app.py --mode meet-bot \
-  --setup-profile \
-  --profile-dir ~/.brseai_profile
-```
-
-A browser window opens. Sign in to Google, then close the browser.
-The profile is saved to `~/.brseai_profile` and reused on all future runs.
-
-### Run the Bot
-
-```bash
-python app.py --mode meet-bot \
-  --meeting-url https://meet.google.com/abc-defg-hij \
-  --profile-dir ~/.brseai_profile \
-  --meet-speaker-device 4 \
-  --meet-mic-device 5 \
-  --src ja --tgt vi \
-  --meeting-mode locked
-```
-
-**Japanese → English, auto-detect, no bot speech output (listen only):**
-```bash
-python app.py --mode meet-bot \
-  --meeting-url https://meet.google.com/abc-defg-hij \
-  --profile-dir ~/.brseai_profile \
-  --meet-speaker-device 4 \
-  --src ja --tgt en
-```
-
-**Auto-leave after 2 hours:**
-```bash
-python app.py --mode meet-bot \
-  --meeting-url https://meet.google.com/abc-defg-hij \
-  --profile-dir ~/.brseai_profile \
-  --meet-speaker-device 4 \
-  --meet-mic-device 5 \
-  --leave-after-minutes 120
-```
-
-### Meet-Bot CLI Flags
-
-| Flag | Default | Description |
+| Flag | Default | Notes |
 |---|---|---|
-| `--meeting-url URL` | required | Google Meet URL |
-| `--profile-dir PATH` | `~/.brseai_profile` | Persistent Chromium profile directory |
-| `--setup-profile` | off | First-time sign-in helper; opens browser, then exits |
-| `--headless` / `--no-headless` | false | Run Chromium headless (not recommended; Meet may block) |
-| `--display-name NAME` | `Interpreter Bot` | Bot's name shown in meeting |
-| `--join-timeout-seconds N` | 90 | Seconds to wait for admission |
-| `--leave-after-minutes N` | off | Auto-leave after N minutes |
-| `--meet-speaker-device INDEX` | required | Loopback INPUT device to capture meeting audio |
-| `--meet-mic-device INDEX` | off | Virtual OUTPUT device to send bot TTS into Meet mic |
-| `--meet-sample-rate HZ` | 48000 | Capture sample rate (match device native rate) |
-| `--list-audio-devices` | — | Print all I/O devices and exit |
-| `--src` | `auto` | Source language (`auto`, `vi`, `en`, `ja`) |
-| `--tgt` | `auto` | Target language |
-| `--meeting-mode` | `locked` | `locked` / `auto` |
-| `--debug` | off | Verbose Playwright + audio event logs |
-
-### Troubleshooting: Meet Bot
-
-**Bot never gets past waiting room:**
-- Ask the meeting host to admit the bot, or make sure your Google account is
-  allowed to join without approval (Google Workspace setting).
-- Increase `--join-timeout-seconds`.
-
-**No audio captured (bot produces no translations):**
-- Confirm Chrome's audio OUTPUT is set to your loopback device.
-- `python app.py --list-audio-devices` — verify `--meet-speaker-device` index.
-- Check macOS `System Settings → Sound → Output` is not overriding Chrome's setting.
-
-**Bot TTS not heard in meeting:**
-- Confirm Chrome's microphone INPUT is set to your virtual mic device.
-- Verify `--meet-mic-device` index is the OUTPUT side of the virtual device.
-- Use `--debug` to see if `response.audio.delta` events are received.
-
-**Meet blocks automated browser:**
-- Use `--no-headless` (default). Fully headless Chromium is often blocked.
-- Ensure `--profile-dir` points to a profile where you are already signed in.
-
-**`playwright` not installed:**
-```bash
-pip install playwright
-playwright install chromium
-```
-
----
+| `--meeting-url` | required at runtime | Meet URL |
+| `--profile-dir` | `~/.brseai_profile` | persistent Chromium profile |
+| `--setup-profile` | off | sign in and persist session |
+| `--headless/--no-headless` | `--no-headless` | Meet is often less reliable in headless mode |
+| `--display-name` | `Interpreter Bot` | pre-join name |
+| `--join-timeout-seconds` | `90` | waiting-room timeout |
+| `--leave-after-minutes` | off | auto-leave timer |
+| `--sck` | off | macOS ScreenCaptureKit capture path |
+| `--sck-app` | `None` | with `--sck`, capture one app bundle ID |
+| `--meet-speaker-device` | `None` | loopback input device (required unless `--sck`) |
+| `--meet-mic-device` | `None` | optional output device for bot TTS |
+| `--meet-sample-rate` | auto | effective default `16000` (`--sck`) or `48000` (loopback) |
+| `--list-audio-devices` | off | print all devices and exit |
+| `--src` | `auto` | language source |
+| `--tgt` | `auto` | language target |
+| `--pairs` | empty | pair filter |
+| `--meeting-mode` | `locked` | routing lock policy |
+| `--show-input` | off | show transcript lines |
+| `--debug` | off | verbose bot/interpreter logs |
 
 ## Troubleshooting
 
-### No microphone detected
-- **macOS:** Grant Terminal mic access in `System Settings → Privacy & Security → Microphone`.
-- **Linux:** Check `pactl list short sources` or `arecord -l`.
-- Verify Python can see your devices:
-  ```bash
-  python app.py --list-mics
-  ```
+### Microphone permission denied
 
-### `OSError: [Errno -9996] Invalid input device` or similar
-- Wrong device index. Run `--list-mics` and pass the correct `--mic INDEX`.
+- macOS: `System Settings -> Privacy & Security -> Microphone` and enable Terminal/iTerm.
+- Verify detection:
 
-### PortAudio not found / sounddevice import error
-- Install PortAudio **before** `pip install -r requirements.txt`:
-  ```bash
-  brew install portaudio   # macOS
-  # then recreate venv and reinstall
-  ```
+```bash
+python app.py --list-input-devices
+```
 
-### WebSocket / auth errors
-- Confirm `OPENAI_API_KEY` is set: `echo $OPENAI_API_KEY`
-- Confirm the realtime model name is correct and your account has access.
-- Check outbound `wss://` (port 443) is not blocked by a firewall.
+### Input device opens but no transcript appears
 
-### `response.text.delta` never appears
-- The model may not have received audio. Confirm mic is active and not muted.
-- Try `--sample-rate 24000` if your device's native rate is 24kHz.
+- Wrong device index or silent source.
+- For loopback capture, confirm Chrome/Meet audio is routed to that device.
+- Run realtime with `--debug` to inspect VAD events.
 
-### Fallback: empty transcript
-- Speak closer to the mic and increase `--seconds`.
-- Check recording is saved in `recordings/` and is non-empty.
+### Sample-rate mismatch / device open errors
 
----
+- Match capture rate to device default rate from `--list-input-devices`.
+- Common loopback rates: `44100` or `48000`.
+- Example:
 
-## Additional Docs
+```bash
+python app.py --mode realtime --input device --input-device <INDEX> --input-rate 48000 --no-speaker
+```
+
+### Virtual audio setup notes (high-level)
+
+- Loopback path requires two routes:
+  - Meet speaker output -> virtual input device captured by bot/interpreter.
+  - Bot TTS output -> virtual output device selected as Meet microphone input.
+- Keep capture and playback on separate routes to avoid feedback.
+
+### Playwright / Chromium issues
+
+- Install browser runtime:
+
+```bash
+playwright install chromium
+```
+
+- Use persistent profile (`--profile-dir`) and run setup once with `--setup-profile`.
+- Prefer non-headless mode when meeting join UI is blocked.
+
+### Waiting room / admit behavior
+
+- Bot can wait up to `--join-timeout-seconds` (default `90`).
+- Host must admit the bot if waiting-room policy requires approval.
+- If timed out, rerun after host-side policy adjustment or manual admit.
+
+### Known implementation caveats
+
+- `python app.py --mode meet-bot` currently does not expose the full meet parser surface (`--sck`, `--sck-app`); use `python -m src.meet.main` for meet operations.
+- `--sck` path exists in code but is less battle-tested than loopback-device capture.
+- Fallback mode always writes WAV clips to `recordings/`.
+
+## Docs
 
 - [Architecture](docs/architecture.md)
-- [Realtime Protocol Events](docs/realtime_protocol.md)
-- [Security Notes](docs/security.md)
-- [Google Meet Next Steps](docs/next_steps_google_meet.md)
-- [Task List](docs/TASKS.md)
-- [Progress Log](docs/STATE.md)
+- [Realtime Protocol](docs/realtime_protocol.md)
+- [Security](docs/security.md)
+- [Phase 2 Meet Status](docs/phase2_google_meet.md)
+- [State](docs/STATE.md)
+- [Tasks](docs/TASKS.md)
+- [Meet Next Steps](docs/next_steps_google_meet.md)

@@ -1,66 +1,63 @@
-# Next Steps: Google Meet Listener Execution Plan
+# Next Steps: Google Meet
 
-Detailed technical design lives in `docs/phase2_google_meet.md`.
+Detailed design and status: `docs/phase2_google_meet.md`.
 
-This file is the execution-oriented roadmap for Phase 2.
+## Current Position (2026-03-04)
 
-## Current Status
+Internal MVP exists:
+- Bot join/wait/leave lifecycle implemented.
+- Loopback capture path implemented.
+- Realtime translation path integrated.
 
-- Phase 1 local mic realtime interpreter: complete and working.
-- Phase 2 Google Meet Listener: planned.
+Primary gap is hardening + compliance, not greenfield build.
 
-## Decision Gate: Path Selection
+## Near-Term Priorities
 
-Choose one primary path after discovery:
-
-- Path A: official/compliant media integration (availability may depend on access and admin policy).
-- Path B: bot participant + loopback capture (internal MVP only; legal review required before production).
-
-## Milestones
-
-## M1: Discovery + Compliance Gate
+## N1: Runtime Stability
 
 Deliverables:
-- Capability matrix validated with internal assumptions clearly marked.
-- Consent and participant notification requirements documented.
-- Retention and logging redaction policy approved.
+- Unify meet CLI behavior between `app.py` and `src/meet/main.py`.
+- Validate listen-only meet flow with repeatable smoke script.
+- Validate clean shutdown across interpreter, audio, and browser tasks.
 
 Exit criteria:
-- Clear go/no-go for Path A feasibility.
-- Legal/compliance sign-off for allowed prototype scope.
+- 30-minute internal run without crash/restart loops.
+- Known startup/runtime errors produce actionable diagnostics.
 
-## M2: Architecture Freeze
+## N2: Audio Path Validation
 
 Deliverables:
-- `AudioInput` contract approved.
-- `MeetInput` lifecycle and state machine documented.
-- Failure/retry policy documented.
+- Validate `--meet-mic-device` speak-back path end-to-end.
+- Validate ScreenCaptureKit (`--sck`) path on supported macOS versions.
+- Add preflight checks for sample-rate/device mismatch.
 
 Exit criteria:
-- Engineering sign-off on architecture and operational constraints.
+- Documented tested configurations with pass/fail matrix.
+- Echo/feedback checklist integrated into runbook.
 
-## M3: Internal MVP Build (Path B or Path A if available)
+## N3: Compliance Controls
 
 Deliverables:
-- Meeting audio can be ingested into the existing realtime translation pipeline.
-- Basic runbook for join failures, no-audio, and reconnect.
-- Echo prevention checklist enforced.
+- Participant notice/consent procedure.
+- Retention and deletion policy for recordings/transcripts.
+- Logging redaction requirements for sensitive content.
 
 Exit criteria:
-- Stable 30-minute internal test with acceptable latency and no crash.
+- Security/legal sign-off for internal pilot scope.
+- Deployment guardrails documented and reviewed.
 
-## M4: Controlled Pilot Readiness
+## N4: Path A Feasibility (Official Meet API)
 
 Deliverables:
-- Observability metrics and incident playbook.
-- Transcript handling and storage controls implemented.
-- Deployment guardrails documented.
+- Capability matrix for official integration availability.
+- Admin/policy prerequisites and constraints documented.
+- Go/no-go decision on investing in Path A build.
 
 Exit criteria:
-- Pilot-ready package approved by engineering + legal + security stakeholders.
+- Explicit decision recorded with assumptions and risks.
 
-## Operational Guardrails
+## Guardrails
 
-- Do not claim audio injection/send into Meet is supported unless explicitly confirmed for our access level.
-- Do not run in production without participant consent and legal approval.
-- Default to receive-only architecture until capability confirmation is documented.
+- No external production usage without consent and legal approval.
+- Do not assume audio injection is supported by official APIs until confirmed.
+- Keep meet profile data (`--profile-dir`) treated as sensitive credentials.

@@ -1,279 +1,125 @@
-# Phase 2: Google Meet Listener
+# Phase 2 Google Meet
 
-## Status
+## Status Snapshot (2026-03-04)
 
-Planned. Design approved for implementation planning; no production deployment yet.
+Phase 2 is partially implemented for internal testing.
 
-## Goal
+Implemented today:
+- Playwright Meet bot lifecycle (`src/meet/bot.py`): navigate, pre-join setup, click join, waiting-room polling, leave.
+- Meet audio adapters (`src/meet/audio.py`):
+  - `MeetAudioListenerInput` for virtual loopback capture.
+  - `MeetAudioMicOutput` for virtual mic playback.
+  - `SCKAudioInput` code path for macOS ScreenCaptureKit capture.
+- Meet runtime wiring (`src/meet/main.py`) into existing `RealtimeClient`.
+- Shared language routing and meeting-mode behavior (`locked` / `auto`) reused from realtime path.
 
-Enable the existing realtime interpreter pipeline to listen to Google Meet meeting audio and produce translated text output with low latency.
+Not production-ready:
+- Compliance controls (consent UX, retention controls, access governance).
+- Robust e2e validation and automated reliability testing.
+- Official Google Meet media API integration (Path A) confirmation.
 
-## Scope
+## Implemented vs Planned
 
-- Add a new meeting audio input path (`MeetInput`) that plugs into the existing `RealtimeClient` pipeline.
-- Preserve existing `MicInput` path.
-- Keep output-first focus on translated text.
-- Optional translated audio output remains non-goal for initial Phase 2 rollout.
-
-## Non-Goals (Phase 2)
-
-- Guaranteed speaker-accurate diarization.
-- Production-grade Google Meet write-back/injection.
-- Fully automated legal/compliance workflow.
-
-## Assumptions And Constraints
-
-- Phase 1 (local mic realtime interpreter) is complete and stable.
-- Google Meet official media capabilities may depend on allowlist access, Workspace edition, admin policy, and regional/legal constraints.
-- Audio send/injection into Meet is treated as uncertain and possibly unsupported for our access level unless explicitly confirmed during Path A discovery.
-- Default design assumption for Phase 2 is receive/listen only.
-
-## Implementation Paths
-
-## Path A: Official / Compliant (Google Meet Media API Concept)
-
-### Summary
-
-Use an official Google Meet media integration model when available and approved for the organization.
-
-### Availability Note
-
-This path is availability-dependent. Access and exact capabilities may not be universally open. Treat all media capabilities as subject to Google approval and tenant policy.
-
-### High-Level Integration Model
-
-- Enterprise app registration and identity configuration.
-- Workspace admin enablement and policy approval.
-- Meeting participant consent and organizational controls.
-- Media ingestion path (receive audio) into `MeetInput`.
-
-### What We Can And Cannot Assume
-
-| Capability | Current assumption for planning |
-|---|---|
-| Receive meeting audio | Potentially available if access is granted and admin policy allows |
-| Send/inject translated audio back into Meet | Uncertain; do not assume supported unless explicitly confirmed |
-| Production usage without policy/legal review | Not allowed |
-
-### Prerequisites (High-Level)
-
-- Workspace admin sponsorship.
-- Security and privacy review.
-- Documented participant notification policy.
-- Organizational approval for transcript retention policy.
-- Access request to Google program/channel for Meet media capabilities.
-
-### Access Request Workflow (High-Level)
-
-1. Prepare use-case brief (live interpretation, languages, data flow).
-2. Prepare compliance package (consent UX, data retention, incident response).
-3. Submit through Google Cloud/Workspace support or partner channel.
-4. Validate allowed capabilities in a staging tenant before implementation commitments.
-
-## Path B: Pragmatic MVP / Bot Participant
-
-### Summary
-
-Run a bot participant in a controlled browser session and capture meeting output audio at the system level (loopback/virtual audio device), then feed audio into existing realtime translation pipeline.
-
-### Technical Model
-
-- Bot joins as a visible participant.
-- Browser audio output is routed to a virtual audio device.
-- `AudioCapture` reads loopback/system output frames.
-- Frames are normalized to PCM16 and forwarded to `MeetInput`.
-- `MeetInput` streams frames into the existing `RealtimeClient`.
-
-### Risks
-
-- Fragile automation surface (browser UI changes, device routing drift).
-- Potential Terms of Service and policy concerns depending on deployment context.
-- High maintenance burden for headless/browser orchestration.
-- Harder to guarantee speaker attribution.
-
-### Safe Usage Note
-
-Use Path B only for internal prototyping in controlled environments with explicit participant consent. Do not deploy in production without legal and compliance review.
-
-## Architecture Changes
-
-## New Abstraction: AudioInput
-
-`AudioInput` becomes the common contract consumed by `RealtimeClient`.
-
-### Minimal Interface
-
-- `start()`
-- `read_frames()` or `stream_frames()`
-- `stop()`
-- `metadata`
-
-`metadata` fields:
-- `sample_rate`
-- `channels`
-- `speaker_id` (optional)
-
-### Implementations
-
-- `MicInput` (existing): local microphone capture.
-- `MeetInput` (new): meeting audio capture path from Path A or Path B.
-
-## Phase 2 System Architecture
-
-```mermaid
-flowchart LR
-    subgraph Inputs
-        mic[MicInput]
-        meet[MeetInput]
-    end
-
-    mic --> ai[AudioInput Interface]
-    meet --> ai
-
-    ai --> chunk[Frame Normalizer + Chunker\nPCM16, ~20ms]
-    chunk --> rtc[RealtimeClient\nOpenAI Realtime WS]
-    rtc --> out[Translated Text Output]
-    rtc --> outa[Optional Audio Output]
-
-    meetc[MeetConnector] --> meet
-    cap[AudioCapture\nLoopback/WebRTC Track] --> meet
-    diar[SpeakerDiarization\nFuture Optional] --> meet
-```
-
-## Phase 2 Dataflow
-
-```mermaid
-flowchart TD
-    join[MeetConnector: join/connect] --> cap[AudioCapture: system or media track]
-    cap --> norm[Resample + PCM16 normalize]
-    norm --> mi[MeetInput.stream_frames]
-    mi --> rt[Existing Realtime Translation Pipeline]
-    rt --> txt[Output: translated text]
-    rt --> aud[Optional translated audio]
-    rt --> store[Optional transcript storage]
-```
-
-## Failure / Retry Flow
-
-```mermaid
-flowchart TD
-    start[Start Meet Listener] --> join{Join/connect success?}
-    join -- No --> backoff[Retry with exponential backoff]
-    backoff --> limit{Retry budget left?}
-    limit -- Yes --> join
-    limit -- No --> fail[Fail fast + operator alert]
-
-    join -- Yes --> audio{Audio frames detected?}
-    audio -- No --> check[Check mute/device/permissions]
-    check --> recover{Recovered?}
-    recover -- Yes --> audio
-    recover -- No --> fail
-
-    audio -- Yes --> stream[Stream to RealtimeClient]
-    stream --> ws{Realtime WS healthy?}
-    ws -- No --> reconnect[Reconnect WS + resume input]
-    reconnect --> ws
-    ws -- Yes --> ok[Continuous translation]
-```
-
-## Component Responsibilities
-
-| Component | Responsibility |
-|---|---|
-| `MeetConnector` | Join/connect lifecycle, auth/session bootstrap, meeting state |
-| `AudioCapture` | Pull audio from system loopback or official media track |
-| `MeetInput` | Convert capture output into `AudioInput` stream contract |
-| `SpeakerDiarization` (optional future) | Tag likely speaker segments for improved output labeling |
-| Existing translation pipeline | Realtime VAD + translation only output |
-| Output layer | Stream translated text; optional translated audio |
-| Storage (optional) | Save transcript/events under explicit retention policy |
-
-## Operational Considerations
-
-## Latency Budget And Buffering
-
-Target end-to-end text latency: 800ms to 1800ms under normal network conditions.
-
-| Stage | Budget target |
-|---|---|
-| Audio capture frame accumulation | 20ms to 60ms |
-| Resample/normalize + queue | 10ms to 40ms |
-| Network + model first token | 300ms to 900ms |
-| Terminal rendering | <50ms |
-
-Buffering strategy:
-- Fixed-size frame queue with backpressure metrics.
-- Drop-oldest policy when queue is saturated (favor recency for live interpretation).
-- Emit warnings when queue depth exceeds threshold.
-
-## Echo / Feedback Avoidance
-
-- Do not route assistant output audio into the same capture device used for `MeetInput`.
-- Use separate output device or disable translated audio playback in meeting mode.
-- Add audio route checks at startup and warn on suspicious loopback configurations.
-
-## Multi-Speaker Handling And Diarization Roadmap
-
-Phase 2 baseline:
-- Treat meeting audio as a mixed stream.
-- No guaranteed speaker labels.
-
-Roadmap:
-1. Add segment-level speaker change heuristics.
-2. Integrate optional diarization component.
-3. Expose speaker tags in output when confidence is above threshold.
-
-## Failure Modes And Handling
-
-| Failure mode | Detection signal | Handling |
+| Area | Implemented | Planned / Remaining |
 |---|---|---|
-| Meeting join failure | Connector timeout/error codes | Retry with bounded exponential backoff, then fail fast |
-| Bot in meeting but no audio | Silence over threshold | Prompt operator to verify mute/audio route |
-| Device permission denied | OS/device exception | Emit actionable error and stop cleanly |
-| Realtime WS disconnect | Socket closed/error events | Reconnect WS and continue reading frames with bounded queue |
-| Capture drift/high latency | Queue depth and timestamp lag | Drop stale frames, log warning, request operator action |
+| Meeting join automation | Yes (`MeetBot`) | Harden against UI drift, better diagnostics for selector breakage |
+| Waiting-room handling | Yes (poll + timeout) | Host-policy preflight checks and explicit operator prompts |
+| Meeting audio capture (loopback device) | Yes (`--meet-speaker-device`) | Cross-platform setup guides and automated preflight checks |
+| Meeting audio capture (ScreenCaptureKit) | Code exists (`--sck`) | Runtime hardening + broader validation |
+| Translate in realtime | Yes (reuse `RealtimeClient`) | Latency instrumentation and SLO reporting |
+| Bot speak-back into meeting | Code path exists (`--meet-mic-device`) | Full e2e validation and route verification in real meetings |
+| Top-level app meet CLI parity | Partial (`app.py --mode meet-bot`) | Unify parser/flags with `src/meet/main.py` |
+| Official Meet API path (Path A) | No | Access feasibility + capability confirmation |
+| Privacy/compliance controls | Partial docs only | Enforced consent, redaction, retention, access control |
 
-## Privacy, Consent, And Compliance
+## Current Implementation Approach
 
-- Notify participants when interpretation capture is active.
-- Obtain required organizational consent before capture/transcription.
-- Define retention: default no persistent raw audio; transcript storage optional and explicit.
-- Redact sensitive content in logs.
-- Restrict transcript access and define deletion windows.
+Current operational path is browser automation + local audio routing.
 
-## Storage Policy (Phase 2)
+1. Join flow
+- Launch Chromium with persistent profile directory.
+- Navigate to meeting URL.
+- Dismiss common popups, set display name, attempt join.
+- If waiting room is detected, poll until admitted or timeout.
 
-Default:
-- Raw meeting audio: not persisted.
-- Translation output text: console only unless explicitly enabled.
+2. Audio ingestion
+- Preferred stable path today: loopback device capture with `--meet-speaker-device`.
+- Optional path in code: `--sck` for macOS ScreenCaptureKit capture.
 
-If transcript storage is enabled:
-- Store under controlled location with access controls.
-- Include retention duration and deletion schedule.
-- Record consent context per session.
+3. Interpreter
+- Feed audio into `RealtimeClient` using `AudioInput` abstraction.
+- Stream translated text in terminal (`[Interp]`).
+- Keep language routing with `--src`, `--tgt`, `--pairs`, `--meeting-mode`.
 
-## Rollout Plan
+4. Optional audio output back to meeting
+- If `--meet-mic-device` is set, a virtual output path is intended for translated TTS injection.
+- If omitted, run in listen-only mode.
 
-1. Complete Path A discovery and capability validation with admin/legal stakeholders.
-2. Build Path B prototype for internal testing only.
-3. Choose primary implementation path based on compliance and maintainability outcomes.
-4. Run controlled pilot with monitoring and incident runbook.
+## Operational Assumptions
 
-## Implementation Checklist
+### Virtual audio routing (current internal approach)
 
-- [ ] `AudioInput` contract documented and agreed.
-- [ ] `MeetInput` lifecycle design reviewed (`start`, `stream/read`, `stop`).
-- [ ] Meeting join/connect state machine defined.
-- [ ] Audio route and echo prevention checklist documented.
-- [ ] Failure/retry policy implemented in runbook.
-- [ ] Consent and participant notification language approved.
-- [ ] Retention and transcript storage policy approved.
-- [ ] Legal review completed before any production exposure.
+Assumes local control of Chrome/OS device routing:
+- Meeting output audio can be directed to an input-capturable virtual device.
+- Bot playback can be directed to a virtual output device configured as meeting microphone input.
+- Operator can manage device indices and sample-rate compatibility.
 
-## Acceptance Criteria (Phase 2 Planning Complete)
+### Official Meet Media API (future / uncertain)
 
-- [ ] Architecture supports both `MicInput` and `MeetInput` via shared interface.
-- [ ] Both Path A and Path B are documented with explicit constraints and risks.
-- [ ] Audio injection capability is not asserted as available unless confirmed.
-- [ ] Operational runbook covers join failure, no-audio, permissions, reconnect, and latency degradation.
-- [ ] Privacy/compliance requirements are documented and testable.
+Assumes additional prerequisites not yet confirmed in this repo:
+- Workspace/admin enablement and possibly allowlisted capabilities.
+- Documented policy/legal approvals.
+- Capability confirmation for receive and (if needed) send/injection behavior.
+
+## Limitations & Risks
+
+### Policy / Terms / Privacy
+
+- Bot automation in meetings may violate organizational policy or platform terms depending on context.
+- Meeting audio capture requires explicit participant consent and legal review before non-internal usage.
+- Browser profile storage includes sensitive session state; treat profile directory as credential material.
+
+### Automation brittleness
+
+- Meet UI selectors can change without notice.
+- Join/admit path depends on host policy and tenant-specific UI variations.
+- Headless mode can be blocked or behave differently.
+
+### Audio routing fragility
+
+- Wrong input/output device mapping can cause silence, echo, or feedback loops.
+- Sample-rate mismatches can degrade quality or fail stream open.
+- Multi-app/system audio contamination is possible when capture is not app-scoped.
+
+### Latency and quality
+
+- End-to-end latency depends on capture buffering, network RTT, VAD boundaries, and response generation.
+- Overlapping speakers and mixed-room audio reduce translation quality.
+- No speaker diarization is implemented.
+
+### Current implementation caveats
+
+- `app.py --mode meet-bot` does not expose all meet parser flags available in `src/meet/main.py`; meet operations should currently use `python -m src.meet.main`.
+- `--sck` path is present but less battle-tested than virtual loopback capture.
+- Speak-back path (`--meet-mic-device`) exists in code but still requires stronger e2e validation.
+
+## Recommended Internal-Only Run Pattern
+
+```bash
+python -m src.meet.main --setup-profile --profile-dir ~/.brseai_profile
+
+python -m src.meet.main \
+  --meeting-url https://meet.google.com/abc-defg-hij \
+  --profile-dir ~/.brseai_profile \
+  --meet-speaker-device <INPUT_INDEX> \
+  --meeting-mode locked \
+  --src auto --tgt auto
+```
+
+## Next Hardening Priorities
+
+1. Unify meet CLI behavior between `app.py` and `src/meet/main.py`.
+2. Add e2e smoke tests for join/wait/admit/audio-capture/audio-output.
+3. Add preflight checks for device mapping and sample rates.
+4. Instrument latency and failure metrics.
+5. Implement enforceable consent + retention controls before any external deployment.
