@@ -24,20 +24,28 @@ from __future__ import annotations
 SEL: dict[str, list[str]] = {
     # ---- Pre-join / lobby ----
     "join_button": [
-        # Text-based (most robust to DOM churn)
+        # Text-based (most robust to DOM churn); :has-text is case-insensitive
+        # substring match in Playwright — covers "Join now", "Join Now", etc.
         "button:has-text('Join now')",
         "button:has-text('Ask to join')",
+        # Broader fallback: any button whose visible text contains "Join"
+        # but exclude the "Leave" button family via :not
         "button:has-text('Join')",
-        # Aria-label fallbacks
+        # Aria-label fallbacks (different tenants / locale variants)
         "[aria-label='Join now']",
         "[aria-label='Ask to join']",
-        # Data-idom attribute seen in some tenants
+        "[aria-label*='join' i]",
+        # jsname attributes seen in current Meet builds
+        "button[jsname='Qx7uuf']",   # "Join now" button
+        "button[jsname='HNeZme']",   # "Ask to join" / knock button
+        # Data-idom fallback seen in some tenants
         "[data-idom-class*='join']",
     ],
     "knock_button": [
         "button:has-text('Ask to join')",
         "button:has-text('Knock')",
         "[aria-label='Ask to join']",
+        "button[jsname='HNeZme']",
     ],
     "dismiss_popup": [
         "button:has-text('Got it')",
@@ -68,11 +76,28 @@ SEL: dict[str, list[str]] = {
         "button[jsname='CQylAd']",
     ],
     # ---- Participant / waiting room ----
+    # These selectors detect the *waiting room* state (not yet admitted).
+    # Use :has-text for substring/case-insensitive matching so minor copy
+    # changes and Unicode apostrophe variants don't break detection.
     "admit_self_banner": [
-        # Message shown when you're in the waiting room
-        "text='You're in the waiting room'",
-        "text='Waiting to be let in'",
+        # Substring match — handles straight vs curly apostrophe variants
+        ":has-text('waiting room')",
+        ":has-text('Waiting to be let in')",
+        ":has-text('waiting to be admitted')",
         "[aria-label*='waiting room' i]",
+        # jsname seen in recent Meet builds for the waiting-room container
+        "[jsname='r4nke']",
+    ],
+    # ---- Positive in-call indicators (you ARE in the meeting) ----
+    # Used to confirm admission after waiting room, as a complement to
+    # the banner disappearing.
+    "in_call_indicator": [
+        # Leave-call button only exists once you're actually in the call
+        "[aria-label='Leave call']",
+        "button[jsname='CQylAd']",
+        # Participant count / people icon only visible in-call
+        "[aria-label*='participants' i]",
+        "[data-tooltip*='people' i]",
     ],
     # ---- Pre-join: name field ----
     "name_input": [

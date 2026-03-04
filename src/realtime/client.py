@@ -128,6 +128,12 @@ class RealtimeClient:
             and self.tgt_lang != "auto"
         )
 
+        # Observability counters (reset per session in _run_session)
+        self._stat_transcripts: int = 0       # input transcripts received
+        self._stat_translations: int = 0      # response.text.done events
+        self._stat_audio_chunks: int = 0      # response.audio.delta chunks dispatched
+        self._stat_detect_failed: int = 0     # transcripts where detect_lang returned None
+
     # ------------------------------------------------------------------
     # Public entry point
     # ------------------------------------------------------------------
@@ -210,12 +216,28 @@ class RealtimeClient:
             "OpenAI-Beta": "realtime=v1",
         }
 
+        # Reset per-session observability counters
+        self._stat_transcripts = 0
+        self._stat_translations = 0
+        self._stat_audio_chunks = 0
+        self._stat_detect_failed = 0
+
         if self.enable_speaker:
             self._player = SpeakerPlayer(
                 device=self.speaker_device,
                 sample_rate=SPEAKER_SAMPLE_RATE,
             )
             self._player.start()
+        else:
+            # Emit a clear startup notice so operators know audio output is off.
+            # Translation text will still appear on stdout; only TTS is disabled.
+            print(
+                "[RealtimeClient] Audio output: DISABLED (speaker=off). "
+                "Translation text will print to stdout only. "
+                "Use --speaker / --meet-mic-device to enable TTS output.",
+                flush=True,
+            )
+            logger.info("Audio output disabled — text-only translation mode.")
 
         try:
             async with websockets.connect(
@@ -349,6 +371,8 @@ class RealtimeClient:
         elif etype == "conversation.item.input_audio_transcription.completed":
             transcript = event.get("transcript", "").strip()
             if transcript:
+                self._stat_transcripts += 1
+                self._dbg(f"transcript #{self._stat_transcripts}: {transcript!r}")
                 await self._handle_input_transcript(ws, transcript)
 
         # ---- Response lifecycle ----
@@ -376,14 +400,25 @@ class RealtimeClient:
 
         elif etype == "response.text.done":
             text = event.get("text", "").strip()
-            self._log(f"response.text.done text={text!r}")
+            self._stat_translations += 1
+            self._log(f"response.text.done #{self._stat_translations} text={text!r}")
             print_translation("\n", end="")
 
         # ---- Audio output ----
         elif etype == "response.audio.delta":
             encoded = event.get("delta", "")
             if encoded and self._player:
+                self._stat_audio_chunks += 1
                 self._player.push(base64.b64decode(encoded))
+            elif encoded and not self._player:
+                # Audio was produced by the model but there is no output sink.
+                # Log once per response (when first chunk arrives for this response).
+                if self._stat_audio_chunks == 0:
+                    self._dbg(
+                        "response.audio.delta received but speaker is disabled "
+                        "(enable_speaker=False). Audio is dropped. "
+                        "Translation text is still printed to stdout."
+                    )
 
         elif etype == "response.audio.done":
             self._dbg("response.audio.done")
@@ -400,7 +435,15 @@ class RealtimeClient:
         elif etype == "response.done":
             self._assistant_speaking = False
             self._current_response_id = None
-            self._log("response.done")
+            audio_note = (
+                f" | audio_chunks={self._stat_audio_chunks}"
+                if self.enable_speaker
+                else " | audio=off(text-only)"
+            )
+            self._log(
+                f"response.done | transcripts={self._stat_transcripts}"
+                f" translations={self._stat_translations}{audio_note}"
+            )
 
         # ---- Errors ----
         elif etype == "error":
@@ -447,7 +490,17 @@ class RealtimeClient:
 
         detected = detect_lang(transcript)
         if detected is None:
+            self._stat_detect_failed += 1
             self._dbg(f"lang_detect: uncertain for {transcript!r}, keeping sticky={self._last_detected_src}")
+            # After a few failed detections, remind the operator that translation
+            # is still happening via the auto/auto instruction (model self-detects).
+            if self._stat_detect_failed == 3:
+                print(
+                    "[MeetingMode] Language detection uncertain for recent transcripts. "
+                    "The model is translating using auto-detect instructions. "
+                    "Use --src/--tgt to fix the language pair explicitly.",
+                    flush=True,
+                )
             return  # keep previous sticky to avoid flip-flopping
 
         if detected == self._last_detected_src:

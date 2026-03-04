@@ -110,6 +110,45 @@ def build_parser() -> argparse.ArgumentParser:
         help="[meet-bot] Auto-leave after N minutes. Default: run until Ctrl+C.",
     )
     p.add_argument(
+        "--manual-join",
+        action="store_true",
+        help=(
+            "[meet-bot] Do not auto-click the Join button. Open the meeting URL "
+            "in the browser and wait for the user to join by hand. "
+            "Interpreter pipeline starts once in-call state is detected. "
+            "See --manual-join-timeout."
+        ),
+    )
+    p.add_argument(
+        "--manual-join-timeout",
+        type=int,
+        default=300,
+        metavar="N",
+        help=(
+            "[meet-bot] With --manual-join: seconds to wait for the user to "
+            "complete the join before giving up. Default: 300."
+        ),
+    )
+    p.add_argument(
+        "--sck",
+        action="store_true",
+        help=(
+            "[meet-bot] Use macOS ScreenCaptureKit to capture system audio directly — "
+            "no virtual audio device (BlackHole/Loopback) required. "
+            "Requires macOS 13+ and Screen Recording permission. "
+            "When set, --meet-speaker-device is ignored."
+        ),
+    )
+    p.add_argument(
+        "--sck-app",
+        default=None,
+        metavar="BUNDLE_ID",
+        help=(
+            "[meet-bot] With --sck: capture only this app's audio (e.g. com.google.Chrome). "
+            "Default: capture all system audio."
+        ),
+    )
+    p.add_argument(
         "--meet-speaker-device",
         type=int,
         default=None,

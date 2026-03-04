@@ -174,6 +174,8 @@ Default auto table in code:
 | `--debug` | off | verbose runtime logs |
 | `--list-audio-devices` | off | lists full I/O table via `src.meet.audio` |
 | `--setup-profile` | off | opens profile sign-in flow and exits |
+| `--manual-join` | off | [meet-bot] skip auto-click; user joins by hand |
+| `--manual-join-timeout` | `300` | [meet-bot] seconds to wait for manual join |
 
 ### `src.meet.main` (recommended meet-bot entrypoint)
 
@@ -186,6 +188,8 @@ Default auto table in code:
 | `--display-name` | `Interpreter Bot` | pre-join name |
 | `--join-timeout-seconds` | `90` | waiting-room timeout |
 | `--leave-after-minutes` | off | auto-leave timer |
+| `--manual-join` | off | skip auto-click; user joins by hand, interpreter starts on in-call detection |
+| `--manual-join-timeout` | `300` | seconds to wait for manual join before giving up |
 | `--sck` | off | macOS ScreenCaptureKit capture path |
 | `--sck-app` | `None` | with `--sck`, capture one app bundle ID |
 | `--meet-speaker-device` | `None` | loopback input device (required unless `--sck`) |
@@ -249,6 +253,76 @@ playwright install chromium
 - Bot can wait up to `--join-timeout-seconds` (default `90`).
 - Host must admit the bot if waiting-room policy requires approval.
 - If timed out, rerun after host-side policy adjustment or manual admit.
+
+### Join button not found / auto-join blocked
+
+If the bot fails with `Could not find or click the Join button`, use manual-join
+mode to bypass auto-click and join by hand:
+
+```bash
+python -m src.meet.main \
+  --meeting-url https://meet.google.com/abc-defg-hij \
+  --profile-dir ~/.brseai_profile \
+  --sck \
+  --manual-join \
+  --manual-join-timeout 120
+```
+
+The browser will open and stay open. Join the meeting yourself (click the button,
+wait for host admission if needed). Once the bot detects an in-call state the
+interpreter pipeline starts automatically. Default timeout is 300 s.
+
+### Listening but no translation output / speaker OFF
+
+If the bot logs `[Listening... speaker OFF]` and you see `[You] ...` lines but no
+translated speech or text:
+
+**Symptom:** Startup prints:
+```
+[RealtimeClient] Audio output: DISABLED (speaker=off).
+Translation text will print to stdout only.
+Use --speaker / --meet-mic-device to enable TTS output.
+```
+
+**Cause:** `enable_speaker` is False. This happens automatically when:
+- Running meet-bot without `--meet-mic-device` (no virtual output device configured).
+- Running realtime with `--no-speaker`.
+
+Translation text IS printed to stdout in this mode — check the terminal for `[Interp]` lines.
+
+**Fix — text-only mode (confirm translation is working):**
+Look for `[Interp]` lines on stdout after speaking.
+
+**Fix — enable TTS audio output for meet-bot:**
+```bash
+python -m src.meet.main \
+  --meeting-url https://meet.google.com/abc-defg-hij \
+  --profile-dir ~/.brseai_profile \
+  --meet-speaker-device <INPUT_INDEX> \
+  --meet-mic-device <OUTPUT_INDEX>
+```
+`--meet-mic-device` is the virtual output device (e.g. BlackHole) that Chrome uses as its microphone input.
+
+**Fix — enable speaker for realtime mic mode:**
+```bash
+python app.py --mode realtime --speaker
+```
+
+### Language routing not locking / "waiting for first confident detection"
+
+If the startup shows:
+```
+[MeetingMode] locked | waiting for first confident detection to lock routing
+```
+and this message never changes after speech:
+
+- The language-detection heuristic requires at least 2 marker characters (Japanese/Vietnamese) or 5 ASCII words (English). Very short utterances may return uncertain.
+- After 3 consecutive uncertain transcripts the system prints a reminder that the model is still translating using auto-detect instructions — translation IS happening.
+- To skip detection and lock immediately, pass explicit `--src` and `--tgt`:
+
+```bash
+python -m src.meet.main ... --src vi --tgt en --meeting-mode locked
+```
 
 ### Known implementation caveats
 

@@ -41,6 +41,10 @@ _POLL_INTERVAL = 3.0
 _SELECTOR_TIMEOUT_MS = 3000
 # Max attempts to click join button before giving up
 _JOIN_CLICK_ATTEMPTS = 3
+# Extra sleep between join retry attempts (seconds) — lets the Meet JS hydrate
+_JOIN_RETRY_SLEEP = 3.0
+# How long to wait after a successful join click for the UI to transition (seconds)
+_POST_CLICK_SETTLE = 2.5
 
 
 class MeetBotError(Exception):
@@ -72,6 +76,8 @@ class MeetBot:
         join_timeout: int = 90,
         leave_after_minutes: Optional[int] = None,
         debug: bool = False,
+        manual_join: bool = False,
+        manual_join_timeout: int = 300,
     ) -> None:
         self.meeting_url = meeting_url
         self.profile_dir = profile_dir
@@ -81,6 +87,8 @@ class MeetBot:
         self.join_timeout = join_timeout
         self.leave_after_minutes = leave_after_minutes
         self.debug = debug
+        self.manual_join = manual_join
+        self.manual_join_timeout = manual_join_timeout
 
         self._playwright = None
         self._browser = None
@@ -182,13 +190,21 @@ class MeetBot:
         # Turn off camera, set mic state for the pre-join lobby
         await self._set_preflight_av()
 
-        # Click join / ask-to-join
-        joined = await self._click_join_button()
-        if not joined:
-            raise MeetBotError("Could not find or click the Join button.")
+        if self.manual_join:
+            # Manual mode: do not click anything. The user joins by hand.
+            # Poll until the in-call state is detected or timeout expires.
+            await self._wait_for_manual_join()
+        else:
+            # Auto mode: click join / ask-to-join.
+            # Returns (clicked, is_waiting_room): clicked=True means the button
+            # was found and activated; is_waiting_room=True means we're in the
+            # lobby waiting for the host to admit us.
+            clicked, is_waiting_room = await self._click_join_button()
+            if not clicked:
+                raise MeetBotError("Could not find or click the Join button.")
 
-        # Wait for admission if we land in a waiting room
-        await self._wait_for_admission()
+            # Wait for admission if we landed in a waiting room after clicking
+            await self._wait_for_admission(is_waiting_room=is_waiting_room)
 
         self._joined.set()
         print(f"[MeetBot] joined | url={self.meeting_url}", flush=True)
@@ -238,64 +254,179 @@ class MeetBot:
         # Mic: leave it as whatever the OS virtual device provides.
         # The caller controls audio by routing through virtual devices.
 
-    async def _click_join_button(self) -> bool:
-        """Click the Join Now / Ask to Join button. Returns True on success."""
+    async def _click_join_button(self) -> tuple[bool, bool]:
+        """
+        Locate and click the Join Now / Ask to Join button.
+
+        Returns:
+            (clicked, is_waiting_room)
+            clicked        – True if a join button was found and activated.
+            is_waiting_room – True if the button text / post-click state
+                             indicates we entered a waiting room rather than
+                             joining directly.
+        """
         for attempt in range(1, _JOIN_CLICK_ATTEMPTS + 1):
             for sel in SEL["join_button"]:
                 try:
                     btn = self._page.locator(sel).first
-                    if await btn.is_visible(timeout=_SELECTOR_TIMEOUT_MS):
-                        print(f"[MeetBot] Clicking join ({sel!r}, attempt {attempt})", flush=True)
-                        await btn.click()
-                        await asyncio.sleep(1.5)
-                        return True
+                    if not await btn.is_visible(timeout=_SELECTOR_TIMEOUT_MS):
+                        continue
+
+                    # Determine if this is an "Ask to join" (knock) button
+                    # by checking text content — informs waiting-room detection.
+                    btn_text = ""
+                    try:
+                        btn_text = (await btn.inner_text()).strip().lower()
+                    except Exception:
+                        pass
+                    is_knock = "ask" in btn_text or "knock" in btn_text
+
+                    print(
+                        f"[MeetBot] Clicking join ({sel!r}, attempt {attempt}"
+                        + (", ask-to-join" if is_knock else "") + ")",
+                        flush=True,
+                    )
+                    await btn.click()
+                    await asyncio.sleep(_POST_CLICK_SETTLE)
+                    return True, is_knock
+
                 except Exception as exc:
                     logger.debug(f"[MeetBot] join selector {sel!r} failed: {exc}")
 
-            # If no button found yet, wait a bit and retry
-            logger.debug(f"[MeetBot] Join button not found, waiting... (attempt {attempt})")
-            await asyncio.sleep(2)
+            logger.debug(f"[MeetBot] Join button not found, waiting... (attempt {attempt}/{_JOIN_CLICK_ATTEMPTS})")
+            print(f"[MeetBot] Join button not found, waiting... (attempt {attempt}/{_JOIN_CLICK_ATTEMPTS})", flush=True)
+            await asyncio.sleep(_JOIN_RETRY_SLEEP)
 
-        return False
+        return False, False
 
-    async def _wait_for_admission(self) -> None:
+    async def _wait_for_manual_join(self) -> None:
         """
-        If the bot lands in a waiting room, poll until admitted or timeout.
-        Detection heuristic: waiting room indicators disappear once admitted.
+        Manual-join mode: keep the browser open and poll until the user
+        joins the meeting by hand (or timeout expires).
+
+        Prints instructions and progress to stdout so the user knows what
+        to do.  Raises MeetBotError if manual_join_timeout elapses without
+        an in-call indicator being detected.
         """
-        # Check if we're in waiting room
-        in_waiting = False
+        print(
+            f"\n[MeetBot] Manual-join mode active.\n"
+            f"  The browser is open at: {self.meeting_url}\n"
+            f"  Please join the meeting by hand (click 'Join now' / 'Ask to join',\n"
+            f"  and wait for the host to admit you if prompted).\n"
+            f"  Timeout: {self.manual_join_timeout}s  |  Ctrl+C to abort.\n",
+            flush=True,
+        )
+        logger.info(
+            f"[MeetBot] Manual-join mode: waiting up to {self.manual_join_timeout}s "
+            "for user to join."
+        )
+
+        deadline = asyncio.get_event_loop().time() + self.manual_join_timeout
+        last_printed = asyncio.get_event_loop().time()
+
+        while asyncio.get_event_loop().time() < deadline:
+            await asyncio.sleep(_POLL_INTERVAL)
+
+            if await self._is_in_call():
+                logger.info("[MeetBot] In-call detected after manual join.")
+                print("[MeetBot] In call — starting interpreter.", flush=True)
+                return
+
+            # Print a progress line every 15 s so the user knows the bot is alive
+            now = asyncio.get_event_loop().time()
+            remaining = int(deadline - now)
+            if now - last_printed >= 15:
+                print(
+                    f"[MeetBot] Waiting for manual join ({remaining}s remaining)...",
+                    flush=True,
+                )
+                last_printed = now
+
+        raise MeetBotError(
+            f"Manual-join timed out after {self.manual_join_timeout}s. "
+            "No in-call state detected. Join the meeting before the timeout or "
+            "increase --manual-join-timeout."
+        )
+
+    async def _is_waiting_room_visible(self) -> bool:
+        """Return True if any waiting-room banner selector is currently visible."""
         for sel in SEL["admit_self_banner"]:
             try:
-                el = self._page.locator(sel).first
-                if await el.is_visible(timeout=3000):
-                    in_waiting = True
-                    logger.info("[MeetBot] In waiting room — polling for admission...")
-                    print("[MeetBot] In waiting room — polling for admission...", flush=True)
-                    break
+                if await self._page.locator(sel).first.is_visible(timeout=1000):
+                    return True
             except Exception:
                 pass
+        return False
+
+    async def _is_in_call(self) -> bool:
+        """Return True if a positive in-call indicator is visible."""
+        for sel in SEL["in_call_indicator"]:
+            try:
+                if await self._page.locator(sel).first.is_visible(timeout=1000):
+                    return True
+            except Exception:
+                pass
+        return False
+
+    async def _wait_for_admission(self, is_waiting_room: bool = False) -> None:
+        """
+        Wait until the bot is actually inside the meeting.
+
+        Two signals trigger the wait:
+          1. is_waiting_room=True  — the join click was an "Ask to join" (knock).
+          2. Waiting-room banner is detected in the DOM post-click.
+
+        Admission is confirmed by EITHER:
+          - The waiting-room banner disappears, OR
+          - A positive in-call indicator appears.
+
+        Waits up to self.join_timeout seconds before raising MeetBotError.
+        """
+        # Give the UI a moment to settle after the click before probing
+        await asyncio.sleep(1.0)
+
+        in_waiting = is_waiting_room or await self._is_waiting_room_visible()
 
         if not in_waiting:
-            return  # already admitted directly
+            # Not in a waiting room — check for positive in-call signal to
+            # confirm we truly joined (handles direct-join meetings).
+            if await self._is_in_call():
+                logger.info("[MeetBot] Joined directly (no waiting room).")
+                return
+            # UI may still be transitioning — give it a bit more time
+            await asyncio.sleep(2.0)
+            if await self._is_in_call():
+                logger.info("[MeetBot] Joined directly (post-transition).")
+                return
+            # No waiting room banner and no in-call indicator — could be a
+            # transient state (e.g. auto-join race). Continue to poll loop
+            # rather than returning prematurely.
+            logger.debug("[MeetBot] No waiting room banner or in-call indicator — entering poll loop.")
+
+        logger.info("[MeetBot] In waiting room — polling for admission...")
+        print("[MeetBot] In waiting room — polling for admission...", flush=True)
 
         deadline = asyncio.get_event_loop().time() + self.join_timeout
         while asyncio.get_event_loop().time() < deadline:
             await asyncio.sleep(_POLL_INTERVAL)
-            # Check if the waiting room banner is gone (we were admitted)
-            still_waiting = False
-            for sel in SEL["admit_self_banner"]:
-                try:
-                    el = self._page.locator(sel).first
-                    if await el.is_visible(timeout=1000):
-                        still_waiting = True
-                        break
-                except Exception:
-                    pass
-            if not still_waiting:
-                logger.info("[MeetBot] Admitted to meeting.")
+
+            if await self._is_in_call():
+                logger.info("[MeetBot] Admitted to meeting (in-call indicator detected).")
                 print("[MeetBot] Admitted to meeting.", flush=True)
                 return
+
+            if not await self._is_waiting_room_visible():
+                # Banner gone but no positive indicator yet — wait one more
+                # settle period before confirming, to avoid false positives.
+                await asyncio.sleep(1.5)
+                if await self._is_in_call() or not await self._is_waiting_room_visible():
+                    logger.info("[MeetBot] Admitted to meeting (banner cleared).")
+                    print("[MeetBot] Admitted to meeting.", flush=True)
+                    return
+
+            remaining = int(deadline - asyncio.get_event_loop().time())
+            if remaining > 0 and remaining % 15 == 0:
+                print(f"[MeetBot] Still waiting for admission ({remaining}s remaining)...", flush=True)
 
         raise MeetBotError(
             f"Timed out waiting for admission after {self.join_timeout}s. "

@@ -479,7 +479,7 @@ class SCKAudioInput(AudioInput):
                 "Grant Screen Recording permission in System Settings -> Privacy."
             )
             try:
-                q.put_nowait(None)
+                self._q.put_nowait(None)
             except queue.Full:
                 pass
             return
@@ -488,7 +488,7 @@ class SCKAudioInput(AudioInput):
         if not displays:
             logger.error("[SCKAudioInput] No displays found")
             try:
-                q.put_nowait(None)
+                self._q.put_nowait(None)
             except queue.Full:
                 pass
             return
@@ -547,7 +547,7 @@ class SCKAudioInput(AudioInput):
         if start_err:
             logger.error(f"[SCKAudioInput] Stream start failed: {start_err[0]}")
             try:
-                q.put_nowait(None)
+                self._q.put_nowait(None)
             except queue.Full:
                 pass
             return
@@ -558,7 +558,7 @@ class SCKAudioInput(AudioInput):
         )
 
         # Pump run loop until stop() is called
-        while not stop_event.is_set():
+        while not self._stop_event.is_set():
             loop.runUntilDate_(NSDate.dateWithTimeIntervalSinceNow_(0.05))
 
         stop_done = threading.Event()
@@ -568,7 +568,7 @@ class SCKAudioInput(AudioInput):
             loop.runUntilDate_(NSDate.dateWithTimeIntervalSinceNow_(0.1))
 
         try:
-            q.put_nowait(None)
+            self._q.put_nowait(None)
         except queue.Full:
             pass
 

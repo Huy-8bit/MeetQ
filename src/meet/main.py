@@ -101,6 +101,27 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         metavar="N",
         help="Auto-leave after N minutes. Default: run until Ctrl+C.",
     )
+    p.add_argument(
+        "--manual-join",
+        action="store_true",
+        help=(
+            "Do not auto-click the Join button. Open the meeting URL in the browser "
+            "and wait for the user to join by hand. Useful when the join button "
+            "cannot be found automatically or when manual interaction is preferred. "
+            "Interpreter pipeline starts once in-call state is detected. "
+            "See --manual-join-timeout."
+        ),
+    )
+    p.add_argument(
+        "--manual-join-timeout",
+        type=int,
+        default=300,
+        metavar="N",
+        help=(
+            "With --manual-join: seconds to wait for the user to complete the "
+            "join before giving up. Default: 300."
+        ),
+    )
 
     # ---- Audio devices ----
     p.add_argument(
@@ -310,14 +331,20 @@ async def _run_meet_bot(args: argparse.Namespace, api_key: str) -> None:
         join_timeout=args.join_timeout_seconds,
         leave_after_minutes=args.leave_after_minutes,
         debug=args.debug,
+        manual_join=args.manual_join,
+        manual_join_timeout=args.manual_join_timeout,
     )
 
     audio_input_desc = "sck" if args.sck else f"device={args.meet_speaker_device}"
+    join_mode_desc = (
+        f"manual (timeout={args.manual_join_timeout}s)" if args.manual_join else "auto"
+    )
     print(
         f"\n[MeetBot] Starting | url={args.meeting_url}"
         f" | src={args.src} tgt={args.tgt} | mode={args.meeting_mode}"
         f" | audio-in={audio_input_desc}"
-        f" | mic-out={args.meet_mic_device or 'disabled'}",
+        f" | mic-out={args.meet_mic_device or 'disabled'}"
+        f" | join={join_mode_desc}",
         flush=True,
     )
 
