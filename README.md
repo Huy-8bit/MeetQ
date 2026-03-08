@@ -1,7 +1,7 @@
-# brseAI - Google Meet Interpreter Bot (VI/EN/JA)
+# brseAI - Interpreter Bot (VI/EN/JA)
 
-Realtime speech translation for Google Meet, powered by the OpenAI Realtime API.
-Joins a meeting as a browser participant, captures meeting audio, and streams translated text (and optionally TTS audio) to the terminal.
+Realtime speech translation for **Google Meet** and **Discord**, powered by the OpenAI Realtime API.
+Joins a meeting/voice channel, captures audio, and streams translated text (and optionally TTS audio).
 
 ## Quickstart
 
@@ -9,14 +9,20 @@ Joins a meeting as a browser participant, captures meeting audio, and streams tr
 
 - Python 3.10+
 - PortAudio (`sounddevice` backend)
+
+**For Google Meet mode:**
 - `playwright` + Chromium
 - Virtual audio device (BlackHole/Loopback) if not using ScreenCaptureKit path
 - macOS 13+ + Screen Recording permission if using `--sck`
 
+**For Discord mode:**
+- libopus (`brew install opus` / `apt install libopus0`)
+- Discord bot token (see [Discord setup](#discord-mode))
+
 macOS:
 
 ```bash
-brew install python@3.12 portaudio
+brew install python@3.12 portaudio opus
 ```
 
 ### 2) Install
@@ -40,9 +46,10 @@ or:
 
 ```bash
 export OPENAI_API_KEY="sk-..."
+export DISCORD_BOT_TOKEN="your-token"  # only for Discord mode
 ```
 
-### 4) First-time sign-in (once)
+### 4) First-time sign-in (Google Meet only, once)
 
 ```bash
 python app.py --setup-profile
@@ -51,6 +58,8 @@ python app.py --setup-profile
 This opens a Chromium window. Sign in to your Google account, then close the window. Your session is saved to `~/.brseai_profile`.
 
 ### 5) Run
+
+#### Google Meet mode (default)
 
 ```bash
 python app.py --meeting-url "https://meet.google.com/xxx-xxxx-xxx"
@@ -89,6 +98,32 @@ python app.py \
   --meeting-url "https://meet.google.com/xxx-xxxx-xxx" \
   --no-manual-join
 ```
+
+#### Discord mode
+
+```bash
+# Start the bot (use !join in Discord to connect to voice)
+python app.py --mode discord
+
+# Auto-join a specific voice channel on startup
+python app.py --mode discord --voice-channel-id 123456789012345678
+
+# With TTS speak-back disabled
+python app.py --mode discord --no-tts
+
+# Fixed language pair
+python app.py --mode discord --src ja --tgt vi --meeting-mode locked
+```
+
+**Discord bot commands:**
+| Command | Description |
+|---|---|
+| `!join` | Join your voice channel and start interpreting |
+| `!leave` | Leave voice channel and stop |
+| `!status` | Show current status and stats |
+| `!lang <src> <tgt>` | Change language pair |
+
+See [docs/phase3_discord.md](docs/phase3_discord.md) for full Discord setup guide.
 
 ### Migration from `--mode meet-bot`
 
@@ -335,6 +370,7 @@ python -m src.meet.main ... --src vi --tgt en --meeting-mode locked
 - [Realtime Protocol](docs/realtime_protocol.md)
 - [Security](docs/security.md)
 - [Phase 2 Meet Status](docs/phase2_google_meet.md)
+- [Phase 3 Discord](docs/phase3_discord.md)
 - [State](docs/STATE.md)
 - [Tasks](docs/TASKS.md)
 - [Meet Next Steps](docs/next_steps_google_meet.md)

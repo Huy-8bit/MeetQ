@@ -12,7 +12,7 @@
 
 `.env.example` includes additional values (`OPENAI_REALTIME_MODEL`, `OPENAI_TRANSCRIBE_MODEL`, etc.), but current Python runtime primarily consumes `OPENAI_API_KEY`.
 
-### Meet profile storage
+For Discord mode, `DISCORD_BOT_TOKEN` is required — treat it as a secret.\n\n### Meet profile storage
 
 - Meet mode uses persistent Chromium profile directory (`--profile-dir`, default `~/.brseai_profile` in `src.meet.main`).
 - This directory contains session/cookie state and must be treated as sensitive credential material.
@@ -34,6 +34,13 @@
 
 - Captures meeting audio either from virtual loopback input or ScreenCaptureKit path.
 - Captured content may include multiple participants; consent and policy controls are mandatory before non-internal use.
+
+### Discord mode
+
+- Bot captures mixed audio from all participants in a voice channel.
+- Translated text is posted to a text channel visible to server members.
+- No audio files are persisted; audio streams through memory only.
+- Bot token grants server access — treat it as a secret credential.
 
 ## Logging Behavior
 

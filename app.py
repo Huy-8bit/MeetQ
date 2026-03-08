@@ -54,10 +54,11 @@ def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="app.py",
         description=(
-            "brseAI — Google Meet interpreter bot (Vietnamese / English / Japanese)\n"
-            "Joins a meeting and translates speech in real time.\n\n"
+            "brseAI — interpreter bot (Vietnamese / English / Japanese)\n"
+            "Supports Google Meet and Discord voice channels.\n\n"
             "Quick start:\n"
-            "  python app.py --meeting-url \"https://meet.google.com/xxx-xxxx-xxx\"\n"
+            "  Meet:    python app.py --meeting-url \"https://meet.google.com/xxx-xxxx-xxx\"\n"
+            "  Discord: python app.py --mode discord\n"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
@@ -65,10 +66,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     p.add_argument(
         "--mode",
-        choices=["meet-bot", "realtime", "fallback"],
+        choices=["meet-bot", "discord", "realtime", "fallback"],
         default="meet-bot",
         help=(
-            "Operation mode. Default and only supported mode: 'meet-bot'. "
+            "Operation mode. 'meet-bot' (default): Google Meet browser bot. "
+            "'discord': Discord voice channel bot. "
             "'realtime' and 'fallback' are legacy; use src.realtime.main / "
             "src.fallback.pipeline directly."
         ),
@@ -209,6 +211,33 @@ def build_parser() -> argparse.ArgumentParser:
         "--show-input",
         action="store_true",
         help="Always print recognized input transcript.",
+    )
+    # ---- Discord-specific flags ----
+    p.add_argument(
+        "--discord-token",
+        default=None,
+        metavar="TOKEN",
+        help="Discord bot token. Default: read from DISCORD_BOT_TOKEN env var.",
+    )
+    p.add_argument(
+        "--voice-channel-id",
+        type=int,
+        default=None,
+        metavar="ID",
+        help="(Discord) Auto-join this voice channel on startup.",
+    )
+    p.add_argument(
+        "--text-channel-id",
+        type=int,
+        default=None,
+        metavar="ID",
+        help="(Discord) Send translations to this text channel.",
+    )
+    p.add_argument(
+        "--tts",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="(Discord) Enable TTS speak-back into voice channel. Default: ON.",
     )
     # ---- Legacy / realtime flags (kept for parser parity; not executed) ----
     p.add_argument(
@@ -361,7 +390,38 @@ def main() -> int:
         )
         return 1
 
-    # --- meet-bot is the only remaining mode ---
+    # --- Discord mode ---
+    if args.mode == "discord":
+        from src.discord.main import main as discord_main
+        from src.common.logging_utils import get_logger as _get_logger
+        _logger = _get_logger("app")
+        _logger.info(
+            f"Mode: discord | src={args.src} tgt={args.tgt} "
+            f"| meeting_mode={args.meeting_mode} | tts={'on' if args.tts else 'off'}"
+        )
+        argv = []
+        token = args.discord_token or os.environ.get("DISCORD_BOT_TOKEN", "")
+        if token:
+            argv += ["--token", token]
+        if args.voice_channel_id:
+            argv += ["--voice-channel-id", str(args.voice_channel_id)]
+        if args.text_channel_id:
+            argv += ["--text-channel-id", str(args.text_channel_id)]
+        if args.model:
+            argv += ["--model", args.model]
+        argv += ["--src", args.src, "--tgt", args.tgt]
+        if args.pairs:
+            argv += ["--pairs", args.pairs]
+        argv += ["--meeting-mode", args.meeting_mode]
+        if not args.tts:
+            argv += ["--no-tts"]
+        if args.show_input:
+            argv += ["--show-input"]
+        if args.debug:
+            argv += ["--debug"]
+        return discord_main(argv)
+
+    # --- meet-bot mode ---
     if not args.meeting_url:
         print(
             "Error: --meeting-url is required.\n"

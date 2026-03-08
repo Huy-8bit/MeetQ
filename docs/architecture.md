@@ -2,15 +2,16 @@
 
 ## Scope
 
-This repository currently ships three runtime paths:
+This repository currently ships four runtime paths:
 - `realtime`: low-latency streaming interpreter.
 - `fallback`: clip-based record/transcribe/translate pipeline.
 - `meet-bot`: Google Meet participant automation + meeting audio capture + realtime interpreter.
+- `discord`: Discord voice channel bot + realtime interpreter.
 
 ## Entry Points
 
 - `app.py`
-  - dispatches `--mode realtime`, `--mode fallback`, `--mode meet-bot`
+  - dispatches `--mode realtime`, `--mode fallback`, `--mode meet-bot`, `--mode discord`
   - handles shared flags/device listing.
 - `src/realtime/main.py`
   - standalone realtime runner and input/speaker routing helpers.
@@ -18,6 +19,8 @@ This repository currently ships three runtime paths:
   - standalone fallback runner.
 - `src/meet/main.py`
   - standalone meet-bot runner (full meet parser surface including `--sck`).
+- `src/discord/main.py`
+  - standalone Discord bot runner.
 
 ## Core Modules
 
@@ -31,6 +34,8 @@ This repository currently ships three runtime paths:
 | `src/meet/bot.py` | Playwright join/waiting-room/leave lifecycle |
 | `src/meet/audio.py` | Meet audio capture/output adapters (`MeetAudioListenerInput`, `SCKAudioInput`, `MeetAudioMicOutput`) |
 | `src/meet/selectors.py` | central selector map for Meet UI automation |
+| `src/discord/bot.py` | Discord bot: voice join/leave lifecycle, command handling, text forwarding |
+| `src/discord/audio.py` | Discord audio adapters (`DiscordAudioInput`, `DiscordAudioOutput`, `DiscordAudioSink`) |
 
 ## Module / Service Overview
 
@@ -41,6 +46,7 @@ flowchart LR
     CLI --> RT[src/realtime/main.py]
     CLI --> FB[src/fallback/main.py]
     CLI --> MEET[src/meet/main.py helpers]
+    CLI --> DISC[src/discord/main.py]
 
     subgraph Common[src/common]
       AUDIO[audio.py\nAudioInput + devices + speaker]
@@ -52,6 +58,8 @@ flowchart LR
     FB --> FBP[src/fallback/pipeline.py]
     MEET --> MBOT[src/meet/bot.py]
     MEET --> MAUD[src/meet/audio.py]
+    DISC --> DBOT[src/discord/bot.py]
+    DISC --> DAUD[src/discord/audio.py]
 
     RTC --> OPENAI[(OpenAI Realtime WS)]
     FBP --> OPENAIA[(OpenAI Audio + Chat APIs)]
@@ -59,6 +67,7 @@ flowchart LR
     AUDIO --> RT
     AUDIO --> FBP
     AUDIO --> MAUD
+    DAUD --> RTC
     LANG --> RTC
     LANG --> FBP
     LOG --> RT
@@ -117,8 +126,35 @@ flowchart TD
     OUT -- no --> DROP[listen-only mode]
 ```
 
+## Discord Mode Dataflow
+
+```mermaid
+flowchart TD
+    USERS[Discord voice channel participants]
+    DBOT[InterpreterBot\ndiscord.py bot]
+    SINK[DiscordAudioSink\nvoice receive callback]
+
+    USERS --> DBOT
+    DBOT --> SINK
+
+    SINK --> DIN[DiscordAudioInput\n48kHz stereo -> 16kHz mono]
+
+    DIN --> RTC[RealtimeClient]
+    RTC --> OAI[(OpenAI Realtime)]
+    OAI --> TXT[[Terminal + Discord text channel]]
+
+    OAI --> AUD[response.audio.delta]
+    AUD --> OUT{TTS enabled?}
+    OUT -- yes --> DOUT[DiscordAudioOutput\n24kHz mono -> 48kHz stereo]
+    DOUT --> DBOT
+    OUT -- no --> DROP[text-only mode]
+```
+
 ## Operational Notes
 
 - Meet mode assumes participant consent and host-side admission when needed.
 - Virtual audio routing must keep capture and playback paths separate to prevent loops.
 - `src/meet/main.py` currently exposes the full meet feature set (`--sck`, `--sck-app`); treat it as the canonical meet entrypoint.
+- Discord mode requires a bot token (DISCORD_BOT_TOKEN) and libopus installed.
+- Discord bot uses discord.py voice receive for capture and voice send for TTS output.
+- No virtual audio devices are needed for Discord mode.

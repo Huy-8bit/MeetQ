@@ -1,6 +1,6 @@
 # STATE
 
-## Current Status (2026-03-04)
+## Current Status (2026-03-08)
 
 ### Phase 1
 - Realtime mic interpreter: implemented.
@@ -19,6 +19,15 @@ Not yet hardened for production:
 - Compliance controls (consent, retention, access policy).
 - Official Google Meet media API path validation.
 
+### Phase 3 (Discord)
+Implemented:
+- Discord bot with voice channel join/leave lifecycle (`src/discord/bot.py`).
+- Discord audio capture/output adapters (`src/discord/audio.py`).
+- Discord runtime wiring to `RealtimeClient` (`src/discord/main.py`).
+- Bot commands: `!join`, `!leave`, `!status`, `!lang`.
+- Translation text forwarding to Discord text channel.
+- TTS speak-back into voice channel.
+
 ## Milestones
 
 | Milestone | Status | Notes |
@@ -27,6 +36,7 @@ Not yet hardened for production:
 | M2 Fallback interpreter path | DONE | WAV recording + transcription + translation |
 | M3 Meet bot MVP wiring | DONE (internal) | Join + capture + realtime translation path exists |
 | M4 Meet hardening and compliance gate | IN PROGRESS | Stability tests, policy controls, parser unification pending |
+| M5 Discord bot MVP | DONE | Voice join + capture + realtime translation + text channel output |
 
 ## Known Implementation Caveats
 
@@ -39,7 +49,8 @@ Not yet hardened for production:
 1. Use `python app.py --mode realtime` for core interpreter smoke tests.
 2. Use `python app.py --mode realtime --input device --input-device <idx> --no-speaker` for loopback tests.
 3. Use `python -m src.meet.main ...` for meet-bot tests.
-4. Track remaining hardening/compliance items in `docs/TASKS.md`.
+4. Use `python app.py --mode discord` or `python -m src.discord.main` for Discord tests.
+5. Track remaining hardening/compliance items in `docs/TASKS.md`.
 
 ## File Map
 
@@ -60,7 +71,8 @@ brseAI/
 │   ├── common/
 │   ├── realtime/
 │   ├── fallback/
-│   └── meet/
+│   ├── meet/
+│   └── discord/
 ├── recordings/
 └── logs/
 ```
@@ -72,3 +84,4 @@ brseAI/
 - 2026-03-03: Device loopback input added for realtime (`--input device`).
 - 2026-03-03: Meet bot MVP modules added (`src/meet/*`) and integrated.
 - 2026-03-04: Documentation synchronized to current implementation and known limitations.
+- 2026-03-08: Discord voice bot implemented (Phase 3: src/discord/*).

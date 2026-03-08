@@ -103,3 +103,23 @@ Implementation tracking aligned with current repository state.
 - [ ] Participant notice/consent process documented for meet sessions.
 - [ ] Retention policy for `recordings/` and transcripts approved.
 - [ ] Logging redaction policy enforced for sensitive text.
+
+### TASK-14: Discord Bot MVP
+**Status:** DONE
+**Acceptance criteria:**
+- [x] Discord bot joins/leaves voice channels via `!join`/`!leave` commands.
+- [x] Audio captured from voice channel via discord.py voice receive.
+- [x] Audio piped to RealtimeClient for real-time translation.
+- [x] Translated text posted to Discord text channel.
+- [x] TTS speak-back into voice channel supported.
+- [x] Auto-leave when all users leave the voice channel.
+- [x] CLI support via `python app.py --mode discord`.
+
+### TASK-15: Discord Bot Hardening
+**Status:** TODO
+**Acceptance criteria:**
+- [ ] Slash command support (`/join`, `/leave`, `/lang`) alongside prefix commands.
+- [ ] Translation text debouncing for high-frequency output.
+- [ ] Voice disconnect reconnection handling.
+- [ ] Multi-server concurrent session testing.
+- [ ] Rate limit handling for Discord API calls.

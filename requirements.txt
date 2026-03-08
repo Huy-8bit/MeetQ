@@ -25,6 +25,11 @@ websockets==16.0
 # Meet-bot mode (Phase 2 Path B)
 playwright>=1.44.0
 
+# Discord bot mode (Phase 3)
+discord.py[voice]>=2.5.0
+discord-ext-voice-recv>=0.5.0
+PyNaCl>=1.5.0
+
 # SCK audio capture — macOS 13+ only, no virtual audio device needed
 # Install: pip install pyobjc-framework-ScreenCaptureKit pyobjc-framework-CoreMedia
 pyobjc-framework-ScreenCaptureKit>=10.0
