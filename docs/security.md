@@ -12,11 +12,6 @@
 
 `.env.example` includes additional values (`OPENAI_REALTIME_MODEL`, `OPENAI_TRANSCRIBE_MODEL`, etc.), but current Python runtime primarily consumes `OPENAI_API_KEY`.
 
-For Discord mode, `DISCORD_BOT_TOKEN` is required — treat it as a secret.\n\n### Meet profile storage
-
-- Meet mode uses persistent Chromium profile directory (`--profile-dir`, default `~/.brseai_profile` in `src.meet.main`).
-- This directory contains session/cookie state and must be treated as sensitive credential material.
-
 ## Data Handling
 
 ### Realtime mode
@@ -29,18 +24,6 @@ For Discord mode, `DISCORD_BOT_TOKEN` is required — treat it as a secret.\n\n#
 - Raw clip is always saved to `recordings/clip_<timestamp>.wav` before transcription.
 - Transcript and translation are sent to OpenAI APIs.
 - Treat `recordings/` as sensitive data storage.
-
-### Meet mode
-
-- Captures meeting audio either from virtual loopback input or ScreenCaptureKit path.
-- Captured content may include multiple participants; consent and policy controls are mandatory before non-internal use.
-
-### Discord mode
-
-- Bot captures mixed audio from all participants in a voice channel.
-- Translated text is posted to a text channel visible to server members.
-- No audio files are persisted; audio streams through memory only.
-- Bot token grants server access — treat it as a secret credential.
 
 ## Logging Behavior
 
@@ -67,9 +50,9 @@ For Discord mode, `DISCORD_BOT_TOKEN` is required — treat it as a secret.\n\n#
 - Authentication errors (`authentication_error`, `invalid_api_key`) terminate session.
 - Restrict outbound network paths where possible to required OpenAI endpoints.
 
-## Meeting Privacy Considerations
+## Privacy Considerations
 
-- Meet bot operation should be treated as recording/transcription activity.
+- Audio capture should be treated as recording/transcription activity.
 - Minimum requirements before external use:
   - explicit participant notice and consent
   - approved data retention/deletion policy
@@ -80,6 +63,7 @@ For Discord mode, `DISCORD_BOT_TOKEN` is required — treat it as a secret.\n\n#
 
 1. Store `OPENAI_API_KEY` in a secrets manager or local secure env, not in code.
 2. Limit and rotate keys used for demos.
-3. Restrict permissions on `~/.brseai_profile` and `recordings/`.
+3. Restrict permissions on `recordings/` directory.
 4. Add transcript redaction before any persistent logging.
 5. Define retention windows and deletion workflows before pilot rollout.
+

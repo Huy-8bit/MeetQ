@@ -1,374 +1,189 @@
 """
 src/discord/audio.py
-Audio routing components for Discord voice-channel interpreter bot.
+Discord audio input adapter that implements the AudioInput contract.
 
-Uses ``discord-ext-voice-recv`` for receiving voice audio.
-All dependencies are pure-Python wheels — only ``libopus`` is required as
-a system library (PyNaCl wheel bundles libsodium; no FFmpeg needed).
-
-DiscordAudioInput
-    Implements the common AudioInput interface.
-    Receives PCM audio from Discord voice receive (via voice_recv AudioSink)
-    and delivers 20 ms PCM16 mono 16 kHz chunks to the interpreter pipeline.
-
-DiscordAudioOutput
-    Sends translated TTS PCM16 audio back into the Discord voice channel
-    via a discord.py AudioSource.
-    Interface mirrors SpeakerPlayer (push / flush / stop / restart) so it
-    can be used as a drop-in replacement in RealtimeClient.
+This adapter receives audio from Discord voice channels via discord-ext-voice-recv,
+converts it from 48kHz stereo to 16kHz mono PCM16, and feeds it to RealtimeClient
+in 20ms chunks.
 """
 from __future__ import annotations
 
+import asyncio
 import queue
 import threading
 from typing import Iterator, Optional
 
 import numpy as np
 
-try:
-    import discord
-    from discord.ext.voice_recv import AudioSink as VoiceRecvAudioSink
-    from discord.ext.voice_recv import VoiceData, VoiceRecvClient
-except ImportError:
-    raise ImportError(
-        "discord.py[voice] and discord-ext-voice-recv are required.\n"
-        "  pip install 'discord.py[voice]' discord-ext-voice-recv"
-    )
+from src.common.audio import AudioInput, AudioMetadata
 
-from src.common.audio import (
-    AudioInput,
-    AudioMetadata,
-    DEFAULT_CHANNELS,
-    DEFAULT_SAMPLE_RATE,
-    CHUNK_MS,
-)
-from src.common.logging_utils import get_logger
+# Discord constants
+DISCORD_SAMPLE_RATE = 48000  # Discord uses 48kHz
+DISCORD_CHANNELS = 2          # Discord uses stereo
+TARGET_SAMPLE_RATE = 16000    # Realtime API expects 16kHz
+TARGET_CHANNELS = 1           # Realtime API expects mono
+CHUNK_MS = 20                 # 20ms chunks
+CHUNK_FRAMES = int(TARGET_SAMPLE_RATE * CHUNK_MS / 1000)  # 320 frames at 16kHz
 
-logger = get_logger("discord.audio")
-
-# Discord voice uses 48 kHz stereo PCM16 by default (Opus decoded).
-DISCORD_SAMPLE_RATE = 48000
-DISCORD_CHANNELS = 2
-DISCORD_FRAME_MS = 20  # 20 ms Opus frames
-TARGET_SAMPLE_RATE = DEFAULT_SAMPLE_RATE  # 16 kHz mono for the interpreter
-
-
-# ---------------------------------------------------------------------------
-# Helper: resample + stereo-to-mono
-# ---------------------------------------------------------------------------
-
-def _resample_to_16k_mono(pcm16_bytes: bytes, src_rate: int, src_channels: int) -> bytes:
-    """
-    Down-mix to mono and resample to 16 kHz PCM16.
-    Uses simple linear decimation — good enough for speech.
-    """
-    samples = np.frombuffer(pcm16_bytes, dtype=np.int16)
-    if len(samples) == 0:
-        return b""
-
-    # stereo -> mono
-    if src_channels == 2 and len(samples) % 2 == 0:
-        samples = samples.reshape(-1, 2).mean(axis=1).astype(np.int16)
-
-    # resample (nearest-neighbor decimation — fast, fine for voice)
-    if src_rate != TARGET_SAMPLE_RATE:
-        ratio = TARGET_SAMPLE_RATE / src_rate
-        length = int(len(samples) * ratio)
-        indices = (np.arange(length) / ratio).astype(int)
-        indices = np.clip(indices, 0, len(samples) - 1)
-        samples = samples[indices]
-
-    return samples.tobytes()
-
-
-# ---------------------------------------------------------------------------
-# DiscordAudioSink  — discord-ext-voice-recv AudioSink
-# ---------------------------------------------------------------------------
-
-class DiscordAudioSink(VoiceRecvAudioSink):
-    """
-    Custom AudioSink (from discord-ext-voice-recv) that receives decoded
-    PCM from all users in a voice channel and forwards it to a
-    DiscordAudioInput queue.
-
-    voice_recv delivers per-user packets; we down-mix into a single mono
-    16 kHz stream for the interpreter.
-    """
-
-    def __init__(self, audio_input: "DiscordAudioInput") -> None:
-        super().__init__()
-        self._audio_input = audio_input
-
-    def wants_opus(self) -> bool:
-        """We want decoded PCM, not raw Opus."""
-        return False
-
-    def write(self, user, data: VoiceData) -> None:
-        """Called by voice_recv for every decoded voice packet."""
-        pcm = data.pcm  # raw PCM16 bytes (48 kHz stereo)
-        if not pcm:
-            return
-        mono_16k = _resample_to_16k_mono(pcm, DISCORD_SAMPLE_RATE, DISCORD_CHANNELS)
-        self._audio_input._enqueue(mono_16k)
-
-    def cleanup(self) -> None:
-        """Called when the voice client stops listening.
-        Don't signal stop here — let the bot control lifecycle explicitly."""
-        logger.warning("[DiscordAudioSink] cleanup() called")
-
-
-# ---------------------------------------------------------------------------
-# DiscordAudioInput — implements common.audio.AudioInput
-# ---------------------------------------------------------------------------
 
 class DiscordAudioInput(AudioInput):
     """
-    Receives Discord voice audio and presents it via the standard AudioInput
-    interface consumed by RealtimeClient.
-
-    Lifecycle:
-        1. Instantiate.
-        2. Attach to voice client:
-           vc.listen(DiscordAudioSink(this_input))
-        3. start() — signals readiness.
-        4. stream_frames() — yields 20 ms PCM16 mono 16 kHz chunks.
-        5. stop() — breaks the generator.
+    Discord voice channel audio input adapter.
+    
+    Receives PCM audio from Discord voice recv sink, converts from 48kHz stereo
+    to 16kHz mono, and yields 20ms chunks for RealtimeClient consumption.
+    
+    Usage:
+        audio_input = DiscordAudioInput()
+        audio_input.start()
+        
+        # In Discord voice receive callback:
+        audio_input.feed_audio(pcm_data, sample_rate=48000, channels=2)
+        
+        # RealtimeClient consumes:
+        for chunk in audio_input.stream_frames():
+            # chunk is 16kHz mono PCM16 bytes
+            ...
+        
+        audio_input.stop()
     """
 
-    def __init__(self, sample_rate: int = TARGET_SAMPLE_RATE, chunk_ms: int = CHUNK_MS) -> None:
-        self._sample_rate = sample_rate
-        self._chunk_ms = chunk_ms
-        self._chunk_bytes = int(sample_rate * chunk_ms / 1000) * 2  # PCM16 = 2 bytes/sample
-        self._q: queue.Queue[Optional[bytes]] = queue.Queue(maxsize=600)
+    def __init__(self) -> None:
+        """Initialize the Discord audio input adapter."""
+        self._sample_rate = TARGET_SAMPLE_RATE
+        self._channels = TARGET_CHANNELS
+        self._chunk_frames = CHUNK_FRAMES
+        
+        # Queue for converted audio chunks ready for streaming
+        self._q: queue.Queue[Optional[bytes]] = queue.Queue(maxsize=500)
+        
+        # Buffer for accumulating resampled audio to align on 20ms boundaries
+        self._buffer: bytearray = bytearray()
+        self._chunk_size_bytes = CHUNK_FRAMES * 2  # 2 bytes per sample (PCM16)
+        
         self._stop_event = threading.Event()
-        self._buffer = bytearray()
+        self._started = False
 
     @property
     def metadata(self) -> AudioMetadata:
-        return AudioMetadata(sample_rate=self._sample_rate, channels=DEFAULT_CHANNELS)
+        """Return audio metadata for this input source."""
+        return AudioMetadata(
+            sample_rate=self._sample_rate,
+            channels=self._channels,
+            speaker_id=None,  # Mixed audio from multiple Discord users
+        )
 
-    # Called by DiscordAudioSink.write()
-    def _enqueue(self, pcm_bytes: bytes) -> None:
-        """Accumulate incoming audio and push complete chunks."""
-        if self._stop_event.is_set():
-            return
-        self._buffer.extend(pcm_bytes)
-        while len(self._buffer) >= self._chunk_bytes:
-            chunk = bytes(self._buffer[: self._chunk_bytes])
-            self._buffer = self._buffer[self._chunk_bytes :]
-            try:
-                self._q.put_nowait(chunk)
-            except queue.Full:
-                pass  # drop oldest implicitly
+    def start(self) -> None:
+        """Start accepting audio input."""
+        self._stop_event.clear()
+        self._started = True
 
-    def _signal_stop(self) -> None:
+    def stop(self) -> None:
+        """Stop accepting audio and signal end of stream."""
         self._stop_event.set()
+        self._started = False
+        
+        # Signal end of stream
         try:
             self._q.put_nowait(None)
         except queue.Full:
             pass
 
-    def start(self) -> None:
-        self._stop_event.clear()
-        self._buffer.clear()
-        # Drain any leftover None sentinels from previous session
-        while not self._q.empty():
-            try:
-                self._q.get_nowait()
-            except queue.Empty:
-                break
-        logger.info("[DiscordAudioInput] Started (16 kHz mono PCM16)")
-
-    def stop(self) -> None:
-        self._signal_stop()
-        logger.info("[DiscordAudioInput] Stopped")
-
     def stream_frames(self) -> Iterator[bytes]:
-        logger.debug("[DiscordAudioInput] stream_frames() started")
-        frame_count = 0
+        """
+        Yield PCM16 byte chunks (16kHz mono, 20ms each) until stopped.
+        
+        Blocks on queue.get() with timeout to allow clean shutdown.
+        """
         while not self._stop_event.is_set():
             try:
                 chunk = self._q.get(timeout=0.1)
             except queue.Empty:
                 continue
+            
             if chunk is None:
-                logger.debug(f"[DiscordAudioInput] stream_frames() got None sentinel after {frame_count} frames")
                 break
-            frame_count += 1
+            
             yield chunk
-        logger.debug(f"[DiscordAudioInput] stream_frames() exiting (stop_event={self._stop_event.is_set()}, frames={frame_count})")
 
-
-# ---------------------------------------------------------------------------
-# DiscordAudioOutput — plays TTS into voice channel
-# ---------------------------------------------------------------------------
-
-class DiscordPCMSource(discord.AudioSource):
-    """
-    discord.py AudioSource that reads from an internal queue.
-    Produces 20 ms frames of 48 kHz stereo PCM16 for Opus encoding.
-    """
-
-    FRAME_SIZE = int(DISCORD_SAMPLE_RATE * DISCORD_FRAME_MS / 1000) * DISCORD_CHANNELS  # samples
-    FRAME_BYTES = FRAME_SIZE * 2  # PCM16 = 2 bytes/sample
-    SILENCE = b"\x00" * FRAME_BYTES
-
-    def __init__(self) -> None:
-        self._q: queue.Queue[Optional[bytes]] = queue.Queue(maxsize=500)
-        self._active = threading.Event()
-        self._active.set()
-        self._leftover = b""
-
-    def read(self) -> bytes:
-        """Return one 20 ms frame. Called by discord.py voice send loop."""
-        if not self._active.is_set():
-            return self.SILENCE
-
-        # Build up a full frame from queued data
-        needed = self.FRAME_BYTES - len(self._leftover)
-        data = bytearray(self._leftover)
-
-        while needed > 0:
-            try:
-                chunk = self._q.get_nowait()
-            except queue.Empty:
-                break
-            if chunk is None:
-                self._active.clear()
-                break
-            data.extend(chunk)
-            needed = self.FRAME_BYTES - len(data)
-
-        self._leftover = b""
-
-        if len(data) >= self.FRAME_BYTES:
-            frame = bytes(data[: self.FRAME_BYTES])
-            self._leftover = bytes(data[self.FRAME_BYTES :])
-            return frame
-        elif len(data) > 0:
-            # pad with silence
-            frame = bytes(data) + b"\x00" * (self.FRAME_BYTES - len(data))
-            return frame
-        else:
-            return self.SILENCE
-
-    def is_opus(self) -> bool:
-        return False
-
-    def cleanup(self) -> None:
-        self._active.clear()
-
-    def enqueue(self, pcm_bytes: bytes) -> None:
-        if not self._active.is_set():
+    def feed_audio(
+        self,
+        pcm_data: bytes,
+        sample_rate: int = DISCORD_SAMPLE_RATE,
+        channels: int = DISCORD_CHANNELS,
+    ) -> None:
+        """
+        Feed raw PCM audio from Discord voice recv.
+        
+        This method converts the audio from Discord's format (48kHz stereo)
+        to the format expected by RealtimeClient (16kHz mono), then chunks
+        it into 20ms segments.
+        
+        Args:
+            pcm_data: Raw PCM16 audio bytes from Discord
+            sample_rate: Source sample rate (default: 48000)
+            channels: Source channel count (default: 2 for stereo)
+        """
+        if not self._started or self._stop_event.is_set():
             return
+        
         try:
-            self._q.put_nowait(pcm_bytes)
-        except queue.Full:
-            pass
+            # Convert bytes to numpy array
+            audio = np.frombuffer(pcm_data, dtype=np.int16)
+            
+            # Convert stereo to mono if needed
+            if channels == 2:
+                # Reshape to (frames, 2) and average the channels
+                audio = audio.reshape(-1, 2)
+                audio = audio.mean(axis=1).astype(np.int16)
+            
+            # Resample from 48kHz to 16kHz if needed
+            if sample_rate != TARGET_SAMPLE_RATE:
+                audio = self._resample(audio, sample_rate, TARGET_SAMPLE_RATE)
+            
+            # Convert back to bytes and add to buffer
+            resampled_bytes = audio.tobytes()
+            self._buffer.extend(resampled_bytes)
+            
+            # Extract complete 20ms chunks from buffer
+            while len(self._buffer) >= self._chunk_size_bytes:
+                chunk = bytes(self._buffer[:self._chunk_size_bytes])
+                del self._buffer[:self._chunk_size_bytes]
+                
+                # Put chunk in queue for stream_frames()
+                try:
+                    self._q.put_nowait(chunk)
+                except queue.Full:
+                    # Drop oldest chunk if queue is full to avoid blocking
+                    try:
+                        self._q.get_nowait()
+                        self._q.put_nowait(chunk)
+                    except (queue.Empty, queue.Full):
+                        pass
+        
+        except Exception as e:
+            # Log error but don't crash on bad audio packets
+            import sys
+            print(f"[DiscordAudioInput] Error processing audio: {e}", file=sys.stderr)
 
-    def clear(self) -> None:
-        while True:
-            try:
-                self._q.get_nowait()
-            except queue.Empty:
-                break
-
-
-def _upsample_to_48k_stereo(pcm16_mono_bytes: bytes, src_rate: int) -> bytes:
-    """
-    Up-sample mono PCM16 from src_rate to 48 kHz stereo PCM16.
-    """
-    samples = np.frombuffer(pcm16_mono_bytes, dtype=np.int16)
-    if len(samples) == 0:
-        return b""
-
-    # upsample
-    if src_rate != DISCORD_SAMPLE_RATE:
-        ratio = DISCORD_SAMPLE_RATE / src_rate
-        length = int(len(samples) * ratio)
-        indices = (np.arange(length) / ratio).astype(int)
-        indices = np.clip(indices, 0, len(samples) - 1)
-        samples = samples[indices]
-
-    # mono -> stereo
-    stereo = np.column_stack([samples, samples]).flatten().astype(np.int16)
-    return stereo.tobytes()
-
-
-class DiscordAudioOutput:
-    """
-    Plays translated TTS audio into a Discord voice channel.
-
-    Interface mirrors SpeakerPlayer / MeetAudioMicOutput so it can be used
-    as a drop-in replacement for RealtimeClient._player.
-
-    The RealtimeClient sends 24 kHz mono PCM16 chunks (from response.audio.delta).
-    This class up-samples to 48 kHz stereo and enqueues for Discord voice send.
-
-    Usage:
-        out = DiscordAudioOutput(voice_client)
-        out.start()
-        out.push(pcm_bytes)   # 24 kHz mono PCM16 from OpenAI
-        out.flush()
-        out.stop()
-        out.restart()
-    """
-
-    INPUT_RATE = 24000  # OpenAI Realtime TTS output rate
-
-    def __init__(self, voice_client) -> None:
-        self._vc = voice_client
-        self._source: Optional[DiscordPCMSource] = None
-
-    def start(self) -> None:
-        if self._source is not None:
-            return
-        self._source = DiscordPCMSource()
-        # Don't call play() here — lazy-start it in push() so the AudioPlayer
-        # thread doesn't interact with the listener until we actually have TTS data.
-        logger.info("[DiscordAudioOutput] Prepared (will lazy-start player on first push)")
-
-    def _ensure_playing(self) -> None:
-        """Start the AudioPlayer if not already running."""
-        if self._vc.is_playing():
-            return
-        if self._source is None:
-            return
-        try:
-            self._vc.play(self._source, after=lambda e: logger.debug("[DiscordAudioOutput] player finished, error=%s", e))
-            logger.info("[DiscordAudioOutput] Player started (48 kHz stereo)")
-        except Exception as exc:
-            logger.warning("[DiscordAudioOutput] Failed to start player: %s", exc)
-
-    def push(self, pcm_bytes: bytes) -> None:
-        """Accept 24 kHz mono PCM16, upsample to 48 kHz stereo, enqueue."""
-        if self._source is None:
-            return
-        stereo_48k = _upsample_to_48k_stereo(pcm_bytes, self.INPUT_RATE)
-        self._source.enqueue(stereo_48k)
-        self._ensure_playing()
-
-    def flush(self) -> None:
-        """Insert 50 ms silence pad so the last syllable is not clipped."""
-        if self._source is None:
-            return
-        frames = int(DISCORD_SAMPLE_RATE * 0.05) * DISCORD_CHANNELS
-        silence = b"\x00" * (frames * 2)
-        self._source.enqueue(silence)
-
-    def stop(self) -> None:
-        if self._source is not None:
-            self._source.clear()
-            self._source._active.clear()
-        if self._vc.is_playing():
-            # IMPORTANT: use stop_playing() not stop() to avoid killing the listener
-            if hasattr(self._vc, 'stop_playing'):
-                self._vc.stop_playing()
-            else:
-                self._vc.stop()
-        self._source = None
-        logger.info("[DiscordAudioOutput] Stopped")
-
-    def restart(self) -> None:
-        self.stop()
-        self.start()
+    @staticmethod
+    def _resample(audio: np.ndarray, src_rate: int, tgt_rate: int) -> np.ndarray:
+        """
+        Simple linear resampling from src_rate to tgt_rate.
+        
+        For production use, consider using scipy.signal.resample for better quality,
+        but this simple approach works well for voice and avoids additional dependencies.
+        """
+        if src_rate == tgt_rate:
+            return audio
+        
+        # Calculate new length
+        duration = len(audio) / src_rate
+        new_length = int(duration * tgt_rate)
+        
+        # Linear interpolation
+        x_old = np.linspace(0, len(audio) - 1, len(audio))
+        x_new = np.linspace(0, len(audio) - 1, new_length)
+        resampled = np.interp(x_new, x_old, audio).astype(np.int16)
+        
+        return resampled

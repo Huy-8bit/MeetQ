@@ -213,8 +213,7 @@ class DeviceLoopbackInput(AudioInput):
     """
     Captures audio from any sounddevice input device by index.
 
-    This is the Path B "pragmatic MVP" input for Google Meet capture:
-    route meeting audio to a virtual audio device (BlackHole, Loopback,
+    Route audio to a virtual audio device (BlackHole, Loopback,
     VB-Cable, Stereo Mix, etc.) then point --input-device at it.
 
     Usage:

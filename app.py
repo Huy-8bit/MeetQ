@@ -1,37 +1,38 @@
 #!/usr/bin/env python3
 """
-app.py — brseAI Google Meet interpreter bot.
+app.py — brseAI Realtime Interpreter
 
 Usage:
-    python app.py --meeting-url "https://meet.google.com/xxx-xxxx-xxx"
+    python app.py --mode realtime [options]
+    python app.py --mode fallback [options]
+    python app.py --mode discord [options]
 
 Environment:
-    OPENAI_API_KEY   Required. Your OpenAI API key.
+    OPENAI_API_KEY       Required. Your OpenAI API key.
+    DISCORD_BOT_TOKEN    Required for Discord mode.
 
 Examples:
+    # Realtime mode with microphone input
+    python app.py --mode realtime --input mic
+
+    # Realtime mode with device input
+    python app.py --mode realtime --input device --input-device 1
+
+    # Fallback mode for testing
+    python app.py --mode fallback --input-device 1
+
+    # Discord bot mode
+    python app.py --mode discord --token YOUR_DISCORD_TOKEN
+
     # List audio devices
-    python app.py --list-audio-devices
-
-    # First-time Google sign-in (run once before joining meetings)
-    python app.py --setup-profile
-
-    # Join a meeting (manual-join: browser opens, you click Join)
-    python app.py --meeting-url "https://meet.google.com/abc-defg-hij"
-
-    # Join with auto-click (may need selector updates if Meet UI changes)
-    python app.py --meeting-url "https://meet.google.com/abc-defg-hij" --no-manual-join
-
-    # Join with TTS speak-back via virtual mic output device
-    python app.py --meeting-url "https://meet.google.com/abc-defg-hij" --meet-mic-device 3
-
-Migration from --mode meet-bot:
-    Old: python app.py --mode meet-bot --meeting-url URL ...
-    New: python app.py --meeting-url URL ...
-    (--mode meet-bot still works for backward compatibility.)
+    python app.py --list-input-devices
+    python app.py --list-speakers
 
 Note:
-    --mode realtime and --mode fallback are no longer supported in app.py.
-    Use python -m src.realtime.main or python -m src.fallback.pipeline directly.
+    This is a simple CLI wrapper. For advanced usage, call the modules directly:
+    - python -m src.realtime.main [options]
+    - python -m src.fallback.pipeline [options]
+    - python -m src.discord.main [options]
 """
 from __future__ import annotations
 
@@ -54,11 +55,12 @@ def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="app.py",
         description=(
-            "brseAI — interpreter bot (Vietnamese / English / Japanese)\n"
-            "Supports Google Meet and Discord voice channels.\n\n"
+            "brseAI — Realtime interpreter (Vietnamese / English / Japanese)\n"
+            "Supports Realtime API, Fallback, and Discord bot modes.\n\n"
             "Quick start:\n"
-            "  Meet:    python app.py --meeting-url \"https://meet.google.com/xxx-xxxx-xxx\"\n"
-            "  Discord: python app.py --mode discord\n"
+            "  Realtime:  python app.py --mode realtime --input mic\n"
+            "  Fallback:  python app.py --mode fallback --input-device 1\n"
+            "  Discord:   python app.py --mode discord --token YOUR_TOKEN\n"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
@@ -66,129 +68,72 @@ def build_parser() -> argparse.ArgumentParser:
 
     p.add_argument(
         "--mode",
-        choices=["meet-bot", "discord", "realtime", "fallback"],
-        default="meet-bot",
-        help=(
-            "Operation mode. 'meet-bot' (default): Google Meet browser bot. "
-            "'discord': Discord voice channel bot. "
-            "'realtime' and 'fallback' are legacy; use src.realtime.main / "
-            "src.fallback.pipeline directly."
-        ),
+        choices=["realtime", "fallback", "discord"],
+        default="realtime",
+        help="Operation mode: 'realtime' (default), 'fallback', or 'discord'.",
     )
 
-    # ---- Meet-bot flags ----
+    # ---- Input flags ----
     p.add_argument(
-        "--meeting-url",
-        default=None,
-        metavar="URL",
-        help="Google Meet URL to join. Required for normal operation.",
+        "--input",
+        choices=["mic", "device"],
+        default="mic",
+        dest="input_source",
+        help="Input source: 'mic' (default) or 'device'.",
     )
     p.add_argument(
-        "--profile-dir",
-        default=None,
-        metavar="PATH",
-        help="Persistent Chromium profile directory (for Google sign-in). "
-             "Default: ~/.brseai_profile",
-    )
-    p.add_argument(
-        "--setup-profile",
-        action="store_true",
-        help="Open browser for first-time Google sign-in, then exit.",
-    )
-    p.add_argument(
-        "--headless",
-        action=argparse.BooleanOptionalAction,
-        default=False,
-        help="Run Chromium headless. Default: false.",
-    )
-    p.add_argument(
-        "--display-name",
-        default="Interpreter Bot",
-        metavar="NAME",
-        help="Bot display name in meeting. Default: 'Interpreter Bot'.",
-    )
-    p.add_argument(
-        "--join-timeout-seconds",
-        type=int,
-        default=90,
-        metavar="N",
-        help="Seconds to wait for meeting admission. Default: 90.",
-    )
-    p.add_argument(
-        "--leave-after-minutes",
-        type=int,
-        default=None,
-        metavar="N",
-        help="Auto-leave after N minutes. Default: run until Ctrl+C.",
-    )
-    p.add_argument(
-        "--manual-join",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help=(
-            "Open the meeting URL in the browser and wait for the user to click "
-            "Join by hand. Interpreter pipeline starts once in-call state is detected. "
-            "Default: ON (more reliable than auto-click). "
-            "Use --no-manual-join to enable auto-click."
-        ),
-    )
-    p.add_argument(
-        "--manual-join-timeout",
-        type=int,
-        default=300,
-        metavar="N",
-        help=(
-            "With --manual-join: seconds to wait for the user to "
-            "complete the join before giving up. Default: 300."
-        ),
-    )
-    p.add_argument(
-        "--sck",
-        action="store_true",
-        help=(
-            "Use macOS ScreenCaptureKit to capture system audio directly — "
-            "no virtual audio device (BlackHole/Loopback) required. "
-            "Requires macOS 13+ and Screen Recording permission. "
-            "When set, --meet-speaker-device is ignored."
-        ),
-    )
-    p.add_argument(
-        "--sck-app",
-        default=None,
-        metavar="BUNDLE_ID",
-        help=(
-            "With --sck: capture only this app's audio (e.g. com.google.Chrome). "
-            "Default: capture all system audio."
-        ),
-    )
-    p.add_argument(
-        "--meet-speaker-device",
+        "--input-device",
         type=int,
         default=None,
         metavar="INDEX",
-        help="Input device index to capture meeting audio from (loopback device).",
+        help="Input device index (required with --input device).",
     )
     p.add_argument(
-        "--meet-mic-device",
+        "--input-rate",
         type=int,
-        default=None,
-        metavar="INDEX",
-        help="Output device index to send translated TTS into (virtual mic device). "
-             "Required to enable audio speak-back; omit for text-only translation.",
-    )
-    p.add_argument(
-        "--meet-sample-rate",
-        type=int,
-        default=48000,
-        choices=[16000, 24000, 44100, 48000],
+        default=16000,
         metavar="HZ",
-        help="Meeting audio capture sample rate. Default: 48000.",
+        help="Input sample rate (default: 16000).",
     )
     p.add_argument(
-        "--list-audio-devices",
+        "--list-input-devices",
         action="store_true",
-        help="List all audio devices (input + output) and exit.",
+        help="List all input devices and exit.",
     )
+    p.add_argument(
+        "--mic",
+        type=int,
+        default=None,
+        metavar="INDEX",
+        help="[Legacy] Microphone device index.",
+    )
+    p.add_argument(
+        "--list-mics",
+        action="store_true",
+        help="[Legacy] List all input devices and exit.",
+    )
+
+    # ---- Output flags ----
+    p.add_argument(
+        "--speaker",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Enable speaker output.",
+    )
+    p.add_argument(
+        "--speaker-device",
+        type=int,
+        default=None,
+        metavar="INDEX",
+        help="Output device index.",
+    )
+    p.add_argument(
+        "--list-speakers",
+        action="store_true",
+        help="List all output devices and exit.",
+    )
+
+    # ---- Language flags ----
     p.add_argument(
         "--src",
         default="auto",
@@ -208,129 +153,6 @@ def build_parser() -> argparse.ArgumentParser:
         help='Allowed pairs, e.g. "vi<->en,ja<->en". Default: all.',
     )
     p.add_argument(
-        "--show-input",
-        action="store_true",
-        help="Always print recognized input transcript.",
-    )
-    # ---- Discord-specific flags ----
-    p.add_argument(
-        "--discord-token",
-        default=None,
-        metavar="TOKEN",
-        help="Discord bot token. Default: read from DISCORD_BOT_TOKEN env var.",
-    )
-    p.add_argument(
-        "--voice-channel-id",
-        type=int,
-        default=None,
-        metavar="ID",
-        help="(Discord) Auto-join this voice channel on startup.",
-    )
-    p.add_argument(
-        "--text-channel-id",
-        type=int,
-        default=None,
-        metavar="ID",
-        help="(Discord) Send translations to this text channel.",
-    )
-    p.add_argument(
-        "--tts",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help="(Discord) Enable TTS speak-back into voice channel. Default: ON.",
-    )
-    # ---- Legacy / realtime flags (kept for parser parity; not executed) ----
-    p.add_argument(
-        "--input",
-        choices=["mic", "device"],
-        default="mic",
-        dest="input_source",
-        help=argparse.SUPPRESS,
-    )
-    p.add_argument(
-        "--input-device",
-        type=int,
-        default=None,
-        metavar="INDEX",
-        help=argparse.SUPPRESS,
-    )
-    p.add_argument(
-        "--input-rate",
-        type=int,
-        default=16000,
-        metavar="HZ",
-        help=argparse.SUPPRESS,
-    )
-    p.add_argument(
-        "--list-input-devices",
-        action="store_true",
-        help="Print all input devices and exit.",
-    )
-    p.add_argument(
-        "--mic",
-        type=int,
-        default=None,
-        metavar="INDEX",
-        help="[Legacy] Microphone device index.",
-    )
-    p.add_argument(
-        "--list-mics",
-        action="store_true",
-        help="[Legacy] Print available input devices and exit.",
-    )
-    p.add_argument(
-        "--seconds",
-        type=float,
-        default=5.0,
-        metavar="N",
-        help=argparse.SUPPRESS,
-    )
-    p.add_argument(
-        "--sample-rate",
-        type=int,
-        default=None,
-        metavar="HZ",
-        help=argparse.SUPPRESS,
-    )
-    p.add_argument(
-        "--model",
-        default=None,
-        help="Override realtime model ID.",
-    )
-    p.add_argument(
-        "--transcribe-model",
-        default="whisper-1",
-        help=argparse.SUPPRESS,
-    )
-    p.add_argument(
-        "--chat-model",
-        default="gpt-4o-mini",
-        help=argparse.SUPPRESS,
-    )
-    p.add_argument(
-        "--speaker",
-        action=argparse.BooleanOptionalAction,
-        default=None,
-        help=argparse.SUPPRESS,
-    )
-    p.add_argument(
-        "--speaker-device",
-        type=int,
-        default=None,
-        metavar="INDEX",
-        help=argparse.SUPPRESS,
-    )
-    p.add_argument(
-        "--list-speakers",
-        action="store_true",
-        help="Print available output devices and exit.",
-    )
-    p.add_argument(
-        "--debug",
-        action="store_true",
-        help="Enable verbose event logging.",
-    )
-    p.add_argument(
         "--meeting-mode",
         default="locked",
         choices=["locked", "auto"],
@@ -339,6 +161,75 @@ def build_parser() -> argparse.ArgumentParser:
             "auto: re-detect dynamically throughout the session."
         ),
     )
+    p.add_argument(
+        "--show-input",
+        action="store_true",
+        help="Always print recognized input transcript.",
+    )
+
+    # ---- Fallback-specific flags ----
+    p.add_argument(
+        "--seconds",
+        type=float,
+        default=5.0,
+        metavar="N",
+        help="Fallback mode: audio clip duration in seconds (default: 5.0).",
+    )
+    p.add_argument(
+        "--sample-rate",
+        type=int,
+        default=None,
+        metavar="HZ",
+        help="[Legacy] Fallback sample rate.",
+    )
+
+    # ---- Model flags ----
+    p.add_argument(
+        "--model",
+        default=None,
+        help="Override realtime model ID.",
+    )
+    p.add_argument(
+        "--transcribe-model",
+        default="whisper-1",
+        help="Fallback transcription model.",
+    )
+    p.add_argument(
+        "--chat-model",
+        default="gpt-4o-mini",
+        help="Fallback chat model.",
+    )
+
+    # ---- Debug ----
+    p.add_argument(
+        "--debug",
+        action="store_true",
+        help="Enable verbose event logging.",
+    )
+# ---- Discord-specific flags ----
+    p.add_argument(
+        "--token",
+        type=str,
+        default=None,
+        metavar="TOKEN",
+        help="Discord bot token (required for Discord mode).",
+    )
+    p.add_argument(
+        "--voice-channel-id",
+        type=int,
+        default=None,
+        metavar="ID",
+        help="Discord voice channel ID for auto-join.",
+    )
+    p.add_argument(
+        "--text-channel-id",
+        type=int,
+        default=None,
+        metavar="ID",
+        help="Discord text channel ID for translation output.",
+    )
+
+    
     return p
 
 
@@ -357,28 +248,6 @@ def main() -> int:
         print_output_devices()
         return 0
 
-    if args.list_audio_devices:
-        from src.meet.audio import print_all_audio_devices
-        print_all_audio_devices()
-        return 0
-
-    if args.setup_profile:
-        import asyncio
-        from src.meet.main import _run_setup_profile
-        profile_dir = args.profile_dir or str(Path.home() / ".brseai_profile")
-        asyncio.run(_run_setup_profile(profile_dir))
-        return 0
-
-    # --- Reject unsupported legacy modes ---
-    if args.mode in ("realtime", "fallback"):
-        print(
-            f"Error: --mode {args.mode!r} is not supported in app.py.\n"
-            f"  For realtime: python -m src.realtime.main ...\n"
-            f"  For fallback: python -m src.fallback.pipeline ...",
-            file=sys.stderr,
-        )
-        return 1
-
     # --- Validate API key ---
     api_key = os.environ.get("OPENAI_API_KEY", "")
     if not api_key:
@@ -390,68 +259,115 @@ def main() -> int:
         )
         return 1
 
-    # --- Discord mode ---
-    if args.mode == "discord":
-        from src.discord.main import main as discord_main
-        from src.common.logging_utils import get_logger as _get_logger
-        _logger = _get_logger("app")
-        _logger.info(
-            f"Mode: discord | src={args.src} tgt={args.tgt} "
-            f"| meeting_mode={args.meeting_mode} | tts={'on' if args.tts else 'off'}"
+    # --- Realtime mode ---
+    if args.mode == "realtime":
+        from src.realtime.main import main as realtime_main
+        from src.common.logging_utils import get_logger
+        logger = get_logger("app")
+        logger.info(
+            f"Mode: realtime | input={args.input_source} | "
+            f"src={args.src} tgt={args.tgt} | meeting_mode={args.meeting_mode}"
         )
+        
+        # Build argv for realtime.main
         argv = []
-        token = args.discord_token or os.environ.get("DISCORD_BOT_TOKEN", "")
-        if token:
-            argv += ["--token", token]
-        if args.voice_channel_id:
-            argv += ["--voice-channel-id", str(args.voice_channel_id)]
-        if args.text_channel_id:
-            argv += ["--text-channel-id", str(args.text_channel_id)]
+        argv += ["--input", args.input_source]
+        if args.input_device is not None:
+            argv += ["--input-device", str(args.input_device)]
+        if args.input_rate:
+            argv += ["--input-rate", str(args.input_rate)]
+        if args.speaker is not None:
+            if args.speaker:
+                argv += ["--speaker"]
+            else:
+                argv += ["--no-speaker"]
+        if args.speaker_device is not None:
+            argv += ["--speaker-device", str(args.speaker_device)]
         if args.model:
             argv += ["--model", args.model]
         argv += ["--src", args.src, "--tgt", args.tgt]
         if args.pairs:
             argv += ["--pairs", args.pairs]
         argv += ["--meeting-mode", args.meeting_mode]
-        if not args.tts:
-            argv += ["--no-tts"]
         if args.show_input:
             argv += ["--show-input"]
         if args.debug:
             argv += ["--debug"]
-        return discord_main(argv)
+        
+        return realtime_main(argv)
 
-    # --- meet-bot mode ---
-    if not args.meeting_url:
-        print(
-            "Error: --meeting-url is required.\n"
-            "  Example: python app.py --meeting-url https://meet.google.com/abc-defg-hij",
-            file=sys.stderr,
+    # --- Fallback mode ---
+    if args.mode == "fallback":
+        from src.fallback.pipeline import main as fallback_main
+        from src.common.logging_utils import get_logger
+        logger = get_logger("app")
+        logger.info(
+            f"Mode: fallback | seconds={args.seconds} | "
+            f"src={args.src} tgt={args.tgt} | meeting_mode={args.meeting_mode}"
         )
-        return 1
+        
+        # Build argv for fallback.pipeline
+    # --- Discord mode ---
+    if args.mode == "discord":
+        from src.discord.main import main as discord_main
+        from src.common.logging_utils import get_logger
+        logger = get_logger("app")
+        logger.info(
+            f"Mode: discord | src={args.src} tgt={args.tgt} | meeting_mode={args.meeting_mode}"
+        )
+        
+        # Discord mode needs to replace sys.argv for its own parser
+        # Build new argv
+        argv = ["discord"]  # program name placeholder
+        if args.token:
+            argv += ["--token", args.token]
+        if args.voice_channel_id:
+            argv += ["--voice-channel-id", str(args.voice_channel_id)]
+        if args.text_channel_id:
+            argv += ["--text-channel-id", str(args.text_channel_id)]
+        argv += ["--src", args.src, "--tgt", args.tgt]
+        if args.pairs:
+            argv += ["--pairs", args.pairs]
+        argv += ["--meeting-mode", args.meeting_mode]
+        if args.debug:
+            argv += ["--debug"]
+        
+        # Replace sys.argv temporarily
+        old_argv = sys.argv
+        sys.argv = argv
+        try:
+            discord_main()
+            return 0
+        except SystemExit as e:
+            return e.code if isinstance(e.code, int) else 0
+        finally:
+            sys.argv = old_argv
 
-    import asyncio
-    from src.meet.main import _run_meet_bot
-    from src.common.logging_utils import get_logger
+        argv = []
+        if args.input_device is not None:
+            argv += ["--mic", str(args.input_device)]
+        argv += ["--seconds", str(args.seconds)]
+        if args.sample_rate:
+            argv += ["--sample-rate", str(args.sample_rate)]
+        elif args.input_rate:
+            argv += ["--sample-rate", str(args.input_rate)]
+        if args.transcribe_model:
+            argv += ["--transcribe-model", args.transcribe_model]
+        if args.chat_model:
+            argv += ["--chat-model", args.chat_model]
+        argv += ["--src", args.src, "--tgt", args.tgt]
+        if args.pairs:
+            argv += ["--pairs", args.pairs]
+        argv += ["--meeting-mode", args.meeting_mode]
+        if args.show_input:
+            argv += ["--show-input"]
+        if args.debug:
+            argv += ["--debug"]
+        
+        return fallback_main(argv)
 
-    logger = get_logger("app")
-
-    profile_dir = args.profile_dir or str(Path.home() / ".brseai_profile")
-    args.profile_dir = profile_dir
-
-    join_mode = f"manual(timeout={args.manual_join_timeout}s)" if args.manual_join else "auto"
-    logger.info(
-        f"Mode: meet-bot | url={args.meeting_url} | profile={profile_dir} "
-        f"| src={args.src} tgt={args.tgt} | meeting_mode={args.meeting_mode} "
-        f"| join={join_mode}"
-    )
-
-    try:
-        asyncio.run(_run_meet_bot(args, api_key))
-    except KeyboardInterrupt:
-        print("\n[MeetBot] Interrupted.", flush=True)
-
-    return 0
+    print(f"Error: Unknown mode '{args.mode}'", file=sys.stderr)
+    return 1
 
 
 if __name__ == "__main__":

@@ -1,41 +1,25 @@
 """
 src/discord/main.py
-Discord voice interpreter bot entrypoint.
+Discord bot CLI entry point for realtime voice translation.
 
-Can be run directly:  python -m src.discord.main [flags]
-Or via app.py:        python app.py --mode discord [flags]
+Usage:
+    python -m src.discord.main --token <TOKEN> [options]
+    
+    # Or use environment variable:
+    export DISCORD_BOT_TOKEN=<your_token>
+    python -m src.discord.main [options]
 
-Prerequisites:
-  1. Create a Discord Application at https://discord.com/developers/applications
-  2. Create a Bot and copy the token
-  3. Enable these Privileged Gateway Intents:
-     - Message Content Intent
-     - Server Members Intent (optional)
-  4. Invite bot to your server with permissions:
-     - Connect, Speak, Use Voice Activity (voice)
-     - Send Messages, Read Message History (text)
-     Bot invite URL (replace CLIENT_ID):
-     https://discord.com/oauth2/authorize?client_id=CLIENT_ID&permissions=3214336&scope=bot
-  5. Install system dep:
-     - libopus: brew install opus (macOS) / apt install libopus0 (Linux)
-     (PyNaCl wheel bundles libsodium; FFmpeg is NOT required)
+Example:
+    python -m src.discord.main \\
+        --token abc123... \\
+        --voice-channel-id 123456789 \\
+        --text-channel-id 987654321 \\
+        --src auto --tgt en \\
+        --debug
 
-Environment:
-  DISCORD_BOT_TOKEN   Required. Your Discord bot token.
-  OPENAI_API_KEY      Required. Your OpenAI API key.
-
-Example run:
-  # Join a voice channel interactively via !join command
-  python -m src.discord.main
-
-  # Auto-join a specific voice channel on startup
-  python -m src.discord.main --voice-channel-id 123456789012345678
-
-  # With TTS speak-back disabled (text-only translation)
-  python -m src.discord.main --no-tts
-
-  # With specific language pair locked
-  python -m src.discord.main --src ja --tgt vi --meeting-mode locked
+Environment Variables:
+    DISCORD_BOT_TOKEN   Discord bot token (fallback for --token)
+    OPENAI_API_KEY      OpenAI API key (required)
 """
 from __future__ import annotations
 
@@ -45,174 +29,225 @@ import os
 import sys
 from pathlib import Path
 
-from src.common.lang import SUPPORTED_LANGS
+# Ensure project root is importable
+_PROJECT_ROOT = Path(__file__).resolve().parents[3]
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
+
+from dotenv import load_dotenv
+load_dotenv(_PROJECT_ROOT / ".env")
+
+from src.common.lang import parse_pairs, SUPPORTED_LANGS
 from src.common.logging_utils import get_logger
+from src.discord.bot import TranslationBot
 
 logger = get_logger("discord.main")
 
 
-def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    p = argparse.ArgumentParser(
+def build_parser() -> argparse.ArgumentParser:
+    """Build argument parser for Discord bot CLI."""
+    parser = argparse.ArgumentParser(
+        prog="python -m src.discord.main",
         description=(
-            "brseAI Discord interpreter bot — joins a voice channel and "
-            "translates speech in real time (Vietnamese / English / Japanese)."
+            "Discord Bot for Realtime Voice Translation\n\n"
+            "Joins Discord voice channels and provides live translation\n"
+            "from Vietnamese, English, and Japanese."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
 
-    # ---- Discord ----
-    p.add_argument(
+    # ---- Discord connection ----
+    parser.add_argument(
         "--token",
+        type=str,
         default=None,
         metavar="TOKEN",
-        help="Discord bot token. Default: read from DISCORD_BOT_TOKEN env var.",
+        help="Discord bot token (fallback: env DISCORD_BOT_TOKEN)",
     )
-    p.add_argument(
+    parser.add_argument(
         "--voice-channel-id",
         type=int,
         default=None,
         metavar="ID",
-        help="Auto-join this voice channel on startup. If omitted, use !join command.",
+        help="Auto-join this voice channel on startup (optional)",
     )
-    p.add_argument(
+    parser.add_argument(
         "--text-channel-id",
         type=int,
         default=None,
         metavar="ID",
-        help="Send translation text to this text channel. "
-             "Default: auto-detect from the guild.",
+        help="Send translation output to this text channel (optional)",
     )
 
-    # ---- Interpreter / language ----
-    p.add_argument(
-        "--model",
-        default=None,
-        help="Override OpenAI Realtime model ID.",
-    )
-    p.add_argument(
+    # ---- Language settings ----
+    parser.add_argument(
         "--src",
         default="auto",
-        choices=sorted(SUPPORTED_LANGS),
-        help="Source language (default: auto-detect).",
+        choices=list(SUPPORTED_LANGS),
+        help="Source language: auto (default), vi, en, ja",
     )
-    p.add_argument(
+    parser.add_argument(
         "--tgt",
         default="auto",
-        choices=sorted(SUPPORTED_LANGS),
-        help="Target language (default: auto-infer from source).",
+        choices=list(SUPPORTED_LANGS),
+        help="Target language: auto (default), vi, en, ja",
     )
-    p.add_argument(
+    parser.add_argument(
         "--pairs",
         default="",
         metavar="PAIRS",
-        help='Allowed translation pairs, e.g. "vi<->en,ja<->en".',
+        help='Allowed pairs, e.g. "vi<->en,ja<->en". Default: all',
     )
-    p.add_argument(
+    parser.add_argument(
         "--meeting-mode",
         default="locked",
         choices=["locked", "auto"],
-        help=(
-            "locked (default): fix language routing after first detection. "
-            "auto: re-detect dynamically."
-        ),
+        help="Meeting mode: locked (default) or auto",
     )
-    p.add_argument(
-        "--tts",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help="Enable TTS speak-back into voice channel. Default: ON. "
-             "Use --no-tts for text-only translation.",
-    )
-    p.add_argument(
-        "--show-input",
-        action="store_true",
-        help="Always print recognized input transcript.",
-    )
-    p.add_argument(
+
+    # ---- Debug ----
+    parser.add_argument(
         "--debug",
         action="store_true",
-        help="Verbose event + Discord.py logging.",
+        help="Enable debug logging",
     )
 
-    return p.parse_args(argv)
+    return parser
 
 
-def main(argv: list[str] | None = None) -> int:
-    args = parse_args(argv)
-
-    # Resolve bot token
-    token = args.token or os.environ.get("DISCORD_BOT_TOKEN", "")
-    if not token:
-        print(
-            "Error: Discord bot token is required.\n"
-            "  Set DISCORD_BOT_TOKEN environment variable, or pass --token <TOKEN>.\n"
-            "  Create a bot at https://discord.com/developers/applications",
-            file=sys.stderr,
+def validate_env(args: argparse.Namespace) -> tuple[str, str]:
+    """
+    Validate and return required environment variables.
+    
+    Returns:
+        Tuple of (discord_token, openai_api_key)
+    
+    Raises:
+        SystemExit if required variables are missing
+    """
+    # Discord token
+    discord_token = args.token or os.getenv("DISCORD_BOT_TOKEN")
+    if not discord_token:
+        logger.error(
+            "Discord bot token required. Provide via --token or DISCORD_BOT_TOKEN env variable."
         )
-        return 1
+        sys.exit(1)
 
-    # Resolve OpenAI API key
-    api_key = os.environ.get("OPENAI_API_KEY", "")
-    if not api_key:
-        print("Error: OPENAI_API_KEY is not set.", file=sys.stderr)
-        return 1
+    # OpenAI API key
+    openai_api_key = os.getenv("OPENAI_API_KEY")
+    if not openai_api_key:
+        logger.error("OPENAI_API_KEY environment variable is required.")
+        sys.exit(1)
 
-    # Check libopus availability
-    import ctypes.util
-    if not ctypes.util.find_library("opus"):
-        print(
-            "Warning: libopus not found. Discord voice will not work.\n"
-            "  Install: brew install opus (macOS) / apt install libopus0 (Linux)",
-            file=sys.stderr,
+    return discord_token, openai_api_key
+
+
+async def auto_join_voice_channel(bot: TranslationBot, channel_id: int) -> None:
+    """
+    Auto-join a voice channel after bot is ready.
+    
+    Args:
+        bot: The TranslationBot instance
+        channel_id: Discord voice channel ID to join
+    """
+    await bot.wait_until_ready()
+    
+    channel = bot.get_channel(channel_id)
+    if not channel:
+        logger.error(f"Voice channel {channel_id} not found")
+        return
+    
+    if not hasattr(channel, 'connect'):
+        logger.error(f"Channel {channel_id} is not a voice channel")
+        return
+    
+    try:
+        from discord.ext.voice_recv import VoiceRecvClient
+        from src.discord.audio import DiscordAudioInput
+        from src.discord.bot import AudioSink
+        
+        logger.info(f"Auto-joining voice channel: {channel.name} ({channel_id})")
+        
+        # Connect to voice channel
+        vc = await channel.connect(cls=VoiceRecvClient)
+        
+        # Create audio input adapter
+        bot.audio_input = DiscordAudioInput()
+        
+        # Create and configure realtime client
+        from src.realtime.client import RealtimeClient
+        bot.realtime_client = RealtimeClient(
+            api_key=bot.openai_api_key,
+            audio_input=bot.audio_input,
+            enable_speaker=False,
+            debug=bot.debug,
+            src_lang=bot.src_lang,
+            tgt_lang=bot.tgt_lang,
+            allowed_pairs=bot.allowed_pairs,
+            meeting_mode=bot.meeting_mode,
         )
+        
+        # Start receiving audio
+        sink = AudioSink(bot.audio_input, vc)
+        vc.listen(sink)
+        
+        # Start realtime client in background thread
+        import threading
+        bot.realtime_thread = threading.Thread(
+            target=bot.realtime_client.run,
+            daemon=True,
+        )
+        bot.realtime_thread.start()
+        
+        logger.info(f"Auto-join successful: {channel.name}")
+        
+        # Send notification to text channel if configured
+        if bot.translation_channel:
+            await bot.translation_channel.send(
+                f"🤖 Bot auto-joined voice channel: **{channel.name}**\n"
+                f"📥 Source: `{bot.src_lang}` → 📤 Target: `{bot.tgt_lang}`"
+            )
+    
+    except Exception as e:
+        logger.error(f"Failed to auto-join voice channel: {e}", exc_info=True)
 
-    from src.discord.bot import InterpreterBot
 
-    # Verbose voice logging only in --debug mode
-    if args.debug:
-        import logging
-        _voice_loggers = [
-            "discord.ext.voice_recv",
-            "discord.voice_state",
-            "discord.voice_client",
-            "discord.gateway",
-        ]
-        handler = logging.StreamHandler()
-        handler.setFormatter(logging.Formatter("%(asctime)s %(name)s %(levelname)s: %(message)s"))
-        for name in _voice_loggers:
-            lg = logging.getLogger(name)
-            lg.setLevel(logging.DEBUG)
-            if not lg.handlers:
-                lg.addHandler(handler)
+def main() -> None:
+    """Main entry point for Discord bot."""
+    parser = build_parser()
+    args = parser.parse_args()
 
-    bot = InterpreterBot(
-        openai_api_key=api_key,
-        model=args.model,
+    # Validate environment
+    discord_token, openai_api_key = validate_env(args)
+
+    # Parse allowed pairs
+    allowed_pairs = parse_pairs(args.pairs) if args.pairs else set()
+
+    # Create bot
+    bot = TranslationBot(
+        openai_api_key=openai_api_key,
+        text_channel_id=args.text_channel_id,
+        voice_channel_id=args.voice_channel_id,
         src_lang=args.src,
         tgt_lang=args.tgt,
-        pairs=args.pairs,
+        allowed_pairs=allowed_pairs,
         meeting_mode=args.meeting_mode,
-        enable_tts=args.tts,
-        show_input=args.show_input,
         debug=args.debug,
-        text_channel_id=args.text_channel_id,
-        auto_join_voice_channel_id=args.voice_channel_id,
     )
 
-    logger.info(
-        f"[DiscordBot] Starting | src={args.src} tgt={args.tgt} "
-        f"| mode={args.meeting_mode} | tts={'on' if args.tts else 'off'}"
-        + (f" | auto-join={args.voice_channel_id}" if args.voice_channel_id else "")
-    )
-
+    # Run bot
+    logger.info("Starting Discord bot...")
+    logger.info(f"Language: {args.src} -> {args.tgt} (mode: {args.meeting_mode})")
+    
     try:
-        bot.run(token, log_handler=None)  # log_handler=None: we use our own logger
+        bot.run(discord_token)
     except KeyboardInterrupt:
-        print("\n[DiscordBot] Interrupted.", flush=True)
-
-    return 0
+        logger.info("Bot stopped by user")
+    except Exception as e:
+        logger.error(f"Bot error: {e}", exc_info=True)
+        sys.exit(1)
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    main()

@@ -1,6 +1,6 @@
 # TASKS
 
-Implementation tracking aligned with current repository state.
+Implementation tracking for core brseAI interpreter.
 
 ## Completed
 
@@ -44,82 +44,35 @@ Implementation tracking aligned with current repository state.
 - [x] OpenAI transcription + chat translation flow implemented.
 - [x] CLI supports `--seconds`, model overrides, language flags.
 
-### TASK-06: Meet Bot Join Lifecycle
-**Status:** DONE (internal MVP)
+### TASK-06: Platform Code Cleanup
+**Status:** DONE (2026-03-09)
 **Acceptance criteria:**
-- [x] Persistent-profile Chromium launch implemented.
-- [x] Join button automation + retries implemented.
-- [x] Waiting-room detection and timeout implemented.
-- [x] Optional auto-leave timer implemented.
-
-### TASK-07: Meet Audio Adapters
-**Status:** DONE (internal MVP)
-**Acceptance criteria:**
-- [x] Loopback capture input adapter (`MeetAudioListenerInput`) implemented.
-- [x] Virtual mic output adapter (`MeetAudioMicOutput`) implemented.
-- [x] ScreenCaptureKit adapter (`SCKAudioInput`) present in code.
-- [x] Device listing helper for meet mode implemented.
-
-### TASK-08: Documentation Sync (current pass)
-**Status:** DONE
-**Acceptance criteria:**
-- [x] README updated with runnable commands and accurate defaults.
-- [x] Architecture/protocol/security docs updated to match code.
-- [x] State/tasks docs updated with implemented vs pending work.
+- [x] Google Meet and Discord platform-specific code removed.
+- [x] Dependencies cleaned (playwright, discord.py, PyNaCl, etc.).
+- [x] Documentation updated to reflect core-only focus.
+- [x] Tests cleaned and passing.
 
 ## Pending / Next
 
-### TASK-09: Meet CLI Unification and Stability Fixes
+### TASK-07: Cross-Platform Testing
 **Status:** TODO
 **Acceptance criteria:**
-- [ ] `app.py --mode meet-bot` and `src/meet/main.py` expose consistent flag surface.
-- [ ] Meet mode startup path works without attribute mismatches.
-- [ ] End-to-end smoke run succeeds for join + translate + clean shutdown.
-
-### TASK-10: Meet Speak-Back Validation
-**Status:** TODO
-**Acceptance criteria:**
-- [ ] `--meet-mic-device` route verified in real meeting conditions.
-- [ ] No local speaker leakage/feedback in speak-back mode.
-- [ ] Barge-in behavior validated while speak-back is active.
-
-### TASK-11: ScreenCaptureKit Hardening
-**Status:** TODO
-**Acceptance criteria:**
-- [ ] `--sck` capture path validated on supported macOS versions.
-- [ ] Error handling covers permission denial and capture startup failures.
-- [ ] Documentation includes tested setup and fallback guidance.
-
-### TASK-12: Reliability Test Matrix
-**Status:** TODO
-**Acceptance criteria:**
-- [ ] Smoke scripts cover realtime mic/device/fallback/meet modes.
+- [ ] Smoke scripts cover realtime mic/device/fallback modes.
 - [ ] Regression checklist executed for device index 0, sample-rate mismatch, reconnect behavior.
-- [ ] Failure-mode outcomes documented (join timeout, no audio, auth failure).
+- [ ] Failure-mode outcomes documented (no audio, auth failure).
+- [ ] Tests validated on macOS and Linux.
 
-### TASK-13: Privacy and Retention Controls
+### TASK-08: Error Handling Improvements
 **Status:** TODO
 **Acceptance criteria:**
-- [ ] Participant notice/consent process documented for meet sessions.
-- [ ] Retention policy for `recordings/` and transcripts approved.
-- [ ] Logging redaction policy enforced for sensitive text.
+- [ ] Graceful handling of OpenAI API errors.
+- [ ] Clear error messages for device access issues.
+- [ ] Reconnection logic for dropped WebSocket connections.
 
-### TASK-14: Discord Bot MVP
-**Status:** DONE
-**Acceptance criteria:**
-- [x] Discord bot joins/leaves voice channels via `!join`/`!leave` commands.
-- [x] Audio captured from voice channel via discord.py voice receive.
-- [x] Audio piped to RealtimeClient for real-time translation.
-- [x] Translated text posted to Discord text channel.
-- [x] TTS speak-back into voice channel supported.
-- [x] Auto-leave when all users leave the voice channel.
-- [x] CLI support via `python app.py --mode discord`.
-
-### TASK-15: Discord Bot Hardening
+### TASK-09: Performance Optimization
 **Status:** TODO
 **Acceptance criteria:**
-- [ ] Slash command support (`/join`, `/leave`, `/lang`) alongside prefix commands.
-- [ ] Translation text debouncing for high-frequency output.
-- [ ] Voice disconnect reconnection handling.
-- [ ] Multi-server concurrent session testing.
-- [ ] Rate limit handling for Discord API calls.
+- [ ] Audio buffer management optimized.
+- [ ] Memory usage profiled and optimized.
+- [ ] Latency measurements documented.
+

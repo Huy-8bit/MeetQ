@@ -1,563 +1,500 @@
 """
 src/discord/bot.py
-Discord bot that joins a voice channel, captures audio from participants,
-translates via OpenAI Realtime API, and optionally speaks translations back.
+Discord bot with voice channel integration and translation pipeline.
 
-Design:
-  - Uses discord.py with voice support (PyNaCl + libopus).
-  - Bot joins a voice channel via slash-command or auto-join on startup.
-  - Captures mixed audio from all speakers in the channel.
-  - Pipes audio through RealtimeClient for real-time translation.
-  - Translated text is posted to a designated text channel.
-  - Optionally, TTS audio is played back into the voice channel.
-  - Ctrl+C or !leave command stops the bot gracefully.
-
-Environment:
-  DISCORD_BOT_TOKEN   Required. Your Discord bot token.
-  OPENAI_API_KEY      Required. Your OpenAI API key.
-
-Usage (from discord entrypoint):
-    bot = InterpreterBot(
-        openai_api_key="sk-...",
-        src_lang="auto",
-        tgt_lang="auto",
-        meeting_mode="locked",
-        enable_tts=True,
-        debug=False,
-    )
-    bot.run(token)
+Provides:
+- Voice channel join/leave commands
+- Audio streaming from Discord to RealtimeClient
+- Translation output to Discord text channel
 """
 from __future__ import annotations
 
 import asyncio
-import time as _time_mod
+import io
+import sys
 import threading
+import traceback
+import wave
+from datetime import datetime
+from pathlib import Path
+from contextlib import redirect_stdout
 from typing import Optional
 
-try:
-    import discord
-    from discord.ext import commands
-except ImportError:
-    raise ImportError(
-        "discord.py[voice] is required.  Install with:\n"
-        "  pip install 'discord.py[voice]'"
-    )
+import discord
+from discord.ext import commands
+from discord.ext.voice_recv import VoiceRecvClient
+from discord.ext.voice_recv import BasicSink
 
-from src.common.lang import parse_pairs
 from src.common.logging_utils import get_logger, print_translation
+from src.discord.audio import DiscordAudioInput
+from src.discord.voice_patch import apply_voice_recv_patch
+from src.realtime.client import RealtimeClient
 
 logger = get_logger("discord.bot")
 
 
-# ---------------------------------------------------------------------------
-# Monkey-patch voice_recv to add DAVE E2E decryption.
-# discord-ext-voice-recv only does transport-layer decryption (NaCl).
-# Discord mandates DAVE E2EE, so after transport decrypt the opus data
-# is still DAVE-encrypted.  We inject a step in PacketDecoder._process_packet
-# to DAVE-decrypt before the Opus decoder sees the data.
-#
-# If the DAVE session isn't ready yet (MLS handshake in progress) or the
-# SSRC→user mapping is unknown, we SKIP the packet to avoid crashing the
-# Opus decoder on encrypted garbage.
-# ---------------------------------------------------------------------------
-def _patch_dave_decryption() -> None:
-    try:
-        from discord.ext.voice_recv.opus import PacketDecoder
-
-        _original_process = PacketDecoder._process_packet
-
-        def _dave_process_packet(self, packet):
-            """Patched: DAVE-decrypt packet.decrypted_data before opus decode."""
-            from discord.ext.voice_recv import VoiceData
-
-            if packet and packet.decrypted_data:
-                vc = self.sink.voice_client
-                conn = getattr(vc, '_connection', None)
-                dave_session = getattr(conn, 'dave_session', None) if conn else None
-                dave_active = getattr(conn, 'dave_protocol_version', 0) > 0 if conn else False
-
-                if dave_active:
-                    if not dave_session or not dave_session.ready:
-                        # DAVE negotiated but MLS handshake not done yet — skip
-                        if not getattr(self, '_dave_wait_logged', False):
-                            logger.debug(
-                                "[DAVE] Session not ready (ssrc %s, ready=%s)",
-                                self.ssrc,
-                                dave_session.ready if dave_session else 'no session',
-                            )
-                            self._dave_wait_logged = True
-                        return VoiceData(packet, self._get_cached_member(), pcm=None)
-
-                    # DAVE session ready — try to decrypt
-                    ssrc_map = getattr(vc, '_ssrc_to_id', {})
-                    user_id = ssrc_map.get(self.ssrc)
-                    if user_id is None:
-                        return VoiceData(packet, self._get_cached_member(), pcm=None)
-
-                    try:
-                        import davey
-                        decrypted = dave_session.decrypt(
-                            user_id, davey.MediaType.audio, packet.decrypted_data
-                        )
-                        # Log first successful decrypt for diagnostics
-                        if not getattr(self, '_dave_ok_logged', False):
-                            logger.info(
-                                "[DAVE] decrypt OK ssrc=%s raw=%d→dec=%d",
-                                self.ssrc,
-                                len(packet.decrypted_data),
-                                len(decrypted) if decrypted else 0,
-                            )
-                            self._dave_ok_logged = True
-                        packet.decrypted_data = decrypted
-                        self._dave_wait_logged = False
-                        # Reset error flag on success so future errors are logged
-                        self._dave_err_logged = False
-                    except Exception as e:
-                        cnt = getattr(self, '_dave_err_count', 0) + 1
-                        self._dave_err_count = cnt
-                        if not getattr(self, '_dave_err_logged', False):
-                            logger.warning("[DAVE] decrypt err ssrc=%s: %s", self.ssrc, e)
-                            self._dave_err_logged = True
-                        elif cnt % 500 == 0:
-                            logger.debug("[DAVE] %d packets skipped (decrypt failed)", cnt)
-                        return VoiceData(packet, self._get_cached_member(), pcm=None)
-
-            # Wrap original _process_packet to survive OpusError on bad data
-            try:
-                return _original_process(self, packet)
-            except Exception as e:
-                if not getattr(self, '_opus_err_logged', False):
-                    logger.warning("[DAVE] Opus decode error (ssrc=%s): %s", self.ssrc, e)
-                    self._opus_err_logged = True
-                return VoiceData(packet, self._get_cached_member(), pcm=None)
-
-        PacketDecoder._process_packet = _dave_process_packet
-        logger.debug("[Patch] voice_recv DAVE decryption injected into PacketDecoder._process_packet")
-    except ImportError as e:
-        logger.warning("[Patch] Failed to patch DAVE decryption: %s", e)
-
-_patch_dave_decryption()
-
-
-# ---------------------------------------------------------------------------
-# Monkey-patch UDPKeepAlive to work with discord.py 2.7.1
-# discord.py 2.7.1 connect()s the UDP socket so sendto() fails with
-# "OSError: [Errno 56] Socket is already connected". Use send() instead.
-# ---------------------------------------------------------------------------
-def _patch_udp_keepalive() -> None:
-    try:
-        from discord.ext.voice_recv.reader import UDPKeepAlive
-        import time
-
-        def _patched_run(self) -> None:
-            self.voice_client.wait_until_connected()
-            while not self._end_thread.is_set():
-                vc = self.voice_client
-                try:
-                    packet = self.counter.to_bytes(8, 'big')
-                except OverflowError:
-                    self.counter = 0
-                    continue
-                try:
-                    # Use send() instead of sendto() for connected sockets
-                    vc._connection.socket.send(packet)
-                except Exception:
-                    # On error, wait a bit before retrying (avoid tight loop)
-                    time.sleep(1)
-                    vc.wait_until_connected()
-                    if vc.is_connected():
-                        continue
-                    break
-                else:
-                    self.counter += 1
-                    time.sleep(self.delay / 1000)  # delay is in ms
-
-        UDPKeepAlive.run = _patched_run
-        logger.debug("[Patch] UDPKeepAlive.run patched for connected sockets")
-    except ImportError:
-        pass
-
-_patch_udp_keepalive()
-
-class InterpreterBot(commands.Bot):
+class AudioSinkCallback:
     """
-    Discord bot that joins voice channels and provides real-time
-    speech translation (Vietnamese / English / Japanese).
+    Callback handler for BasicSink to feed Discord voice data into DiscordAudioInput.
+    
+    BasicSink is more resilient to OpusError than custom AudioSink inheritance.
+    """
+
+    def __init__(self, audio_input: DiscordAudioInput, debug: bool = False) -> None:
+        self.audio_input = audio_input
+        self._packet_count = 0
+        self._error_count = 0
+        self._running = True
+        self._debug = debug
+        self._debug_file = None
+        
+        # Setup debug recording if enabled
+        if self._debug:
+            recordings_dir = Path("recordings")
+            recordings_dir.mkdir(exist_ok=True)
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            debug_path = recordings_dir / f"discord_audio_{timestamp}.wav"
+            self._debug_file = wave.open(str(debug_path), 'wb')
+            self._debug_file.setnchannels(2)  # Discord sends stereo
+            self._debug_file.setsampwidth(2)  # 16-bit PCM
+            self._debug_file.setframerate(48000)  # Discord uses 48kHz
+            logger.info(f"Debug recording to: {debug_path}")
+
+    def __call__(self, user: Optional[discord.User], data) -> None:
+        """
+        Called by BasicSink when audio packets arrive.
+        
+        Args:
+            user: Discord user who sent the audio (can be None)
+            data: VoiceData object containing PCM data
+        """
+        if not self._running:
+            return
+        
+        try:
+            # Extract PCM data from VoiceData
+            pcm_data = data.pcm
+            if pcm_data:
+                # Log first few packets for debugging
+                if self._packet_count < 5:
+                    logger.info(f"✅ Packet {self._packet_count}: user={user}, data_len={len(pcm_data)}")
+                
+                # Save to debug file if enabled
+                if self._debug and self._debug_file:
+                    self._debug_file.writeframes(pcm_data)
+                    self._debug_file._file.flush()  # Force flush to disk
+                
+                # Feed to translation pipeline
+                self.audio_input.feed_audio(pcm_data)
+                self._packet_count += 1
+                
+                # Log every 100 packets
+                if self._packet_count % 100 == 0:
+                    logger.info(f"Received {self._packet_count} audio packets")
+        except Exception as e:
+            self._error_count += 1
+            if self._error_count % 100 == 1:  # Log every 100th error to avoid spam
+                logger.warning(f"AudioSinkCallback error (count={self._error_count}): {e}")
+    
+    def cleanup(self) -> None:
+        """Called when stopping."""
+        if not self._running:
+            return
+        
+        self._running = False
+        logger.info(f"AudioSink cleanup: packets={self._packet_count} errors={self._error_count}")
+        
+        # Close debug file if open
+        if self._debug_file:
+            try:
+                self._debug_file.close()
+                logger.info("Debug recording saved")
+            except Exception as e:
+                logger.error(f"Error closing debug file: {e}")
+
+
+class TranslationBot(commands.Bot):
+    """
+    Discord bot that provides realtime voice translation.
+    
+    Commands:
+        !join  - Join the voice channel of the user who invoked the command
+        !leave - Leave voice channel and stop translation
+        !status - Display current status
     """
 
     def __init__(
         self,
+        *,
         openai_api_key: str,
-        model: Optional[str] = None,
+        text_channel_id: Optional[int] = None,
+        voice_channel_id: Optional[int] = None,
         src_lang: str = "auto",
         tgt_lang: str = "auto",
-        pairs: str = "",
+        allowed_pairs: set = None,
         meeting_mode: str = "locked",
-        enable_tts: bool = True,
-        show_input: bool = False,
         debug: bool = False,
-        text_channel_id: Optional[int] = None,
-        auto_join_voice_channel_id: Optional[int] = None,
+        **kwargs,
     ) -> None:
+        """
+        Initialize the translation bot.
+        
+        Args:
+            openai_api_key: OpenAI API key for RealtimeClient
+            text_channel_id: Discord text channel ID for translation output
+            voice_channel_id: Discord voice channel ID to auto-join on startup
+            src_lang: Source language (auto, vi, en, ja)
+            tgt_lang: Target language (auto, vi, en, ja)
+            allowed_pairs: Set of allowed language pairs
+            meeting_mode: "locked" or "auto" meeting mode
+            debug: Enable debug logging
+            **kwargs: Additional arguments for commands.Bot
+        """
         intents = discord.Intents.default()
         intents.message_content = True
         intents.voice_states = True
-        intents.guilds = True
-
-        super().__init__(
-            command_prefix="!",
-            intents=intents,
-            description="brseAI — Discord voice interpreter bot (VI/EN/JA)",
-        )
-
+        
+        kwargs.setdefault("command_prefix", "!")
+        kwargs.setdefault("intents", intents)
+        
+        super().__init__(**kwargs)
+        
+        # Apply voice_recv patch for OpusError resilience
+        apply_voice_recv_patch()
+        
         self.openai_api_key = openai_api_key
-        self.model = model
+        self.text_channel_id = text_channel_id
+        self.auto_join_channel_id = voice_channel_id
         self.src_lang = src_lang
         self.tgt_lang = tgt_lang
-        self.pairs = pairs
+        self.allowed_pairs = allowed_pairs or set()
         self.meeting_mode = meeting_mode
-        self.enable_tts = enable_tts
-        self.show_input = show_input
         self.debug = debug
-        self.text_channel_id = text_channel_id
-        self.auto_join_voice_channel_id = auto_join_voice_channel_id
-
-        # Runtime state
-        self._voice_client: Optional[discord.VoiceClient] = None
-        self._audio_input = None  # DiscordAudioInput
-        self._audio_output = None  # DiscordAudioOutput
-        self._audio_sink = None   # DiscordAudioSink — kept alive to prevent GC
-        self._realtime_client = None  # RealtimeClient
-        self._interpreter_task: Optional[asyncio.Task] = None
-        self._text_channel: Optional[discord.TextChannel] = None
-        self._join_timestamp: float = 0  # epoch when we last joined voice
-
-        # Register commands
+        
+        # Translation pipeline state
+        self.audio_input: Optional[DiscordAudioInput] = None
+        self.realtime_client: Optional[RealtimeClient] = None
+        self.realtime_thread: Optional[threading.Thread] = None
+        self.translation_channel: Optional[discord.TextChannel] = None
+        self._audio_sink_callback: Optional[AudioSinkCallback] = None  # Keep reference
+        self._audio_sink: Optional[BasicSink] = None  # Keep reference to prevent GC
+        
+        # Output redirection for capturing print_translation calls
+        self._original_print_translation = print_translation
+        self._install_translation_hook()
+        
+        # Register commands using decorator approach
         self._register_commands()
 
-    def _register_commands(self) -> None:
-        """Register bot text commands (!join, !leave, !status, !lang)."""
+    async def setup_hook(self) -> None:
+        """Called when the bot is starting up. Used for auto-joining voice channel."""
+        if self.auto_join_channel_id:
+            self.loop.create_task(self._auto_join())
 
-        @self.command(name="join", help="Join your current voice channel and start interpreting.")
-        async def cmd_join(ctx: commands.Context):
-            if ctx.author.voice is None or ctx.author.voice.channel is None:
-                await ctx.send("You need to be in a voice channel first.")
-                return
-            voice_channel = ctx.author.voice.channel
-            self._text_channel = ctx.channel
-            await self._join_and_start(voice_channel, ctx.channel)
-            await ctx.send(
-                f"Joined **{voice_channel.name}** — translating "
-                f"(src={self.src_lang}, tgt={self.tgt_lang}, mode={self.meeting_mode})"
+    async def _auto_join(self) -> None:
+        """Auto-join the configured voice channel after bot is ready."""
+        await self.wait_until_ready()
+        
+        channel = self.get_channel(self.auto_join_channel_id)
+        if not channel:
+            logger.error(f"Voice channel {self.auto_join_channel_id} not found")
+            return
+        
+        if not hasattr(channel, 'connect'):
+            logger.error(f"Channel {self.auto_join_channel_id} is not a voice channel")
+            return
+        
+        try:
+            from discord.ext.voice_recv import VoiceRecvClient
+            
+            logger.info(f"Auto-joining voice channel: {channel.name} ({self.auto_join_channel_id})")
+            
+            # Connect to voice channel
+            vc = await channel.connect(cls=VoiceRecvClient)
+            
+            # Create audio input adapter
+            self.audio_input = DiscordAudioInput()
+            
+            # Create and configure realtime client
+            self.realtime_client = RealtimeClient(
+                api_key=self.openai_api_key,
+                audio_input=self.audio_input,
+                enable_speaker=False,
+                debug=self.debug,
+                src_lang=self.src_lang,
+                tgt_lang=self.tgt_lang,
+                allowed_pairs=self.allowed_pairs,
+                meeting_mode=self.meeting_mode,
             )
-
-        @self.command(name="leave", help="Leave the voice channel and stop interpreting.")
-        async def cmd_leave(ctx: commands.Context):
-            await self._stop_and_leave()
-            await ctx.send("Left voice channel. Interpreter stopped.")
-
-        @self.command(name="status", help="Show current interpreter status.")
-        async def cmd_status(ctx: commands.Context):
-            if self._voice_client and self._voice_client.is_connected():
-                vc = self._voice_client.channel
-                stats = ""
-                if self._realtime_client:
-                    rc = self._realtime_client
-                    stats = (
-                        f"\nTranscripts: {rc._stat_transcripts} | "
-                        f"Translations: {rc._stat_translations} | "
-                        f"Audio chunks: {rc._stat_audio_chunks}"
-                    )
-                await ctx.send(
-                    f"Connected to **{vc.name}** | "
-                    f"src={self.src_lang} tgt={self.tgt_lang} | "
-                    f"mode={self.meeting_mode} | tts={'on' if self.enable_tts else 'off'}"
-                    f"{stats}"
+            
+            # Start receiving audio with BasicSink (more resilient to OpusError)
+            callback = AudioSinkCallback(self.audio_input, debug=self.debug)
+            sink = BasicSink(callback)
+            vc.listen(sink)
+            
+            # Keep strong references to prevent garbage collection
+            self._audio_sink_callback = callback
+            self._audio_sink = sink
+            
+            # Start realtime client in background thread
+            self.realtime_thread = threading.Thread(
+                target=self.realtime_client.run,
+                daemon=True,
+            )
+            self.realtime_thread.start()
+            
+            logger.info(f"Auto-join successful: {channel.name}")
+            
+            # Send notification to text channel if configured
+            if self.translation_channel:
+                await self.translation_channel.send(
+                    f"🤖 Bot auto-joined voice channel: **{channel.name}**\n"
+                    f"📥 Source: `{self.src_lang}` → 📤 Target: `{self.tgt_lang}`"
                 )
+        
+        except Exception as e:
+            logger.error(f"Failed to auto-join voice channel: {e}", exc_info=True)
+
+    def _register_commands(self) -> None:
+        """Register bot commands using the command decorator."""
+        @self.command(name="join")
+        async def join_cmd(ctx: commands.Context) -> None:
+            """Join voice channel."""
+            await self.join(ctx)
+        
+        @self.command(name="leave")
+        async def leave_cmd(ctx: commands.Context) -> None:
+            """Leave voice channel."""
+            await self.leave(ctx)
+        
+        @self.command(name="status")
+        async def status_cmd(ctx: commands.Context) -> None:
+            """Show status."""
+            await self.status(ctx)
+
+    def _install_translation_hook(self) -> None:
+        """
+        Install a hook to intercept print_translation calls and forward to Discord.
+        
+        This modifies the global print_translation function to also send output
+        to the configured Discord text channel.
+        """
+        import src.common.logging_utils as logging_utils
+        
+        original = logging_utils.print_translation
+        
+        def hooked_print_translation(text: str, end: str = "", flush: bool = True) -> None:
+            # Always call original to maintain stdout output
+            original(text, end=end, flush=flush)
+            
+            # Also send to Discord if we have a channel
+            if self.translation_channel and text.strip():
+                # Send complete lines to Discord to avoid spam
+                if end == "\n" or "\n" in text:
+                    asyncio.run_coroutine_threadsafe(
+                        self._send_translation(text),
+                        self.loop
+                    )
+        
+        logging_utils.print_translation = hooked_print_translation
+
+    def _restore_translation_hook(self) -> None:
+        """Restore the original print_translation function."""
+        import src.common.logging_utils as logging_utils
+        logging_utils.print_translation = self._original_print_translation
+
+    async def _send_translation(self, text: str) -> None:
+        """
+        Send translation text to Discord text channel.
+        
+        Handles message length limits and errors gracefully.
+        """
+        if not self.translation_channel:
+            return
+        
+        try:
+            # Discord has a 2000 character limit per message
+            if len(text) > 2000:
+                # Split into chunks
+                for i in range(0, len(text), 2000):
+                    await self.translation_channel.send(text[i:i+2000])
             else:
-                await ctx.send("Not connected to any voice channel. Use `!join`.")
-
-        @self.command(name="lang", help="Change language pair. Usage: !lang <src> <tgt>")
-        async def cmd_lang(ctx: commands.Context, src: str = "auto", tgt: str = "auto"):
-            valid = {"auto", "vi", "en", "ja"}
-            if src not in valid or tgt not in valid:
-                await ctx.send(f"Valid languages: {', '.join(sorted(valid))}")
-                return
-            self.src_lang = src
-            self.tgt_lang = tgt
-            await ctx.send(f"Language updated: src={src}, tgt={tgt}")
-            # If interpreter is running, it will pick up the change on next session.update
-
-    # ------------------------------------------------------------------
-    # Event handlers
-    # ------------------------------------------------------------------
+                await self.translation_channel.send(text)
+        except discord.HTTPException as e:
+            logger.warning(f"Failed to send translation to Discord: {e}")
+        except Exception as e:
+            logger.error(f"Unexpected error sending translation: {e}")
 
     async def on_ready(self) -> None:
-        logger.info(f"[DiscordBot] Logged in as {self.user} (id={self.user.id})")
-        print(f"[DiscordBot] Logged in as {self.user}", flush=True)
+        """Called when the bot is ready and connected to Discord."""
+        logger.info(f"Bot logged in as {self.user} (ID: {self.user.id})")
+        logger.info(f"Connected to {len(self.guilds)} guild(s)")
+        
+        # Resolve text channel if provided
+        if self.text_channel_id:
+            channel = self.get_channel(self.text_channel_id)
+            if isinstance(channel, discord.TextChannel):
+                self.translation_channel = channel
+                logger.info(f"Translation output -> #{channel.name} ({channel.id})")
+            else:
+                logger.warning(f"Channel {self.text_channel_id} not found or not a text channel")
 
-        # Auto-join voice channel if configured
-        if self.auto_join_voice_channel_id:
-            # Wait a moment for the gateway to stabilise before connecting voice
-            await asyncio.sleep(2)
-            try:
-                # fetch_channel is more reliable than get_channel (cache may be empty)
-                channel = self.get_channel(self.auto_join_voice_channel_id)
-                if channel is None:
-                    channel = await self.fetch_channel(self.auto_join_voice_channel_id)
-                if not isinstance(channel, discord.VoiceChannel):
-                    logger.warning(
-                        f"[DiscordBot] Channel {self.auto_join_voice_channel_id} "
-                        f"is {type(channel).__name__}, not a VoiceChannel."
-                    )
-                    return
-
-                # Find a text channel to post translations
-                text_ch = None
-                if self.text_channel_id:
-                    text_ch = self.get_channel(self.text_channel_id)
-                    if text_ch is None:
-                        text_ch = await self.fetch_channel(self.text_channel_id)
-                if text_ch is None:
-                    # Use the first text channel in the same guild
-                    for ch in channel.guild.text_channels:
-                        if ch.permissions_for(channel.guild.me).send_messages:
-                            text_ch = ch
-                            break
-                self._text_channel = text_ch
-                await self._join_and_start(channel, text_ch)
-                if text_ch:
-                    await text_ch.send(
-                        f"Auto-joined **{channel.name}** — translating "
-                        f"(src={self.src_lang}, tgt={self.tgt_lang})"
-                    )
-            except discord.NotFound:
-                logger.error(
-                    f"[DiscordBot] Voice channel {self.auto_join_voice_channel_id} not found."
-                )
-            except discord.Forbidden:
-                logger.error(
-                    f"[DiscordBot] No permission to access channel {self.auto_join_voice_channel_id}."
-                )
-            except Exception as exc:
-                logger.error(f"[DiscordBot] Auto-join failed: {exc}", exc_info=True)
-
-    async def on_voice_state_update(
-        self,
-        member: discord.Member,
-        before: discord.VoiceState,
-        after: discord.VoiceState,
-    ) -> None:
+    async def join(self, ctx: commands.Context) -> None:
         """
-        If the bot is the only one left in the voice channel, auto-leave
-        to save resources.
+        Join the voice channel of the user who invoked the command.
+        
+        Usage: !join
         """
-        if self._voice_client is None or not self._voice_client.is_connected():
+        # Check if user is in a voice channel
+        if not ctx.author.voice:
+            await ctx.send("❌ You must be in a voice channel to use this command.")
             return
-        # Ignore our own voice-state changes (e.g. bot joining triggers this)
-        if member.id == self.user.id:
+        
+        # Check if bot is already connected
+        if ctx.voice_client:
+            await ctx.send("⚠️ Already connected to a voice channel. Use !leave first.")
             return
-        # Grace period: don't auto-leave within 10s of joining (cache may be stale)
-        if _time_mod.time() - self._join_timestamp < 10:
-            return
-        vc_channel = self._voice_client.channel
-        # Check if the channel now has only the bot
-        members = [m for m in vc_channel.members if not m.bot]
-        if len(members) == 0:
-            logger.info("[DiscordBot] All users left the voice channel — auto-leaving.")
-            if self._text_channel:
-                try:
-                    await self._text_channel.send(
-                        "All users left the voice channel. Interpreter stopped."
-                    )
-                except Exception:
-                    pass
-            await self._stop_and_leave()
-
-    # ------------------------------------------------------------------
-    # Core: join, start interpreter, stop
-    # ------------------------------------------------------------------
-
-    async def _join_and_start(
-        self,
-        voice_channel: discord.VoiceChannel,
-        text_channel: Optional[discord.TextChannel] = None,
-    ) -> None:
-        """Join a voice channel and start the real-time interpreter pipeline."""
-        # Stop previous session if any (only if something is actually running)
-        if self._voice_client and self._voice_client.is_connected():
-            await self._stop_and_leave()
-
-        from src.discord.audio import DiscordAudioInput, DiscordAudioOutput, DiscordAudioSink
-        from src.realtime.client import DEFAULT_MODEL, RealtimeClient
-        from discord.ext.voice_recv import VoiceRecvClient
-
-        # Connect to voice using VoiceRecvClient (supports .listen())
-        # Retry a few times in case of transient gateway issues
-        for attempt in range(1, 4):
-            try:
-                self._voice_client = await voice_channel.connect(
-                    cls=VoiceRecvClient, self_deaf=False
-                )
-                break
-            except Exception as exc:
-                logger.warning(
-                    f"[DiscordBot] Voice connect attempt {attempt}/3 failed: {exc}"
-                )
-                if attempt == 3:
-                    raise
-                await asyncio.sleep(2 * attempt)
-
-        logger.info(f"[DiscordBot] Connected to voice: {voice_channel.name}")
-
-        self._join_timestamp = _time_mod.time()
-
-        # Create audio input
-        self._audio_input = DiscordAudioInput()
-        self._audio_input.start()
-
-        # Start listening to voice channel — keep reference to prevent GC
-        self._audio_sink = DiscordAudioSink(self._audio_input)
-        self._voice_client.listen(self._audio_sink)
-
-        # Create audio output (TTS back to voice channel)
-        if self.enable_tts:
-            self._audio_output = DiscordAudioOutput(self._voice_client)
-            self._audio_output.start()
-
-        # Build RealtimeClient
-        model = self.model or DEFAULT_MODEL
-        allowed_pairs = parse_pairs(self.pairs)
-
-        self._realtime_client = RealtimeClient(
-            api_key=self.openai_api_key,
-            model=model,
-            enable_speaker=self.enable_tts,
-            debug=self.debug,
-            src_lang=self.src_lang,
-            tgt_lang=self.tgt_lang,
-            allowed_pairs=allowed_pairs,
-            show_input=self.show_input,
-            meeting_mode=self.meeting_mode,
-            audio_input=self._audio_input,
-        )
-
-        # Patch player with Discord audio output
-        if self._audio_output is not None:
-            self._realtime_client._player = self._audio_output
-
-        # Optionally set up text channel forwarding
-        if text_channel:
-            self._text_channel = text_channel
-            self._setup_text_forwarding()
-
-        # Run interpreter as background task
-        self._interpreter_task = asyncio.create_task(self._run_interpreter())
-
-        print(
-            f"[DiscordBot] Interpreter started | channel={voice_channel.name}"
-            f" | src={self.src_lang} tgt={self.tgt_lang}"
-            f" | mode={self.meeting_mode} | tts={'on' if self.enable_tts else 'off'}",
-            flush=True,
-        )
-
-    def _setup_text_forwarding(self) -> None:
-        """
-        Monkeypatch print_translation to also send translations to
-        the Discord text channel.
-        """
-        from src.common import logging_utils
-
-        original_print = logging_utils.print_translation
-        self._original_print_translation = original_print
-        text_channel = self._text_channel
-        bot_loop = self.loop
-        self._translation_buffer = ""
-
-        def _forwarding_print(text: str, end: str = "", flush: bool = True) -> None:
-            # Call original
-            original_print(text, end=end, flush=flush)
-            # Accumulate translation text; send to Discord on newline
-            self._translation_buffer += text + end
-            if "\n" in self._translation_buffer:
-                lines = self._translation_buffer.split("\n")
-                for line in lines[:-1]:
-                    line = line.strip()
-                    if line and text_channel and not line.startswith("[You]"):
-                        # Remove [Interp] prefix for cleaner Discord output
-                        clean = line.replace("[Interp] ", "").replace("[Interp]", "").strip()
-                        if clean:
-                            asyncio.run_coroutine_threadsafe(
-                                text_channel.send(f"**[Translation]** {clean}"),
-                                bot_loop,
-                            )
-                self._translation_buffer = lines[-1]
-
-        logging_utils.print_translation = _forwarding_print
-
-    def _restore_print_translation(self) -> None:
-        """Restore original print_translation after stopping."""
-        from src.common import logging_utils
-        if hasattr(self, "_original_print_translation"):
-            logging_utils.print_translation = self._original_print_translation
-
-    async def _run_interpreter(self) -> None:
-        """Run the RealtimeClient in the bot async context."""
-        client = self._realtime_client
-        if client is None:
-            return
-        client._running = True
+        
+        voice_channel = ctx.author.voice.channel
+        
         try:
-            await client._run_with_retry()
-        except asyncio.CancelledError:
-            pass
-        except Exception as exc:
-            logger.error(f"[DiscordBot] Interpreter error: {exc}", exc_info=True)
-        finally:
-            client._running = False
-            if client._player:
-                client._player.stop()
+            await ctx.send(f"🎙️ Joining voice channel: **{voice_channel.name}**")
+            
+            # Connect to voice channel with voice_recv support
+            vc = await voice_channel.connect(cls=VoiceRecvClient)
+            
+            # Create audio input adapter
+            self.audio_input = DiscordAudioInput()
+            
+            # Create and configure realtime client
+            self.realtime_client = RealtimeClient(
+                api_key=self.openai_api_key,
+                audio_input=self.audio_input,
+                enable_speaker=False,  # Text-only translation this round
+                debug=self.debug,
+                src_lang=self.src_lang,
+                tgt_lang=self.tgt_lang,
+                allowed_pairs=self.allowed_pairs,
+                meeting_mode=self.meeting_mode,
+            )
+            
+            # Start receiving audio with BasicSink (more resilient to OpusError)
+            callback = AudioSinkCallback(self.audio_input, debug=self.debug)
+            sink = BasicSink(callback)
+            vc.listen(sink)
+            
+            # Keep strong references to prevent garbage collection
+            self._audio_sink_callback = callback
+            self._audio_sink = sink
+            
+            # Start realtime client in background thread
+            self.realtime_thread = threading.Thread(
+                target=self.realtime_client.run,
+                daemon=True,
+            )
+            self.realtime_thread.start()
+            
+            await ctx.send(
+                f"✅ Translation started!\n"
+                f"📥 Source: `{self.src_lang}` → 📤 Target: `{self.tgt_lang}`\n"
+                f"Mode: `{self.meeting_mode}`"
+            )
+            
+            logger.info(f"Started translation in {voice_channel.name} ({voice_channel.id})")
+        
+        except asyncio.TimeoutError:
+            await ctx.send("❌ Timeout connecting to voice channel. Please try again.")
+            logger.error(f"Timeout connecting to {voice_channel.name}")
+        
+        except Exception as e:
+            await ctx.send(f"❌ Error joining voice channel: {e}")
+            logger.error(f"Error joining voice channel: {e}", exc_info=True)
+            await self._cleanup()
 
-    async def _stop_and_leave(self) -> None:
-        """Stop the interpreter and disconnect from voice."""
-        # Cancel interpreter task
-        if self._interpreter_task and not self._interpreter_task.done():
-            self._interpreter_task.cancel()
-            try:
-                await self._interpreter_task
-            except asyncio.CancelledError:
-                pass
-            self._interpreter_task = None
+    async def leave(self, ctx: commands.Context) -> None:
+        """
+        Leave the current voice channel and stop translation.
+        
+        Usage: !leave
+        """
+        if not ctx.voice_client:
+            await ctx.send("⚠️ Not connected to any voice channel.")
+            return
+        
+        await ctx.send("👋 Leaving voice channel and stopping translation...")
+        
+        try:
+            # Stop voice connection
+            await ctx.voice_client.disconnect()
+            
+            # Clean up translation pipeline
+            await self._cleanup()
+            
+            await ctx.send("✅ Translation stopped.")
+            logger.info("Left voice channel and stopped translation")
+        
+        except Exception as e:
+            await ctx.send(f"❌ Error during cleanup: {e}")
+            logger.error(f"Error during leave: {e}", exc_info=True)
 
-        # Stop RealtimeClient
-        if self._realtime_client:
-            self._realtime_client._running = False
-            self._realtime_client = None
+    async def status(self, ctx: commands.Context) -> None:
+        """
+        Display current bot status.
+        
+        Usage: !status
+        """
+        if not ctx.voice_client:
+            await ctx.send("📊 **Status**: Not connected to any voice channel.")
+            return
+        
+        vc = ctx.voice_client
+        channel_name = vc.channel.name if vc.channel else "Unknown"
+        
+        status_lines = [
+            "📊 **Translation Bot Status**",
+            f"🎙️ Voice Channel: **{channel_name}**",
+            f"📥 Source Language: `{self.src_lang}`",
+            f"📤 Target Language: `{self.tgt_lang}`",
+            f"🔧 Meeting Mode: `{self.meeting_mode}`",
+            f"🐛 Debug: `{self.debug}`",
+        ]
+        
+        if self.translation_channel:
+            status_lines.append(f"💬 Text Output: #{self.translation_channel.name}")
+        
+        if self.realtime_client:
+            status_lines.append(f"✅ Translation Pipeline: Active")
+        else:
+            status_lines.append(f"❌ Translation Pipeline: Inactive")
+        
+        await ctx.send("\n".join(status_lines))
 
-        # Stop audio output
-        if self._audio_output:
-            self._audio_output.stop()
-            self._audio_output = None
-
+    async def _cleanup(self) -> None:
+        """Clean up translation pipeline resources."""
+        # Stop realtime client
+        if self.realtime_client:
+            self.realtime_client._running = False
+            self.realtime_client = None
+        
         # Stop audio input
-        if self._audio_input:
-            self._audio_input.stop()
-            self._audio_input = None
+        if self.audio_input:
+            self.audio_input.stop()
+            self.audio_input = None
+        
+        # Wait for thread to finish
+        if self.realtime_thread and self.realtime_thread.is_alive():
+            self.realtime_thread.join(timeout=2.0)
+            self.realtime_thread = None
 
-        # Release sink reference
-        self._audio_sink = None
-
-        # Disconnect from voice
-        if self._voice_client and self._voice_client.is_connected():
-            # Stop listening first
-            try:
-                self._voice_client.stop_listening()
-            except Exception:
-                pass
-            await self._voice_client.disconnect()
-            self._voice_client = None
-
-        # Restore print_translation
-        self._restore_print_translation()
-
-        logger.info("[DiscordBot] Stopped and disconnected.")
+    async def close(self) -> None:
+        """Clean up resources when bot is shutting down."""
+        logger.info("Bot shutting down...")
+        
+        # Restore original print_translation
+        self._restore_translation_hook()
+        
+        # Clean up translation pipeline
+        await self._cleanup()
+        
+        # Call parent close
+        await super().close()
