@@ -67,7 +67,7 @@ ROOM_EMPTY_GRACE_SECONDS=30
 ROOM_MAX_PARTICIPANTS=8
 LIVEKIT_API_KEY=devkey
 LIVEKIT_API_SECRET=secret
-LIVEKIT_WS_URL_PUBLIC=ws://18.142.51.37:7880
+LIVEKIT_WS_URL_PUBLIC=ws://localhost:7880
 LIVEKIT_WS_URL_INTERNAL=ws://livekit:7880
 PUBLIC_BASE_URL=http://localhost:8000
 SUPPORTED_LANGUAGES=vi,en,ja
@@ -449,7 +449,7 @@ Sinh participant session, room JWT, LiveKit token, và snapshot ban đầu.
     "url": "ws://localhost:8000/ws/rooms/rm_8f3k2v1m?token=<gateway-room-jwt>"
   },
   "livekit": {
-    "url": "ws://18.142.51.37:7880",
+    "url": "ws://localhost:7880",
     "room_name": "rm_8f3k2v1m",
     "participant_identity": "pt_01hs8x4e3m",
     "participant_name": "Huy",

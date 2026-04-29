@@ -25,7 +25,7 @@ Hai package này là maintained successor phù hợp với yêu cầu backend pa
 ```text
 LIVEKIT_API_KEY=devkey
 LIVEKIT_API_SECRET=secret
-LIVEKIT_WS_URL_PUBLIC=ws://18.142.51.37:7880
+LIVEKIT_WS_URL_PUBLIC=ws://localhost:7880
 LIVEKIT_WS_URL_INTERNAL=ws://livekit:7880
 ```
 
@@ -66,7 +66,7 @@ services:
       REDIS_URL: redis://redis:6379/0
       LIVEKIT_API_KEY: devkey
       LIVEKIT_API_SECRET: secret
-      LIVEKIT_WS_URL_PUBLIC: ws://18.142.51.37:7880
+      LIVEKIT_WS_URL_PUBLIC: ws://localhost:7880
       LIVEKIT_WS_URL_INTERNAL: ws://livekit:7880
     ports:
       - "8000:8000"

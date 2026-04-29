@@ -13,7 +13,7 @@ Base assumptions:
 
 - REST base URL local dev: `http://localhost:8000`
 - Gateway WS base URL local dev: `ws://localhost:8000`
-- LiveKit WS URL local dev: `ws://18.142.51.37:7880`
+- LiveKit WS URL local dev: `ws://localhost:7880`
 - Supported languages: `vi`, `en`, `ja`
 
 ## Conventions
@@ -288,7 +288,7 @@ Join room và nhận đủ credentials cho Gateway WS + LiveKit.
     "url": "ws://localhost:8000/ws/rooms/rm_8f3k2v1m?token=<gateway-room-jwt>"
   },
   "livekit": {
-    "url": "ws://18.142.51.37:7880",
+    "url": "ws://localhost:7880",
     "room_name": "rm_8f3k2v1m",
     "participant_identity": "pt_01hs8x4e3m",
     "participant_name": "Huy",

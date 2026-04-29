@@ -35,6 +35,8 @@ export async function connectLiveKit(room: Room, url: string, token: string) {
 }
 
 export async function publishLocalMedia(room: Room): Promise<LocalTrack[]> {
+  assertMediaDevicesSupported();
+
   const tracks = await createLocalTracks({
     audio: true,
     video: true,
@@ -45,6 +47,30 @@ export async function publishLocalMedia(room: Room): Promise<LocalTrack[]> {
   );
 
   return tracks;
+}
+
+function assertMediaDevicesSupported(): void {
+  const hasMediaDevices =
+    typeof navigator !== "undefined" &&
+    !!navigator.mediaDevices &&
+    typeof navigator.mediaDevices.getUserMedia === "function";
+
+  if (hasMediaDevices) {
+    return;
+  }
+
+  const isSecureContextValue =
+    typeof window !== "undefined" ? window.isSecureContext : false;
+
+  if (!isSecureContextValue) {
+    throw new Error(
+      "Microphone/camera is unavailable in insecure context. Use HTTPS (or localhost) for this web app.",
+    );
+  }
+
+  throw new Error(
+    "This browser/environment does not support navigator.mediaDevices.getUserMedia.",
+  );
 }
 
 export function disconnectRoom(room: Room | null): void {
