@@ -6,7 +6,7 @@ import type {
   RoomSnapshotResponse,
 } from "../types/api";
 
-const DEFAULT_API_BASE_URL = "http://localhost:8000";
+const DEFAULT_API_BASE_URL = "http://18.142.51.37:8000";
 
 export class ApiError extends Error {
   code: string;
