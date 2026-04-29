@@ -16,8 +16,8 @@ def fake_settings() -> Settings:
     os.environ["REDIS_URL"] = "redis://localhost:6379"
     os.environ["LIVEKIT_API_KEY"] = "test-lk-key"
     os.environ["LIVEKIT_API_SECRET"] = "test-lk-secret"
-    os.environ["LIVEKIT_WS_URL_PUBLIC"] = "ws://localhost:7880"
-    os.environ["LIVEKIT_WS_URL_INTERNAL"] = "ws://localhost:7880"
+    os.environ["LIVEKIT_WS_URL_PUBLIC"] = "ws://18.142.51.37:7880"
+    os.environ["LIVEKIT_WS_URL_INTERNAL"] = "ws://18.142.51.37:7880"
     return Settings()
 
 class FakePipeline:

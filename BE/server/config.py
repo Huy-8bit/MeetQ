@@ -14,8 +14,8 @@ class Settings(BaseSettings):
     # LiveKit
     livekit_api_key: str
     livekit_api_secret: str
-    livekit_ws_url_public: str = "ws://localhost:7880"
-    livekit_ws_url_internal: str = "ws://localhost:7880"
+    livekit_ws_url_public: str = "ws://18.142.51.37:7880"
+    livekit_ws_url_internal: str = "ws://18.142.51.37:7880"
     realtime_input_sample_rate: int = 16000
     realtime_output_sample_rate: int = 24000
     
