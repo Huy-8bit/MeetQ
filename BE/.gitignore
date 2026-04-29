@@ -1,0 +1,11 @@
+.env
+.env.*
+.venv
+.claude
+__pycache__
+.pytest_cache/
+*.pyc
+logs/*
+!logs/.gitkeep
+recordings/*
+!recordings/.gitkeep

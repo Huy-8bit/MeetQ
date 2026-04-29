@@ -1,69 +1,108 @@
-# Security Notes
+# Security
 
-## Secret Handling
+---
 
-### API key source
+## API Keys và Secrets
 
-- Runtime requires `OPENAI_API_KEY`.
-- `app.py` loads `.env` from repo root via `python-dotenv`, then reads env var.
-- Do not commit real keys; keep `.env` local and `.gitignore`-protected.
+### Nguyên tắc
 
-### Other env keys in `.env.example`
+- `OPENAI_API_KEY` là secret duy nhất cần thiết cho CLI engine hiện tại.
+- Platform sẽ cần thêm: `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET`, `REDIS_URL`.
+- Không bao giờ commit key thật vào git. `.env` đã có trong `.gitignore`.
+- Dùng `.env.example` làm template — chỉ chứa key names, không có giá trị thật.
 
-`.env.example` includes additional values (`OPENAI_REALTIME_MODEL`, `OPENAI_TRANSCRIBE_MODEL`, etc.), but current Python runtime primarily consumes `OPENAI_API_KEY`.
+### Lưu trữ
 
-## Data Handling
+| Môi trường | Cách lưu |
+| --- | --- |
+| Local dev | File `.env` local |
+| Production | Environment variables qua secrets manager (AWS Secrets Manager, Doppler, v.v.) |
+| CI/CD | GitHub Actions secrets |
 
-### Realtime mode
+---
 
-- Audio is streamed in-memory to Realtime WS (`input_audio_buffer.append`).
-- No raw realtime audio files are intentionally persisted by current code.
+## Xác thực phòng họp
 
-### Fallback mode
+### Room token (MVP)
 
-- Raw clip is always saved to `recordings/clip_<timestamp>.wav` before transcription.
-- Transcript and translation are sent to OpenAI APIs.
-- Treat `recordings/` as sensitive data storage.
+- Khi join phòng, Gateway sinh một short-lived JWT token (TTL 24h).
+- Token mã hóa: `room_id`, `participant_id`, `issued_at`.
+- LiveKit token được sinh riêng từ `LIVEKIT_API_KEY` + `LIVEKIT_API_SECRET` — chỉ cấp quyền publish/subscribe cho room cụ thể.
+- Token **không được lưu phía client** vào localStorage — chỉ dùng trong memory cho session hiện tại.
 
-## Logging Behavior
+### Room ID
 
-### Where logs go
+- Room ID sinh ngẫu nhiên (UUID v4 hoặc short slug), không predictable.
+- Không có danh sách phòng công khai — chỉ ai có link mới vào được.
 
-- `get_logger()` writes operational logs to stderr.
-- File logging (`logs/<name>.log`) exists in utility code but is not enabled by default in current runners.
+---
 
-### What is logged today
+## Dữ liệu âm thanh
 
-- Session lifecycle and event types.
-- In some flows, transcript/translation text is logged (`fallback.pipeline`, realtime `response.text.done`).
-- Errors/exceptions may include context text.
+### CLI engine (hiện tại)
 
-### Redaction guidance
+- Realtime mode: audio stream in-memory qua WebSocket đến OpenAI. Không lưu file.
+- Fallback mode: WAV clip lưu vào `recordings/clip_<timestamp>.wav` trước khi transcribe. Coi `recordings/` là dữ liệu nhạy cảm.
 
-- Never log API keys or auth headers.
-- Avoid logging full transcript content in production contexts.
-- If file logging is enabled in future, apply redaction filters before persistence.
+### Platform (tương lai)
 
-## Transport and Network
+- Audio của participant **không được lưu** trên server trừ khi có tính năng recording được bật tường minh.
+- Audio stream từ SFU đến Interpreter Service chỉ tồn tại trong memory (buffer để xử lý), không persist.
+- Transcript text có thể lưu tạm trong Redis để hiển thị lại khi participant reconnect — TTL 24h, sau đó tự xóa.
 
-- Realtime uses TLS WebSocket endpoint `wss://api.openai.com/v1/realtime`.
-- Authentication errors (`authentication_error`, `invalid_api_key`) terminate session.
-- Restrict outbound network paths where possible to required OpenAI endpoints.
+---
 
-## Privacy Considerations
+## Transport
 
-- Audio capture should be treated as recording/transcription activity.
-- Minimum requirements before external use:
-  - explicit participant notice and consent
-  - approved data retention/deletion policy
-  - access controls for any saved artifacts
-  - legal/compliance approval for automation path
+| Kết nối | Protocol | Ghi chú |
+| --- | --- | --- |
+| Browser ↔ Gateway | HTTPS / WSS (TLS) | Bắt buộc trong production |
+| Browser ↔ SFU | WebRTC (DTLS-SRTP) | Mã hóa audio/video end-to-end ở transport layer |
+| Interpreter ↔ OpenAI | WSS | `wss://api.openai.com/v1/realtime` |
+| Interpreter ↔ SFU | Internal (Docker network) | Không expose ra ngoài |
 
-## Operational Recommendations
+### Lưu ý WebRTC
 
-1. Store `OPENAI_API_KEY` in a secrets manager or local secure env, not in code.
-2. Limit and rotate keys used for demos.
-3. Restrict permissions on `recordings/` directory.
-4. Add transcript redaction before any persistent logging.
-5. Define retention windows and deletion workflows before pilot rollout.
+WebRTC DTLS-SRTP mã hóa media stream giữa browser và SFU — SFU giải mã để forward, không phải E2E encryption toàn đường. Đây là trade-off cần thiết để Interpreter Service có thể đọc audio.
 
+---
+
+## Logging
+
+### Hiện tại (CLI)
+
+- Operational log → stderr qua `logging` module.
+- File logging không bật mặc định.
+- Translation text và transcript có thể xuất hiện trong log ở một số flow (fallback pipeline, `response.text.done`).
+
+### Platform
+
+- Không log nội dung transcript vào file log production.
+- Log chỉ chứa metadata: `room_id`, `participant_id`, event type, latency, error codes.
+- Nếu cần debug transcript: dùng flag tường minh `DEBUG_LOG_TRANSCRIPT=true`, chỉ trong môi trường dev có kiểm soát.
+- Không bao giờ log API key, auth header, hay LiveKit token.
+
+---
+
+## Privacy
+
+### Yêu cầu tối thiểu trước khi dùng trong môi trường thật
+
+- [ ] Thông báo rõ ràng cho participant rằng âm thanh được xử lý bởi AI (OpenAI API).
+- [ ] Chính sách lưu trữ và xóa dữ liệu được định nghĩa.
+- [ ] Không ghi âm tự động — recording phải là opt-in tường minh.
+- [ ] Tuân thủ quy định địa phương về ghi âm cuộc trò chuyện (GDPR, PDPA, v.v.) nếu deploy ra ngoài.
+
+### Dữ liệu gửi lên OpenAI
+
+Mỗi utterance được gửi tới OpenAI Realtime API để transcribe và dịch. Tham khảo [OpenAI Privacy Policy](https://openai.com/policies/privacy-policy) để biết chi tiết về cách OpenAI xử lý dữ liệu audio.
+
+---
+
+## Khuyến nghị vận hành
+
+1. Rotate `OPENAI_API_KEY` định kỳ hoặc sau mỗi demo có người ngoài.
+2. Giới hạn quyền API key (nếu OpenAI hỗ trợ) chỉ cho Realtime API và Audio API.
+3. Đặt quota alert trên OpenAI dashboard để tránh overspend.
+4. Trong production: restrict outbound từ Interpreter Service chỉ đến `api.openai.com` và LiveKit server.
+5. Set `recordings/` permission `700` nếu fallback mode được dùng.
