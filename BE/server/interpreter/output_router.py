@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import base64
 import logging
-from typing import Dict, Optional, Set
+from dataclasses import dataclass, field
+from typing import Callable, Dict, Optional, Set
 
 import livekit.rtc as rtc
 
@@ -14,6 +15,17 @@ _CHANNELS = 1
 _BYTES_PER_SAMPLE = 2
 
 
+@dataclass
+class _ListenerTrackState:
+    listener_id: str
+    target_lang: str
+    source: rtc.AudioSource
+    track_name: str
+    track_sid: Optional[str] = None
+    buffer: bytearray = field(default_factory=bytearray)
+    active: bool = True
+
+
 class OutputRouter:
     def __init__(
         self,
@@ -22,128 +34,193 @@ class OutputRouter:
         src_lang: str,
         *,
         output_sample_rate: int = 24000,
+        on_track_failure: Optional[Callable[[str, str, str], None]] = None,
     ) -> None:
         self.room = room
         self.speaker_id = speaker_id
         self.src_lang = src_lang
         self.output_sample_rate = output_sample_rate
         self._frame_bytes = int(output_sample_rate * _FRAME_MS / 1000) * _BYTES_PER_SAMPLE
-        self.sources: Dict[str, rtc.AudioSource] = {}
-        self.track_sids: Dict[str, str] = {}
-        self.track_names: Dict[str, str] = {}
-        self.listener_languages: Dict[str, str] = {}
-        self.buffers: Dict[str, bytearray] = {}
+        self._states: Dict[str, _ListenerTrackState] = {}
+        self._closed = False
+        self._on_track_failure = on_track_failure
+
+    @property
+    def listener_languages(self) -> Dict[str, str]:
+        return {
+            listener_id: state.target_lang
+            for listener_id, state in self._states.items()
+            if state.active
+        }
 
     def audio_track_name(self, listener_id: str) -> Optional[str]:
-        return self.track_names.get(listener_id)
+        state = self._states.get(listener_id)
+        if state is None or not state.active or not state.track_sid:
+            return None
+        return state.track_name
 
     def listener_ids_for_language(self, tgt_lang: str) -> Set[str]:
         return {
             listener_id
-            for listener_id, listener_lang in self.listener_languages.items()
-            if listener_lang == tgt_lang
+            for listener_id, state in self._states.items()
+            if state.active and state.target_lang == tgt_lang
         }
 
     async def ensure_listener(self, listener_id: str, tgt_lang: str) -> None:
-        current_lang = self.listener_languages.get(listener_id)
-        if current_lang == tgt_lang and listener_id in self.sources:
+        if self._closed:
             return
 
-        if current_lang is not None:
+        current = self._states.get(listener_id)
+        if (
+            current is not None
+            and current.active
+            and current.target_lang == tgt_lang
+            and current.track_sid
+        ):
+            return
+
+        if current is not None:
             await self.remove_listener(listener_id)
 
-        source = rtc.AudioSource(self.output_sample_rate, _CHANNELS, queue_size_ms=1500)
-        track_name = self._build_track_name(listener_id, tgt_lang)
-        track = rtc.LocalAudioTrack.create_audio_track(track_name, source)
+        state = _ListenerTrackState(
+            listener_id=listener_id,
+            target_lang=tgt_lang,
+            source=rtc.AudioSource(self.output_sample_rate, _CHANNELS, queue_size_ms=1500),
+            track_name=self._build_track_name(listener_id, tgt_lang),
+        )
+        self._states[listener_id] = state
 
-        self.listener_languages[listener_id] = tgt_lang
-        self.sources[listener_id] = source
-        self.track_names[listener_id] = track_name
-        self.buffers[listener_id] = bytearray()
+        if not self._room_is_connected():
+            self._notify_track_failure(
+                listener_id,
+                tgt_lang,
+                "LiveKit room is not connected; interpreter track cannot be published yet.",
+            )
+            return
 
+        track = rtc.LocalAudioTrack.create_audio_track(state.track_name, state.source)
         try:
             publication = await self.room.local_participant.publish_track(track)
-            self.track_sids[listener_id] = publication.sid
-            self._update_permissions()
-        except Exception:
+        except Exception as exc:
             logger.exception(
                 "Failed to publish interpreter track for %s -> %s",
                 self.speaker_id,
                 listener_id,
             )
+            if self._states.get(listener_id) is state:
+                self._states.pop(listener_id, None)
+            state.active = False
+            self._notify_track_failure(
+                listener_id,
+                tgt_lang,
+                f"Failed to publish interpreter audio track: {exc}",
+            )
+            return
+
+        if self._states.get(listener_id) is not state or not state.active:
+            try:
+                await self.room.local_participant.unpublish_track(publication.sid)
+            except Exception:
+                logger.exception(
+                    "Failed to unpublish stale interpreter track for %s -> %s",
+                    self.speaker_id,
+                    listener_id,
+                )
+            return
+
+        state.track_sid = publication.sid
+        self._update_permissions()
 
     async def remove_listener(self, listener_id: str) -> None:
-        self.clear_queues({listener_id})
-        self.listener_languages.pop(listener_id, None)
-        self.buffers.pop(listener_id, None)
-        self.track_names.pop(listener_id, None)
-        self.sources.pop(listener_id, None)
+        state = self._states.pop(listener_id, None)
+        if state is None:
+            return
 
-        track_sid = self.track_sids.pop(listener_id, None)
-        if track_sid:
+        state.active = False
+        state.buffer.clear()
+        try:
+            state.source.clear_queue()
+        except Exception:
+            logger.exception(
+                "Failed to clear interpreter audio queue for %s -> %s",
+                self.speaker_id,
+                listener_id,
+            )
+
+        if state.track_sid and self._room_is_connected():
             try:
-                await self.room.local_participant.unpublish_track(track_sid)
+                await self.room.local_participant.unpublish_track(state.track_sid)
             except Exception:
                 logger.exception(
                     "Failed to unpublish interpreter track for %s -> %s",
                     self.speaker_id,
                     listener_id,
                 )
+
         self._update_permissions()
 
-    async def capture_base64_audio(self, tgt_lang: str, encoded_chunk: str) -> None:
-        await self.capture_pcm(tgt_lang, base64.b64decode(encoded_chunk))
+    async def capture_base64_audio(self, tgt_lang: str, encoded_chunk: str) -> bool:
+        return await self.capture_pcm(tgt_lang, base64.b64decode(encoded_chunk))
 
-    async def capture_pcm(self, tgt_lang: str, pcm_bytes: bytes) -> None:
+    async def capture_pcm(self, tgt_lang: str, pcm_bytes: bytes) -> bool:
         listener_ids = self.listener_ids_for_language(tgt_lang)
         if not listener_ids:
-            return
+            return True
 
+        ok = True
         for listener_id in listener_ids:
-            buffer = self.buffers.setdefault(listener_id, bytearray())
-            buffer.extend(pcm_bytes)
-            await self._publish_buffered_frames(listener_id, flush=False)
+            state = self._states.get(listener_id)
+            if state is None or not state.active:
+                continue
+            state.buffer.extend(pcm_bytes)
+            ok = await self._publish_buffered_frames(listener_id, flush=False) and ok
+        return ok
 
-    async def flush(self, tgt_lang: Optional[str] = None) -> None:
+    async def flush(self, tgt_lang: Optional[str] = None) -> bool:
         listener_ids = (
             self.listener_ids_for_language(tgt_lang)
             if tgt_lang is not None
-            else set(self.sources.keys())
+            else set(self._states.keys())
         )
+        ok = True
         for listener_id in listener_ids:
-            await self._publish_buffered_frames(listener_id, flush=True)
+            ok = await self._publish_buffered_frames(listener_id, flush=True) and ok
+        return ok
 
     def clear_queues(self, listener_ids: Optional[Set[str]] = None) -> None:
-        target_ids = listener_ids or set(self.sources.keys())
+        target_ids = listener_ids or set(self._states.keys())
         for listener_id in target_ids:
-            buffer = self.buffers.get(listener_id)
-            if buffer is not None:
-                buffer.clear()
-
-            source = self.sources.get(listener_id)
-            if source is not None:
-                try:
-                    source.clear_queue()
-                except Exception:
-                    logger.exception(
-                        "Failed to clear interpreter audio queue for %s -> %s",
-                        self.speaker_id,
-                        listener_id,
-                    )
+            state = self._states.get(listener_id)
+            if state is None:
+                continue
+            state.buffer.clear()
+            try:
+                state.source.clear_queue()
+            except Exception:
+                logger.exception(
+                    "Failed to clear interpreter audio queue for %s -> %s",
+                    self.speaker_id,
+                    listener_id,
+                )
 
     async def shutdown(self) -> None:
-        for listener_id in list(self.listener_languages.keys()):
+        self._closed = True
+        for listener_id in list(self._states.keys()):
             await self.remove_listener(listener_id)
-        self.clear_queues()
 
     def _update_permissions(self) -> None:
+        if not self._room_is_connected():
+            return
+
         permissions = []
-        for listener_id, track_sid in self.track_sids.items():
+        for state in self._states.values():
+            if not state.active or not state.track_sid:
+                continue
             permissions.append(
                 rtc.ParticipantTrackPermission(
-                    participant_identity=listener_id,
+                    participant_identity=state.listener_id,
                     allow_all=False,
-                    allowed_track_sids=[track_sid],
+                    allowed_track_sids=[state.track_sid],
                 )
             )
 
@@ -158,29 +235,39 @@ class OutputRouter:
     def _build_track_name(self, listener_id: str, tgt_lang: str) -> str:
         return f"interp::{self.speaker_id}::{listener_id}::{self.src_lang}::{tgt_lang}"
 
-    async def _publish_buffered_frames(self, listener_id: str, *, flush: bool) -> None:
-        source = self.sources.get(listener_id)
-        if source is None:
-            return
+    async def _publish_buffered_frames(self, listener_id: str, *, flush: bool) -> bool:
+        state = self._states.get(listener_id)
+        if (
+            state is None
+            or not state.active
+            or not state.track_sid
+            or not self._room_is_connected()
+        ):
+            return False if flush else True
 
-        buffer = self.buffers.setdefault(listener_id, bytearray())
-        while len(buffer) >= self._frame_bytes:
-            frame_bytes = bytes(buffer[: self._frame_bytes])
-            del buffer[: self._frame_bytes]
-            if not await self._capture_frame(listener_id, source, frame_bytes):
-                return
+        while len(state.buffer) >= self._frame_bytes:
+            frame_bytes = bytes(state.buffer[: self._frame_bytes])
+            del state.buffer[: self._frame_bytes]
+            if not await self._capture_frame(state, frame_bytes):
+                return False
 
-        if flush and buffer:
-            padded = bytes(buffer) + (b"\x00" * (self._frame_bytes - len(buffer)))
-            buffer.clear()
-            await self._capture_frame(listener_id, source, padded)
+        if flush and state.buffer:
+            padded = bytes(state.buffer) + (b"\x00" * (self._frame_bytes - len(state.buffer)))
+            state.buffer.clear()
+            if not await self._capture_frame(state, padded):
+                return False
 
-    async def _capture_frame(
-        self,
-        listener_id: str,
-        source: rtc.AudioSource,
-        frame_bytes: bytes,
-    ) -> bool:
+        return True
+
+    async def _capture_frame(self, state: _ListenerTrackState, frame_bytes: bytes) -> bool:
+        if (
+            self._states.get(state.listener_id) is not state
+            or not state.active
+            or not state.track_sid
+            or not self._room_is_connected()
+        ):
+            return False
+
         frame = rtc.AudioFrame(
             data=frame_bytes,
             sample_rate=self.output_sample_rate,
@@ -188,12 +275,39 @@ class OutputRouter:
             samples_per_channel=self._frame_bytes // _BYTES_PER_SAMPLE,
         )
         try:
-            await source.capture_frame(frame)
+            await state.source.capture_frame(frame)
             return True
-        except Exception:
+        except Exception as exc:
             logger.exception(
                 "Failed to capture interpreter frame for %s -> %s",
                 self.speaker_id,
-                listener_id,
+                state.listener_id,
+            )
+            if self._states.get(state.listener_id) is state and state.active:
+                await self._reset_listener(state.listener_id, state.target_lang)
+            self._notify_track_failure(
+                state.listener_id,
+                state.target_lang,
+                f"Interpreter audio track became unusable: {exc}",
             )
             return False
+
+    async def _reset_listener(self, listener_id: str, tgt_lang: str) -> None:
+        await self.remove_listener(listener_id)
+        if self._closed:
+            return
+        await self.ensure_listener(listener_id, tgt_lang)
+
+    def _notify_track_failure(self, listener_id: str, tgt_lang: str, message: str) -> None:
+        logger.warning(
+            "Interpreter track failure for speaker=%s listener=%s target=%s: %s",
+            self.speaker_id,
+            listener_id,
+            tgt_lang,
+            message,
+        )
+        if self._on_track_failure is not None:
+            self._on_track_failure(listener_id, tgt_lang, message)
+
+    def _room_is_connected(self) -> bool:
+        return self.room.connection_state == rtc.ConnectionState.CONN_CONNECTED

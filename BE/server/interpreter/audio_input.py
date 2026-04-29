@@ -4,6 +4,7 @@ import asyncio
 import logging
 import queue
 import threading
+import time
 from concurrent.futures import Future
 from typing import Iterator, Optional
 
@@ -65,6 +66,9 @@ class LiveKitAudioInput(AudioInput):
         self._running = False
         self._sentinel_sent = False
         self._stream_close_requested = False
+        self._close_stream_on_stop = True
+        self._dropped_chunks = 0
+        self._last_drop_log_at = 0.0
 
     @property
     def metadata(self) -> AudioMetadata:
@@ -90,6 +94,7 @@ class LiveKitAudioInput(AudioInput):
 
             self._running = True
             self._sentinel_sent = False
+            self._close_stream_on_stop = True
             self._pump_future = asyncio.run_coroutine_threadsafe(
                 self._pump_stream(),
                 self._loop,
@@ -97,16 +102,17 @@ class LiveKitAudioInput(AudioInput):
 
         logger.info(f"LiveKitAudioInput started for {self.participant_id}")
 
-    def stop(self) -> None:
+    def stop(self, *, close_stream: bool = True) -> None:
         with self._state_lock:
             future = self._pump_future
             self._pump_future = None
             was_running = self._running
             self._running = False
+            self._close_stream_on_stop = self._close_stream_on_stop and close_stream
 
         if future is not None and not future.done():
             future.cancel()
-        if was_running:
+        if was_running and close_stream:
             self._request_stream_close()
         self._enqueue_sentinel()
         logger.info(f"LiveKitAudioInput stopped for {self.participant_id}")
@@ -128,7 +134,9 @@ class LiveKitAudioInput(AudioInput):
             with self._state_lock:
                 self._running = False
                 self._pump_future = None
-            self._request_stream_close()
+                should_close_stream = self._close_stream_on_stop
+            if should_close_stream:
+                self._request_stream_close()
             self._enqueue_sentinel()
 
     def stream_frames(self) -> Iterator[bytes]:
@@ -154,12 +162,25 @@ class LiveKitAudioInput(AudioInput):
             self._enqueue_chunk(chunk)
 
     def _enqueue_chunk(self, chunk: bytes) -> None:
+        dropped_now = 0
         while self._q.qsize() >= self._queue_capacity:
             try:
                 self._q.get_nowait()
             except queue.Empty:
                 break
-            logger.warning("Audio buffer full for %s, dropping oldest chunk", self.participant_id)
+            dropped_now += 1
+
+        if dropped_now:
+            self._dropped_chunks += dropped_now
+            now = time.monotonic()
+            if now - self._last_drop_log_at >= 2.0:
+                logger.warning(
+                    "Audio buffer full for %s, dropped %d chunks in the recent interval",
+                    self.participant_id,
+                    self._dropped_chunks,
+                )
+                self._dropped_chunks = 0
+                self._last_drop_log_at = now
         self._q.put_nowait(chunk)
 
     def _enqueue_sentinel(self) -> None:

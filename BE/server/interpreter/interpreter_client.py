@@ -22,6 +22,7 @@ class InterpreterRealtimeClient(RealtimeClient):
         self.request_audio_output = kwargs.pop("request_audio_output", True)
         kwargs["enable_speaker"] = False
         super().__init__(*args, **kwargs)
+        self._deterministic_routing = self.src_lang != "auto" and self.tgt_lang != "auto"
         self.on_transcript_complete: Callable[[str], None] = lambda t: None
         self.on_text_delta: Callable[[str], None] = lambda t: None
         self.on_text_done: Callable[[str], None] = lambda t: None
@@ -42,6 +43,8 @@ class InterpreterRealtimeClient(RealtimeClient):
         self._stat_audio_chunks = 0
         self._stat_detect_failed = 0
         self._player = None
+        if self._deterministic_routing:
+            self._last_detected_src = self.src_lang
 
         try:
             async with websockets.connect(
@@ -82,7 +85,8 @@ class InterpreterRealtimeClient(RealtimeClient):
         elif etype == "conversation.item.input_audio_transcription.completed":
             transcript = event.get("transcript", "").strip()
             if transcript:
-                await self._handle_input_transcript_with_audio(ws, transcript)
+                if not self._deterministic_routing:
+                    await self._handle_input_transcript_with_audio(ws, transcript)
                 self.on_transcript_complete(transcript)
 
         elif etype == "response.created":
@@ -128,3 +132,25 @@ class InterpreterRealtimeClient(RealtimeClient):
             await self._handle_input_transcript(ws, transcript)
         finally:
             self.enable_speaker = original_enable_speaker
+
+    async def update_routing(self, src_lang: str, tgt_lang: str) -> None:
+        self.src_lang = src_lang
+        self.tgt_lang = tgt_lang
+        self._deterministic_routing = self.src_lang != "auto" and self.tgt_lang != "auto"
+        self._routing_locked = self._deterministic_routing
+        if self._deterministic_routing:
+            self._last_detected_src = self.src_lang
+
+        ws = self._ws
+        if ws is None:
+            return
+
+        instructions = self._current_instructions()
+        await ws.send(
+            json.dumps(
+                _build_session_update(
+                    instructions,
+                    self.request_audio_output,
+                )
+            )
+        )

@@ -1,7 +1,7 @@
 # Backend Implementation State
 
 ## Last Updated
-- Time: 2026-04-29T23:35:00+07:00
+- Time: 2026-04-29T23:18:13+07:00
 - Agent: Codex
 - Branch: main
 
@@ -29,9 +29,12 @@
 
 ## In Progress
 - [ ] Deferred verification only
-- Current objective: next turn should run end-to-end LiveKit/OpenAI verification for translated voice publish path
+- Current objective: next turn should run end-to-end LiveKit/OpenAI verification for deterministic meeting routing plus translated voice publish path
 - Files being edited:
-  - none in this batch
+  - `BE/server/interpreter/interpreter_client.py`
+  - `BE/server/interpreter/audio_input.py`
+  - `BE/server/interpreter/output_router.py`
+  - `BE/server/interpreter/room_manager.py`
 
 ## Remaining Runtime Work
 - none
@@ -76,26 +79,35 @@
 - `BE/server/interpreter/livekit_runtime.py`
 
 ## Latest Fix
-- Objective: restore translated voice output for Meeting Platform interpreter path while keeping local server speaker playback disabled.
+- Objective: fix Meeting Platform interpreter runtime so browser listeners receive stable translated transcript events plus usable translated LiveKit audio, without falling back to CLI auto-lock behavior.
 - Root cause confirmed in code:
-  - `BE/src/realtime/client.py` builds `session.update` from `enable_speaker`
-  - `BE/server/interpreter/interpreter_client.py` forced `enable_speaker=False`
-  - result: interpreter OpenAI session requested `modalities=["text"]` only, so no `response.audio.delta` was produced
+  - `BE/server/interpreter/interpreter_client.py` previously forced `enable_speaker=False`, while `BE/src/realtime/client.py` used that flag to decide whether OpenAI should emit audio; this was already fixed by overriding interpreter session setup to still request `modalities=["text","audio"]` while keeping local speaker playback disabled.
+  - `BE/server/interpreter/room_manager.py` still routed meeting sessions like CLI mode with `src_lang="auto"` semantics, so speaker source language was inferred/locked heuristically instead of using room participant state.
+  - The same runtime pinned an old `target_lang` and logged "keeping existing runtime until media reconnect", which silently preserved wrong routing after participant language changes.
+  - `BE/server/interpreter/output_router.py` built interpreter track names from runtime `src_lang`; when that value was `"auto"`, FE track parsing ignored the audio track because FE only accepts `vi|en|ja`.
+  - `BE/server/interpreter/output_router.py` could still capture into stale/unpublished LiveKit audio sources during listener remove, late audio delta arrival, or track reset races, producing `InvalidState - failed to capture frame`.
+  - `BE/server/interpreter/room_manager.py` started audio ingestion too early relative to the realtime websocket sender path, and `BE/server/interpreter/audio_input.py` logged a warning for every overflowed chunk, creating heavy `Audio buffer full ... dropping oldest chunk` spam.
 - Approach chosen:
-  - keep CLI/base runtime untouched
-  - keep `enable_speaker=False` for interpreter local playback semantics
-  - override interpreter `_run_session()` so OpenAI session still requests audio output with `modalities=["text","audio"]`, `output_audio_format="pcm16"`, and `voice`
-  - wrap interpreter transcript routing so any follow-up `session.update` emitted by base transcript handling also preserves audio output
-  - flush remaining PCM tail on `response.audio.done` into `OutputRouter` so final partial frame is not dropped
+  - Keep CLI/base runtime untouched in `BE/src/`; constrain fixes to `BE/server/interpreter/*`.
+  - Treat meeting runtime as deterministic routing: speaker `src_lang` now comes directly from participant language in room state, and target language comes from active listeners with a different concrete language.
+  - Recompute routing immediately on participant join, leave, or language update; if `(speaker, src_lang, tgt_lang)` changes, rebuild router state and push a fresh interpreter `session.update` immediately instead of waiting for media reconnect.
+  - Fail clearly for unsupported multi-target cases in this turn instead of silently pinning the wrong target; publish interpreter error/status instead of routing incorrectly.
+  - Only expose `audio_track_name` after the LiveKit track is actually published and usable; transcript partial/final payloads still flow even if voice publish fails, and track failures publish explicit `interpreter.error` plus `interpreter.status=error`.
+  - Harden `OutputRouter` against late deltas and teardown races by tracking active listener states, skipping capture on stale/unpublished tracks, clearing queues on barge-in, and recreating listener tracks on capture failure.
+  - Delay `LiveKitAudioInput.start()` until the base realtime sender thread starts, keep the underlying `AudioStream` alive across routing-only reconfiguration, and throttle overflow warnings to interval-based summaries instead of per-chunk spam.
 - Files changed for this fix:
   - `BE/server/interpreter/interpreter_client.py`
+  - `BE/server/interpreter/audio_input.py`
   - `BE/server/interpreter/output_router.py`
   - `BE/server/interpreter/room_manager.py`
 
 ## Deferred Testing
 - Test execution has been fully deferred in this turn by instruction.
 - The following tests/smoke tests must be run in the next turn:
-  - 2-participant manual room verification: confirm translated LiveKit audio track is published and audible to listener
+  - 2-participant manual room verification: confirm translated transcript and translated LiveKit audio track are both delivered to the listener in a `vi <-> en` or `vi <-> ja` room
+  - Listener language change verification: confirm runtime rebuild updates `target_lang` immediately and no longer logs target pinning until reconnect
+  - Capture lifecycle verification: confirm no `InvalidState - failed to capture frame` appears in normal happy path
+  - Backpressure verification: confirm `Audio buffer full ...` warnings are rare or absent in normal room startup
   - `cd BE && PYTHONPATH=. pytest -q tests/test_interpreter_audio_adapter.py`
   - `cd BE && pytest tests/`
   - `docker compose config`
@@ -105,24 +117,27 @@
 
 ## Verification Run This Turn
 - Commands executed:
-  - `python3 -m py_compile BE/server/interpreter/interpreter_client.py BE/server/interpreter/output_router.py BE/server/interpreter/room_manager.py`
-  - `docker compose config`
+  - `python3 -m py_compile BE/server/interpreter/interpreter_client.py BE/server/interpreter/output_router.py BE/server/interpreter/room_manager.py BE/server/interpreter/audio_input.py`
 - Result:
   - Python syntax check passed for modified interpreter files
-  - Docker Compose config parsed successfully
 - Not executed in this turn:
   - `docker compose up ...`
   - real room join with two participants
-  - confirmation from logs that `response.audio.delta` is emitted end-to-end
+  - confirmation from logs that translated transcript/audio reaches FE end-to-end
+  - live confirmation that `InvalidState` capture failures and input buffer overflow warnings are gone in happy path
 
 ## Open Risks
-- Multi-language listeners for one active speaker are currently pinned to the first distinct target language until the speaker media track reconnects.
-- Single-target-language voice path is fixed in code but not yet proven end-to-end against a live OpenAI + LiveKit room in this turn.
-- `InterpreterRealtimeClient` still reuses base transcript handling, so some CLI-style stdout lines may still appear in interpreter logs even though local speaker playback remains disabled.
-- `OutputRouter.flush()` now pads the last sub-frame with zeros on `response.audio.done`; audio tail behavior should be checked in live listening.
+- Multi-target-language fanout for one active speaker is still not implemented; current behavior is to fail clearly with `interpreter_unavailable` instead of routing to the wrong target.
+- The no-close stream reuse path in `LiveKitAudioInput.stop(close_stream=False)` now supports routing-only runtime rebuilds, but it still needs live validation against repeated participant language flips.
+- `InterpreterRealtimeClient` now has a deterministic meeting path and a CLI-style auto path in the same wrapper; live verification is still needed to confirm no unexpected regression in reconnect/barging behavior.
+- `OutputRouter` now recreates listener tracks on capture failure, but the exact recovery behavior under real LiveKit disconnect/reconnect timing remains unverified in this turn.
 
 ## Resume Instructions
-- Start with live verification of translated voice, not transcript-only flow
+- Start with live verification of the deterministic meeting path, not CLI demo flow
 - Bring up `docker compose up redis livekit gateway interpreter`
-- Join 2 participants with different languages and confirm listener receives interpreter audio track plus audible translated speech
-- If audio is still missing, inspect interpreter logs for `response.audio.delta` / `response.audio.done` before changing routing code
+- Join 2 participants with different languages and confirm:
+  - transcript partial/final events appear in FE with concrete `speaker.source_language`
+  - FE receives/picks up `interp::{speaker_id}::{listener_id}::{src_lang}::{tgt_lang}` audio tracks where `src_lang` and `tgt_lang` are concrete `vi|en|ja`
+  - listener hears translated voice on browser
+- Then change one listener language and confirm backend rebuilds routing immediately instead of keeping the old target until media reconnect
+- If voice is still missing, inspect interpreter logs for `response.audio.delta` / `response.audio.done`, then inspect LiveKit publish logs for listener track resets or capture failures before changing routing logic again
