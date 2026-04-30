@@ -12,12 +12,16 @@ import {
   type RemoteTrackPublication,
   type RemoteVideoTrack,
 } from "livekit-client";
-import type { Language, ParticipantSnapshot } from "../types/api";
+import type {
+  AudioRouting,
+  Language,
+  ParticipantSnapshot,
+} from "../types/api";
 import type {
   GatewayConnectionState,
   InterpreterAudioFeed,
   InterpreterTrackInfo,
-  RemoteAudioFeed,
+  SameLanguagePassthroughAudioFeed,
   VideoFeed,
 } from "../types/livekit";
 
@@ -119,17 +123,27 @@ export function buildMediaSnapshot(args: {
   selfParticipantId: string;
   selfDisplayName: string;
   selfLanguage: Language;
+  audioRouting?: AudioRouting;
   participantsById: Record<string, ParticipantSnapshot>;
 }): {
   videos: VideoFeed[];
-  humanAudio: RemoteAudioFeed[];
+  sameLanguagePassthroughAudio: SameLanguagePassthroughAudioFeed[];
   interpreterAudio: InterpreterAudioFeed[];
   localVideoTrack: LocalVideoTrack | null;
 } {
-  const { room, selfParticipantId, selfDisplayName, participantsById } = args;
+  const {
+    room,
+    selfParticipantId,
+    selfDisplayName,
+    selfLanguage,
+    audioRouting,
+    participantsById,
+  } = args;
   const videos: VideoFeed[] = [];
-  const humanAudio: RemoteAudioFeed[] = [];
+  const sameLanguagePassthroughAudio: SameLanguagePassthroughAudioFeed[] = [];
   const interpreterAudio: InterpreterAudioFeed[] = [];
+  const sameLanguagePolicy =
+    audioRouting?.same_language_policy ?? "human_passthrough";
 
   let localVideoTrack: LocalVideoTrack | null = null;
 
@@ -171,12 +185,21 @@ export function buildMediaSnapshot(args: {
         publication.track &&
         publication.track.kind === Track.Kind.Audio
       ) {
-        humanAudio.push({
-          participantId,
-          displayName: snapshot?.display_name || participant.name || participantId,
-          language: snapshot?.language,
-          track: publication.track as RemoteAudioTrack,
-        });
+        const speakerLanguage = snapshot?.language;
+        if (
+          speakerLanguage &&
+          speakerLanguage === selfLanguage &&
+          sameLanguagePolicy === "human_passthrough"
+        ) {
+          sameLanguagePassthroughAudio.push({
+            participantId,
+            displayName:
+              snapshot?.display_name || participant.name || participantId,
+            language: speakerLanguage,
+            policy: sameLanguagePolicy,
+            track: publication.track as RemoteAudioTrack,
+          });
+        }
       }
     });
 
@@ -191,17 +214,10 @@ export function buildMediaSnapshot(args: {
 
   return {
     videos,
-    humanAudio,
+    sameLanguagePassthroughAudio,
     interpreterAudio,
     localVideoTrack,
   };
-}
-
-export function shouldPlayHumanAudio(
-  speakerLanguage: Language | undefined,
-  listenerLanguage: Language,
-): boolean {
-  return !speakerLanguage || speakerLanguage === listenerLanguage;
 }
 
 export function mapLiveKitConnectionState(

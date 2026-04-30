@@ -1,9 +1,12 @@
 import type {
   ApiErrorEnvelope,
   CreateRoomResponse,
+  CreateTranslationTestRequest,
   JoinRoomRequest,
   JoinRoomResponse,
+  MicTestSessionResponse,
   RoomSnapshotResponse,
+  TranslationTestSessionResponse,
 } from "../types/api";
 
 const DEFAULT_API_BASE_URL = "http://localhost:8000";
@@ -118,6 +121,32 @@ export const api = {
       headers: {
         Authorization: `Bearer ${token}`,
       },
+    });
+  },
+
+  createMicTest() {
+    return requestJson<MicTestSessionResponse>("/api/test/mic", {
+      method: "POST",
+      body: JSON.stringify({}),
+    });
+  },
+
+  deleteMicTest(sessionId: string) {
+    return requestJson<void>(`/api/test/mic/${sessionId}`, {
+      method: "DELETE",
+    });
+  },
+
+  createTranslationTest(body: CreateTranslationTestRequest) {
+    return requestJson<TranslationTestSessionResponse>("/api/test/translation", {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+  },
+
+  deleteTranslationTest(sessionId: string) {
+    return requestJson<void>(`/api/test/translation/${sessionId}`, {
+      method: "DELETE",
     });
   },
 };

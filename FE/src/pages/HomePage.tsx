@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { api, ApiError } from "../lib/api";
 import { extractRoomId } from "../lib/rooms";
 
@@ -89,6 +89,14 @@ export function HomePage() {
           </button>
 
           {error ? <div className="inline-error">{error}</div> : null}
+
+          <div className="divider">
+            <span>dev</span>
+          </div>
+
+          <Link to="/test" className="button-secondary" style={{ textAlign: "center", textDecoration: "none", display: "block", padding: "14px 18px", borderRadius: 16, fontWeight: 700 }}>
+            Mic &amp; Translation Test
+          </Link>
         </div>
       </section>
     </main>

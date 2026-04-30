@@ -61,6 +61,7 @@ class RoomStore:
             expires_at=room_state.expires_at,
             participant_limit=room_state.participant_limit,
             supported_languages=room_state.supported_languages,
+            audio_routing=room_state.audio_routing,
             participant_count=participant_count
         )
 

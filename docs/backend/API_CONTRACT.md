@@ -140,6 +140,12 @@ Lấy snapshot room khi FE load room page hoặc reconnect.
     "expires_at": "ISO-8601 UTC string",
     "participant_limit": 8,
     "supported_languages": ["vi", "en", "ja"],
+    "audio_routing": {
+      "model": "translated_audio_first",
+      "cross_language_remote_audio": "interpreter_track",
+      "canonical_remote_audio": "interpreter_track_for_cross_language",
+      "same_language_policy": "human_passthrough"
+    },
     "participant_count": 0
   },
   "participants": [
@@ -154,10 +160,29 @@ Lấy snapshot room khi FE load room page hoặc reconnect.
   "recent_transcripts": [
     {
       "transcript_id": "string",
+      "utterance_id": "string | null",
+      "kind": "source | translated",
       "speaker_id": "string",
       "speaker_display_name": "string",
+      "speaker_language": "vi | en | ja",
       "src_lang": "vi | en | ja",
+      "text": "string",
       "source_text": "string",
+      "translated_text": "string | null",
+      "target_lang": "vi | en | ja | null",
+      "is_final": true,
+      "fallback_used": false,
+      "audio_track_name": "string | null",
+      "speaker": {
+        "participant_id": "string",
+        "display_name": "string",
+        "language": "vi | en | ja",
+        "source_language": "vi | en | ja"
+      },
+      "listener": {
+        "participant_id": "string",
+        "target_language": "vi | en | ja"
+      },
       "created_at": "ISO-8601 UTC string"
     }
   ]
@@ -175,6 +200,12 @@ Lấy snapshot room khi FE load room page hoặc reconnect.
     "expires_at": "2026-04-30T13:12:54.000Z",
     "participant_limit": 8,
     "supported_languages": ["vi", "en", "ja"],
+    "audio_routing": {
+      "model": "translated_audio_first",
+      "cross_language_remote_audio": "interpreter_track",
+      "canonical_remote_audio": "interpreter_track_for_cross_language",
+      "same_language_policy": "human_passthrough"
+    },
     "participant_count": 2
   },
   "participants": [
@@ -235,7 +266,13 @@ Join room và nhận đủ credentials cho Gateway WS + LiveKit.
     "room_id": "string",
     "state": "active",
     "participant_limit": 8,
-    "supported_languages": ["vi", "en", "ja"]
+    "supported_languages": ["vi", "en", "ja"],
+    "audio_routing": {
+      "model": "translated_audio_first",
+      "cross_language_remote_audio": "interpreter_track",
+      "canonical_remote_audio": "interpreter_track_for_cross_language",
+      "same_language_policy": "human_passthrough"
+    }
   },
   "participant": {
     "participant_id": "string",
@@ -272,7 +309,13 @@ Join room và nhận đủ credentials cho Gateway WS + LiveKit.
     "room_id": "rm_8f3k2v1m",
     "state": "active",
     "participant_limit": 8,
-    "supported_languages": ["vi", "en", "ja"]
+    "supported_languages": ["vi", "en", "ja"],
+    "audio_routing": {
+      "model": "translated_audio_first",
+      "cross_language_remote_audio": "interpreter_track",
+      "canonical_remote_audio": "interpreter_track_for_cross_language",
+      "same_language_policy": "human_passthrough"
+    }
   },
   "participant": {
     "participant_id": "pt_01hs8x4e3m",
@@ -442,6 +485,13 @@ Gửi message này khi user đổi language selector trong room. FE phải updat
 
 ## `room.snapshot`
 
+`recent_transcripts` trong `room.snapshot` là personalized theo participant đang connect:
+
+1. luôn gồm các item `kind = "source"` để FE biết speaker nào vừa nói gì
+2. chỉ gồm các item `kind = "translated"` nếu transcript đó dành cho chính participant hiện tại
+3. `transcript_id` ổn định giữa `partial -> final` cho cùng stream transcript
+4. `utterance_id` dùng để correlate source transcript và translated transcript của cùng một lượt nói
+
 ### Schema
 
 ```json
@@ -460,7 +510,13 @@ Gửi message này khi user đổi language selector trong room. FE phải updat
     "room": {
       "state": "created | active | empty",
       "participant_limit": 8,
-      "supported_languages": ["vi", "en", "ja"]
+      "supported_languages": ["vi", "en", "ja"],
+      "audio_routing": {
+        "model": "translated_audio_first",
+        "cross_language_remote_audio": "interpreter_track",
+        "canonical_remote_audio": "interpreter_track_for_cross_language",
+        "same_language_policy": "human_passthrough"
+      }
     },
     "participants": [],
     "recent_transcripts": []
@@ -486,7 +542,13 @@ Gửi message này khi user đổi language selector trong room. FE phải updat
     "room": {
       "state": "active",
       "participant_limit": 8,
-      "supported_languages": ["vi", "en", "ja"]
+      "supported_languages": ["vi", "en", "ja"],
+      "audio_routing": {
+        "model": "translated_audio_first",
+        "cross_language_remote_audio": "interpreter_track",
+        "canonical_remote_audio": "interpreter_track_for_cross_language",
+        "same_language_policy": "human_passthrough"
+      }
     },
     "participants": [
       {
@@ -559,7 +621,21 @@ Gửi message này khi user đổi language selector trong room. FE phải updat
 
 ## `transcript.partial`
 
-Đây là event FE dùng để stream text đang dịch.
+Đây là event FE dùng để stream transcript realtime theo speaker.
+
+FE có thể render trực tiếp speaker panel từ các field:
+
+1. `speaker.display_name`
+2. `text`
+3. `kind`
+4. `src_lang`
+5. `tgt_lang`
+6. `transcript_id`
+7. `is_final`
+8. `created_at`
+
+`text` và `kind` là field authoritative cho FE mới.  
+Để giữ backward compatibility tối đa, source transcript vẫn mang thêm `listener`, `tgt_lang`, và `translated_text` mirror theo ngôn ngữ gốc.
 
 ### Schema
 
@@ -571,25 +647,44 @@ Gửi message này khi user đổi language selector trong room. FE phải updat
   "sent_at": "ISO-8601 UTC string",
   "payload": {
     "transcript_id": "string",
+    "utterance_id": "string",
+    "kind": "source | translated",
     "speaker": {
       "participant_id": "string",
       "display_name": "string",
+      "language": "vi | en | ja",
       "source_language": "vi | en | ja"
     },
     "listener": {
       "participant_id": "string",
       "target_language": "vi | en | ja"
     },
+    "text": "string",
+    "src_lang": "vi | en | ja",
+    "tgt_lang": "vi | en | ja | null",
     "source_text": "string",
-    "translated_text": "string",
+    "translated_text": "string | null",
     "audio_track_name": "string | null",
+    "audio_output": {
+      "model": "translated_audio_first",
+      "mode": "interpreter_track",
+      "canonical": true,
+      "track_available": true,
+      "track_name": "string | null",
+      "speaker_id": "string",
+      "listener_id": "string",
+      "source_language": "vi | en | ja",
+      "target_language": "vi | en | ja",
+      "same_language_policy": "human_passthrough"
+    },
     "fallback_used": false,
-    "is_final": false
+    "is_final": false,
+    "created_at": "ISO-8601 UTC string"
   }
 }
 ```
 
-### Example
+### Source Example
 
 ```json
 {
@@ -598,21 +693,63 @@ Gửi message này khi user đổi language selector trong room. FE phải updat
   "room_id": "rm_8f3k2v1m",
   "sent_at": "2026-04-29T13:15:31.000Z",
   "payload": {
-    "transcript_id": "seg_01hs8xfw8n",
+    "transcript_id": "seg_01hs8xfw8n::source",
+    "utterance_id": "seg_01hs8xfw8n",
+    "kind": "source",
     "speaker": {
       "participant_id": "pt_01hs8x4e3m",
       "display_name": "Huy",
+      "language": "vi",
+      "source_language": "vi"
+    },
+    "listener": {
+      "participant_id": "pt_01hs8x4e3m",
+      "target_language": "vi"
+    },
+    "text": "xin chào...",
+    "src_lang": "vi",
+    "tgt_lang": "vi",
+    "source_text": "xin chào...",
+    "translated_text": "xin chào...",
+    "audio_track_name": null,
+    "fallback_used": false,
+    "is_final": false,
+    "created_at": "2026-04-29T13:15:31.000Z"
+  }
+}
+```
+
+### Translated Example
+
+```json
+{
+  "type": "transcript.partial",
+  "event_id": "evt_01hs8zeh2f",
+  "room_id": "rm_8f3k2v1m",
+  "sent_at": "2026-04-29T13:15:31.000Z",
+  "payload": {
+    "transcript_id": "seg_01hs8xfw8n::translated::ja",
+    "utterance_id": "seg_01hs8xfw8n",
+    "kind": "translated",
+    "speaker": {
+      "participant_id": "pt_01hs8x4e3m",
+      "display_name": "Huy",
+      "language": "vi",
       "source_language": "vi"
     },
     "listener": {
       "participant_id": "pt_01hs8y3n1z",
       "target_language": "ja"
     },
-    "source_text": "Chúng ta",
-    "translated_text": "私たちは",
+    "text": "こんにちは...",
+    "src_lang": "vi",
+    "tgt_lang": "ja",
+    "source_text": "xin chào...",
+    "translated_text": "こんにちは...",
     "audio_track_name": "interp::pt_01hs8x4e3m::pt_01hs8y3n1z::vi::ja",
     "fallback_used": false,
-    "is_final": false
+    "is_final": false,
+    "created_at": "2026-04-29T13:15:31.000Z"
   }
 }
 ```
@@ -628,31 +765,42 @@ Gửi message này khi user đổi language selector trong room. FE phải updat
   "room_id": "rm_8f3k2v1m",
   "sent_at": "2026-04-29T13:15:32.000Z",
   "payload": {
-    "transcript_id": "seg_01hs8xfw8n",
+    "transcript_id": "seg_01hs8xfw8n::translated::ja",
+    "utterance_id": "seg_01hs8xfw8n",
+    "kind": "translated",
     "speaker": {
       "participant_id": "pt_01hs8x4e3m",
       "display_name": "Huy",
+      "language": "vi",
       "source_language": "vi"
     },
     "listener": {
       "participant_id": "pt_01hs8y3n1z",
       "target_language": "ja"
     },
+    "text": "始めましょう。",
+    "src_lang": "vi",
+    "tgt_lang": "ja",
     "source_text": "Chúng ta bắt đầu nhé.",
     "translated_text": "始めましょう。",
     "audio_track_name": "interp::pt_01hs8x4e3m::pt_01hs8y3n1z::vi::ja",
     "fallback_used": false,
     "latency_ms": 870,
-    "is_final": true
+    "is_final": true,
+    "created_at": "2026-04-29T13:15:31.000Z"
   }
 }
 ```
 
 ### FE Usage
 
-1. Nếu `is_final == false`, update transcript row tạm
-2. Nếu `is_final == true`, replace row tạm bằng row final
-3. Nếu `fallback_used == true`, UI phải hiển thị badge degraded và không chờ audio track
+1. Key transcript row bằng `transcript_id`
+2. Nếu `is_final == false`, update transcript row tạm với `text`
+3. Nếu `is_final == true`, replace row tạm bằng row final cùng `transcript_id`
+4. Dùng `kind = "source"` để render lời gốc theo speaker
+5. Dùng `kind = "translated"` để render lời dịch cho listener hiện tại
+6. Nếu `fallback_used == true`, UI phải hiển thị badge degraded và không chờ audio track
+7. Với listener khác ngôn ngữ, `audio_track_name` và `audio_output.track_name` là canonical translated audio path mà FE nên ưu tiên phát
 
 ## `interpreter.status`
 
@@ -666,10 +814,36 @@ Gửi message này khi user đổi language selector trong room. FE phải updat
   "sent_at": "2026-04-29T13:15:30.000Z",
   "payload": {
     "speaker_id": "pt_01hs8x4e3m",
+    "source_language": "vi",
     "target_language": "ja",
     "status": "translating",
     "fallback_used": false,
-    "message": null
+    "message": null,
+    "audio_track_name": "interp::pt_01hs8x4e3m::pt_01hs8y3n1z::vi::ja",
+    "listener_ids": ["pt_01hs8y3n1z"],
+    "audio_output": {
+      "model": "translated_audio_first",
+      "mode": "interpreter_track",
+      "canonical": true,
+      "speaker_id": "pt_01hs8x4e3m",
+      "source_language": "vi",
+      "target_language": "ja",
+      "audio_track_name": "interp::pt_01hs8x4e3m::pt_01hs8y3n1z::vi::ja",
+      "listener_ids": ["pt_01hs8y3n1z"],
+      "tracks": [
+        {
+          "listener_id": "pt_01hs8y3n1z",
+          "track_name": "interp::pt_01hs8x4e3m::pt_01hs8y3n1z::vi::ja",
+          "track_sid": "TR_abc123",
+          "source_language": "vi",
+          "target_language": "ja",
+          "track_available": true,
+          "authoritative": true,
+          "mode": "interpreter_track"
+        }
+      ],
+      "same_language_policy": "human_passthrough"
+    }
   }
 }
 ```

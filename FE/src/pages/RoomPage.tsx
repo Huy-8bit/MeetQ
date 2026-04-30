@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { api, ApiError } from "../lib/api";
-import { shouldPlayHumanAudio } from "../lib/livekit";
 import { useSessionStore } from "../state/session";
 import type { Language, RoomSnapshotResponse } from "../types/api";
 import { AudioTrackSink } from "../components/MediaElements";
@@ -222,23 +221,16 @@ export function RoomPage() {
           />
 
           <div className="audio-sinks" aria-hidden="true">
-            {meeting.humanAudioFeeds
-              .filter((feed) =>
-                shouldPlayHumanAudio(
-                  feed.language,
-                  meeting.selfState?.language || session.participant.language,
-                ),
-              )
-              .map((feed) => (
-                <AudioTrackSink
-                  key={`human-${feed.participantId}-${feed.track.sid}`}
-                  track={feed.track}
-                />
-              ))}
-
             {meeting.interpreterAudioFeeds.map((feed) => (
               <AudioTrackSink
                 key={`interp-${feed.trackSid}`}
+                track={feed.track}
+              />
+            ))}
+
+            {meeting.sameLanguagePassthroughAudioFeeds.map((feed) => (
+              <AudioTrackSink
+                key={`passthrough-${feed.participantId}-${feed.track.sid}`}
                 track={feed.track}
               />
             ))}

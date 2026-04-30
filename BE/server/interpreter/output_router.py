@@ -3,7 +3,7 @@ from __future__ import annotations
 import base64
 import logging
 from dataclasses import dataclass, field
-from typing import Callable, Dict, Optional, Set
+from typing import Any, Callable, Dict, Optional, Set
 
 import livekit.rtc as rtc
 
@@ -65,6 +65,29 @@ class OutputRouter:
             for listener_id, state in self._states.items()
             if state.active and state.target_lang == tgt_lang
         }
+
+    def track_descriptor(self, listener_id: str) -> Optional[Dict[str, Any]]:
+        state = self._states.get(listener_id)
+        if state is None or not state.active:
+            return None
+        return {
+            "listener_id": listener_id,
+            "track_name": state.track_name,
+            "track_sid": state.track_sid,
+            "source_language": self.src_lang,
+            "target_language": state.target_lang,
+            "track_available": state.track_sid is not None,
+            "authoritative": True,
+            "mode": "interpreter_track",
+        }
+
+    def track_descriptors_for_language(self, tgt_lang: str) -> list[Dict[str, Any]]:
+        descriptors: list[Dict[str, Any]] = []
+        for listener_id in sorted(self.listener_ids_for_language(tgt_lang)):
+            descriptor = self.track_descriptor(listener_id)
+            if descriptor is not None:
+                descriptors.append(descriptor)
+        return descriptors
 
     async def ensure_listener(self, listener_id: str, tgt_lang: str) -> None:
         if self._closed:
@@ -129,6 +152,14 @@ class OutputRouter:
             return
 
         state.track_sid = publication.sid
+        logger.info(
+            "Interpreter track ready speaker=%s listener=%s route=%s->%s sid=%s",
+            self.speaker_id,
+            listener_id,
+            self.src_lang,
+            tgt_lang,
+            publication.sid,
+        )
         self._update_permissions()
 
     async def remove_listener(self, listener_id: str) -> None:
@@ -293,6 +324,13 @@ class OutputRouter:
             return False
 
     async def _reset_listener(self, listener_id: str, tgt_lang: str) -> None:
+        logger.warning(
+            "Resetting interpreter track speaker=%s listener=%s route=%s->%s",
+            self.speaker_id,
+            listener_id,
+            self.src_lang,
+            tgt_lang,
+        )
         await self.remove_listener(listener_id)
         if self._closed:
             return

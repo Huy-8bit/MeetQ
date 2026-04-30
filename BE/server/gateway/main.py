@@ -9,11 +9,16 @@ from server.gateway.app_state import app_state
 from server.gateway.room_store import RoomStore
 from server.gateway.room_service import RoomService
 from server.gateway.ws_hub import WSHub
+from server.gateway.test_session_store import TestSessionStore
 from server.gateway.api_health import router as health_router
 from server.gateway.api_rooms import router as rooms_router
+from server.gateway.api_test_sessions import router as test_sessions_router
 from server.gateway.ws_endpoint import router as ws_router
+from server.gateway.ws_test_mic import router as ws_mic_router
+from server.gateway.ws_test_translation import router as ws_translation_router
 from server.gateway.event_consumer import start_event_consumer
 import uuid
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -23,10 +28,11 @@ async def lifespan(app: FastAPI):
     app_state.room_store = RoomStore(app_state.redis, ttl_seconds=app_state.settings.room_token_ttl_seconds)
     app_state.room_service = RoomService(app_state.room_store, app_state.settings, app_state.redis)
     app_state.ws_hub = WSHub()
-    
+    app_state.test_session_store = TestSessionStore(app_state.redis)
+
     # Start consumer
     consumer_task = asyncio.create_task(start_event_consumer(app_state.redis))
-    
+
     yield
     # Shutdown
     consumer_task.cancel()
@@ -34,7 +40,7 @@ async def lifespan(app: FastAPI):
         await consumer_task
     except asyncio.CancelledError:
         pass
-        
+
     if app_state.redis:
         await close_redis(app_state.redis)
 
@@ -88,5 +94,8 @@ async def add_request_id(request: Request, call_next):
 
 app.include_router(health_router)
 app.include_router(rooms_router)
+app.include_router(test_sessions_router)
 app.include_router(ws_router)
+app.include_router(ws_mic_router)
+app.include_router(ws_translation_router)
 

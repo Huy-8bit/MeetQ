@@ -3,7 +3,7 @@ import type {
   RemoteAudioTrack,
   RemoteVideoTrack,
 } from "livekit-client";
-import type { Language } from "./api";
+import type { AudioRouting, Language } from "./api";
 
 export type GatewayConnectionState =
   | "idle"
@@ -28,11 +28,12 @@ export interface VideoFeed {
   track: LocalVideoTrack | RemoteVideoTrack | null;
 }
 
-export interface RemoteAudioFeed {
+export interface SameLanguagePassthroughAudioFeed {
   participantId: string;
   displayName: string;
   track: RemoteAudioTrack;
-  language?: Language;
+  language: Language;
+  policy: AudioRouting["same_language_policy"];
 }
 
 export interface InterpreterAudioFeed {

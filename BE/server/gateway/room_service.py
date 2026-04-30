@@ -9,7 +9,7 @@ from server.models import (
     RoomState, ParticipantState, RoomSnapshotResponse, CreateRoomResponse,
     CreateRoomResponseRoom, CreateRoomResponseJoin, JoinRoomRequestClient,
     JoinRoomResponse, JoinRoomResponseParticipant, JoinRoomResponseRoomToken,
-    JoinRoomResponseWebsocket, JoinRoomResponseLivekit, SnapshotData,
+    JoinRoomResponseWebsocket, JoinRoomResponseLivekit, SnapshotData, TranscriptEvent,
     Language
 )
 from server.gateway.room_store import RoomStore
@@ -60,7 +60,7 @@ class RoomService:
             created_at=now,
             expires_at=exp,
             participant_limit=8,
-            supported_languages=["vi", "en", "ja"]
+            supported_languages=["vi", "en", "ja"],
         )
         await self.store.create_room(room)
         
@@ -74,7 +74,8 @@ class RoomService:
                 created_at=room.created_at,
                 expires_at=room.expires_at,
                 participant_limit=room.participant_limit,
-                supported_languages=room.supported_languages
+                supported_languages=room.supported_languages,
+                audio_routing=room.audio_routing,
             ),
             join=CreateRoomResponseJoin(
                 api_path=f"/api/rooms/{room_id}/join",
@@ -87,6 +88,29 @@ class RoomService:
         if not snapshot:
             raise RoomNotFoundError()
         return snapshot
+
+    def build_snapshot_data_for_participant(
+        self,
+        snapshot: RoomSnapshotResponse,
+        participant_id: str,
+    ) -> SnapshotData:
+        return SnapshotData(
+            participants=snapshot.participants,
+            recent_transcripts=[
+                transcript
+                for transcript in snapshot.recent_transcripts
+                if self._transcript_visible_to_participant(transcript, participant_id)
+            ],
+        )
+
+    def _transcript_visible_to_participant(
+        self,
+        transcript: TranscriptEvent,
+        participant_id: str,
+    ) -> bool:
+        if transcript.kind == "source":
+            return True
+        return transcript.listener_id == participant_id
 
     async def join_room(self, room_id: str, display_name: str, language: Language, client_meta: Optional[JoinRoomRequestClient]) -> JoinRoomResponse:
         snapshot = await self.store.get_room_snapshot(room_id)
@@ -147,6 +171,10 @@ class RoomService:
         
         # We need a fresh snapshot after joining to return
         fresh_snapshot = await self.store.get_room_snapshot(room_id)
+        personalized_snapshot = self.build_snapshot_data_for_participant(
+            fresh_snapshot,
+            participant_id,
+        )
         
         return JoinRoomResponse(
             room=CreateRoomResponseRoom(
@@ -155,7 +183,8 @@ class RoomService:
                 created_at=fresh_snapshot.room.created_at,
                 expires_at=fresh_snapshot.room.expires_at,
                 participant_limit=fresh_snapshot.room.participant_limit,
-                supported_languages=fresh_snapshot.room.supported_languages
+                supported_languages=fresh_snapshot.room.supported_languages,
+                audio_routing=fresh_snapshot.room.audio_routing,
             ),
             participant=JoinRoomResponseParticipant(
                 participant_id=participant_id,
@@ -178,8 +207,8 @@ class RoomService:
                 token=lk_token
             ),
             snapshot=SnapshotData(
-                participants=fresh_snapshot.participants,
-                recent_transcripts=fresh_snapshot.recent_transcripts
+                participants=personalized_snapshot.participants,
+                recent_transcripts=personalized_snapshot.recent_transcripts
             )
         )
 

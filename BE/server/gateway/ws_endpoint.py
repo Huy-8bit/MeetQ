@@ -47,6 +47,10 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str, token: str = Qu
 
     # Send initial snapshot
     # Add 'self' to snapshot payload
+    personalized_snapshot = app_state.room_service.build_snapshot_data_for_participant(
+        snapshot,
+        participant_id,
+    )
     snap_payload = {
         "self": {
             "participant_id": participant_id,
@@ -55,8 +59,8 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str, token: str = Qu
             "language": participant.language
         },
         "room": snapshot.room.model_dump(),
-        "participants": [p.model_dump() for p in snapshot.participants],
-        "recent_transcripts": [t.model_dump() for t in snapshot.recent_transcripts]
+        "participants": [p.model_dump() for p in personalized_snapshot.participants],
+        "recent_transcripts": [t.model_dump() for t in personalized_snapshot.recent_transcripts]
     }
     
     await websocket.send_json(build_envelope("room.snapshot", room_id, snap_payload))

@@ -180,6 +180,7 @@ class RoomState(TypedDict):
     expires_at: str
     participant_limit: int
     supported_languages: list[str]
+    audio_routing: dict[str, str]
     participant_count: int
     transcript_count: int
     last_event_at: str
@@ -187,14 +188,21 @@ class RoomState(TypedDict):
 
 class TranscriptState(TypedDict):
     transcript_id: str
+    utterance_id: str
+    kind: Literal["source", "translated"]
     room_id: str
     speaker_id: str
-    listener_id: str
+    speaker_display_name: str
+    speaker_language: Literal["vi", "en", "ja"]
+    listener_id: str | None
     src_lang: Literal["vi", "en", "ja"]
-    tgt_lang: Literal["vi", "en", "ja"]
+    tgt_lang: Literal["vi", "en", "ja"] | None
+    text: str
     source_text: str
-    translated_text: str
-    status: Literal["partial", "final"]
+    translated_text: str | None
+    audio_track_name: str | None
+    audio_output: dict[str, object] | None
+    is_final: bool
     fallback_used: bool
     created_at: str
 ```
@@ -383,11 +391,16 @@ Không cần auth cho MVP. Room id đủ khó đoán và không có room listing
   ],
   "recent_transcripts": [
     {
-      "transcript_id": "seg_01hs8xfw8n",
+      "transcript_id": "seg_01hs8xfw8n::source",
+      "utterance_id": "seg_01hs8xfw8n",
+      "kind": "source",
       "speaker_id": "pt_01hs8x4e3m",
       "speaker_display_name": "Huy",
+      "speaker_language": "vi",
       "src_lang": "vi",
+      "text": "Chúng ta bắt đầu nhé.",
       "source_text": "Chúng ta bắt đầu nhé.",
+      "is_final": true,
       "created_at": "2026-04-29T13:11:01Z"
     }
   ]
@@ -642,6 +655,13 @@ Nếu parse thất bại hoặc payload invalid, Gateway gửi `error` event nh�
 
 Gửi ngay sau connect thành công.
 
+`recent_transcripts` trong snapshot này đã được personalize theo participant:
+
+1. luôn có source transcript gần nhất của speaker
+2. chỉ có translated transcript nếu transcript đó dành cho participant hiện tại
+3. `utterance_id` correlate source/translated cho cùng lượt nói
+4. `transcript_id` ổn định giữa partial và final của cùng stream
+
 ```json
 {
   "type": "room.snapshot",
@@ -733,7 +753,24 @@ Dùng cho language change hoặc reconnect state change.
 
 ### `transcript.partial`
 
-Gateway fan-out cá nhân hóa theo listener. Mỗi client chỉ nhận translation phù hợp với ngôn ngữ của chính họ.
+Gateway dùng 2 luồng transcript:
+
+1. `kind = "source"`: broadcast cả room để FE biết ai đang nói gì theo realtime
+2. `kind = "translated"`: fan-out cá nhân hóa theo listener để FE có thể hiển thị lời dịch phù hợp với ngôn ngữ hiện tại
+
+FE có thể render trực tiếp bằng:
+
+1. `speaker.display_name`
+2. `text`
+3. `kind`
+4. `src_lang`
+5. `tgt_lang`
+6. `transcript_id`
+7. `is_final`
+8. `created_at`
+
+`text` và `kind` là authoritative fields cho FE mới.  
+Source transcript vẫn mang thêm các field legacy (`listener`, `tgt_lang`, `translated_text`) mirror theo ngôn ngữ gốc để giảm rủi ro break FE cũ.
 
 ```json
 {
@@ -742,21 +779,33 @@ Gateway fan-out cá nhân hóa theo listener. Mỗi client chỉ nhận translat
   "room_id": "rm_8f3k2v1m",
   "sent_at": "2026-04-29T13:15:31.000Z",
   "payload": {
-    "transcript_id": "seg_01hs8xfw8n",
+    "transcript_id": "seg_01hs8xfw8n::translated::ja",
+    "utterance_id": "seg_01hs8xfw8n",
+    "kind": "translated",
     "speaker": {
       "participant_id": "pt_01hs8x4e3m",
       "display_name": "Huy",
+      "language": "vi",
       "source_language": "vi"
     },
     "listener": {
       "participant_id": "pt_01hs8y3n1z",
       "target_language": "ja"
     },
+    "text": "私たちは",
+    "src_lang": "vi",
+    "tgt_lang": "ja",
     "source_text": "Chúng ta",
     "translated_text": "私たちは",
     "audio_track_name": "interp::pt_01hs8x4e3m::pt_01hs8y3n1z::vi::ja",
+    "audio_output": {
+      "model": "translated_audio_first",
+      "mode": "interpreter_track",
+      "canonical": true
+    },
     "fallback_used": false,
-    "is_final": false
+    "is_final": false,
+    "created_at": "2026-04-29T13:15:31.000Z"
   }
 }
 ```
@@ -770,22 +819,29 @@ Gateway fan-out cá nhân hóa theo listener. Mỗi client chỉ nhận translat
   "room_id": "rm_8f3k2v1m",
   "sent_at": "2026-04-29T13:15:32.000Z",
   "payload": {
-    "transcript_id": "seg_01hs8xfw8n",
+    "transcript_id": "seg_01hs8xfw8n::source",
+    "utterance_id": "seg_01hs8xfw8n",
+    "kind": "source",
     "speaker": {
       "participant_id": "pt_01hs8x4e3m",
       "display_name": "Huy",
+      "language": "vi",
       "source_language": "vi"
     },
     "listener": {
-      "participant_id": "pt_01hs8y3n1z",
-      "target_language": "ja"
+      "participant_id": "pt_01hs8x4e3m",
+      "target_language": "vi"
     },
+    "text": "Chúng ta bắt đầu nhé.",
+    "src_lang": "vi",
+    "tgt_lang": "vi",
     "source_text": "Chúng ta bắt đầu nhé.",
-    "translated_text": "始めましょう。",
-    "audio_track_name": "interp::pt_01hs8x4e3m::pt_01hs8y3n1z::vi::ja",
+    "translated_text": "Chúng ta bắt đầu nhé.",
+    "audio_track_name": null,
+    "audio_output": null,
     "fallback_used": false,
-    "latency_ms": 870,
-    "is_final": true
+    "is_final": true,
+    "created_at": "2026-04-29T13:15:31.000Z"
   }
 }
 ```
@@ -800,10 +856,18 @@ Gateway fan-out cá nhân hóa theo listener. Mỗi client chỉ nhận translat
   "sent_at": "2026-04-29T13:15:30.000Z",
   "payload": {
     "speaker_id": "pt_01hs8x4e3m",
+    "source_language": "vi",
     "target_language": "ja",
     "status": "translating",
     "fallback_used": false,
-    "message": null
+    "message": null,
+    "audio_track_name": "interp::pt_01hs8x4e3m::pt_01hs8y3n1z::vi::ja",
+    "listener_ids": ["pt_01hs8y3n1z"],
+    "audio_output": {
+      "model": "translated_audio_first",
+      "mode": "interpreter_track",
+      "canonical": true
+    }
   }
 }
 ```
@@ -925,8 +989,8 @@ Runtime validation error hoặc downstream failure không đủ nghiêm trọng 
 | --- | --- | --- |
 | `participant.media_connected` | LiveKit participant active | participant id |
 | `participant.media_disconnected` | LiveKit participant left room | participant id |
-| `transcript.partial` | translation delta available | listener-personalized transcript payload |
-| `transcript.final` | final translation available | listener-personalized transcript payload + latency |
+| `transcript.partial` | source speech delta or translated delta available | source = room-broadcast, translated = listener-personalized |
+| `transcript.final` | source speech final or translated final available | stable `transcript_id`, `utterance_id`, speaker attribution, optional latency |
 | `interpreter.status` | state change per speaker/target | speaker id, target lang, status |
 | `interpreter.error` | unrecoverable room/session error | room-level or session-level error payload |
 

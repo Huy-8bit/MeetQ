@@ -5,6 +5,7 @@ import logging
 import time
 import uuid
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, Optional, Set
 
 import livekit.rtc as rtc
@@ -14,12 +15,18 @@ from server.interpreter.audio_input import LiveKitAudioInput
 from server.interpreter.event_publisher import RedisEventPublisher
 from server.interpreter.interpreter_client import InterpreterRealtimeClient
 from server.interpreter.livekit_runtime import LiveKitRuntime
+from server.interpreter.meeting_config import (
+    INTERPRETER_INPUT_QUEUE_MAXSIZE,
+    INTERPRETER_INPUT_WARMUP_CHUNKS,
+)
 from server.interpreter.output_router import OutputRouter
 
 logger = logging.getLogger(__name__)
 
 
 _SUPPORTED_LANGS = {"vi", "en", "ja"}
+_INPUT_QUEUE_MAXSIZE = INTERPRETER_INPUT_QUEUE_MAXSIZE
+_INPUT_WARMUP_CHUNKS = INTERPRETER_INPUT_WARMUP_CHUNKS
 
 
 @dataclass(frozen=True)
@@ -156,6 +163,11 @@ class RoomInterpreterManager:
         else:
             await self._ensure_speaker_runtime(speaker_id, plan)
         await self._sync_runtime_listeners(speaker_id, plan)
+        await self._publish_runtime_status(
+            speaker_id=speaker_id,
+            target_lang=plan.tgt_lang,
+            status="idle",
+        )
 
     def _build_routing_resolution(self, speaker_id: str) -> _RoutingResolution:
         speaker = self.participants.get(speaker_id)
@@ -211,11 +223,21 @@ class RoomInterpreterManager:
         if stream is None:
             return
 
+        logger.info(
+            "Starting interpreter runtime for speaker=%s room=%s route=%s->%s listeners=%d",
+            speaker_id,
+            self.room_id,
+            plan.src_lang,
+            plan.tgt_lang,
+            len(plan.listener_ids),
+        )
         audio_input = LiveKitAudioInput(
             speaker_id,
             stream,
             sample_rate=getattr(self.settings, "realtime_input_sample_rate", 16000),
             loop=asyncio.get_running_loop(),
+            queue_maxsize=_INPUT_QUEUE_MAXSIZE,
+            warmup_chunks=_INPUT_WARMUP_CHUNKS,
         )
         self.active_inputs[speaker_id] = audio_input
 
@@ -362,7 +384,7 @@ class RoomInterpreterManager:
             speaker_id=speaker_id,
         )
         for target_lang in target_languages:
-            await self.publisher.publish_status(
+            await self._publish_runtime_status(
                 speaker_id=speaker_id,
                 target_lang=target_lang,
                 status="error",
@@ -386,7 +408,7 @@ class RoomInterpreterManager:
             speaker_id=speaker_id,
             target_language=target_lang,
         )
-        await self.publisher.publish_status(
+        await self._publish_runtime_status(
             speaker_id=speaker_id,
             target_lang=target_lang,
             status="error",
@@ -440,36 +462,44 @@ class RoomInterpreterManager:
         client: InterpreterRealtimeClient,
         router: OutputRouter,
     ) -> None:
+        def on_input_transcript_delta(delta: str) -> None:
+            if not delta:
+                return
+            state = self._ensure_transcript_state(
+                speaker_id=speaker_id,
+                src_lang=src_lang,
+                target_lang=target_lang,
+            )
+            state["source_text"] = f"{state['source_text']}{delta}"
+            asyncio.create_task(self._publish_source_partial(speaker_id))
+
         def on_transcript_complete(text: str) -> None:
-            transcript_id = f"seg_{uuid.uuid4().hex[:12]}"
-            self.transcript_state[speaker_id] = {
-                "transcript_id": transcript_id,
-                "source_text": text,
-                "translated_text": "",
-                "started_at": time.monotonic(),
-                "src_lang": src_lang,
-            }
+            state = self._ensure_transcript_state(
+                speaker_id=speaker_id,
+                src_lang=src_lang,
+                target_lang=target_lang,
+            )
+            state["source_text"] = text
+            asyncio.create_task(self._publish_source_final(speaker_id))
 
         def on_text_delta(delta: str) -> None:
-            state = self.transcript_state.get(speaker_id)
-            if not state:
-                return
+            state = self._ensure_transcript_state(
+                speaker_id=speaker_id,
+                src_lang=src_lang,
+                target_lang=target_lang,
+            )
             state["translated_text"] = f"{state['translated_text']}{delta}"
             asyncio.create_task(self._publish_partial(speaker_id))
 
         def on_text_done(text: str) -> None:
             state = self.transcript_state.get(speaker_id)
             if state is None:
-                state = {
-                    "transcript_id": f"seg_{uuid.uuid4().hex[:12]}",
-                    "source_text": "",
-                    "translated_text": text,
-                    "started_at": time.monotonic(),
-                    "src_lang": src_lang,
-                }
-                self.transcript_state[speaker_id] = state
-            else:
-                state["translated_text"] = text
+                state = self._ensure_transcript_state(
+                    speaker_id=speaker_id,
+                    src_lang=src_lang,
+                    target_lang=target_lang,
+                )
+            state["translated_text"] = text
 
             asyncio.create_task(self._publish_final(speaker_id))
 
@@ -481,9 +511,10 @@ class RoomInterpreterManager:
 
         def on_status_change(status: str) -> None:
             if status == "capturing":
+                self.transcript_state.pop(speaker_id, None)
                 router.clear_queues()
             asyncio.create_task(
-                self.publisher.publish_status(
+                self._publish_runtime_status(
                     speaker_id=speaker_id,
                     target_lang=target_lang,
                     status=status,
@@ -501,7 +532,7 @@ class RoomInterpreterManager:
                 )
             )
             asyncio.create_task(
-                self.publisher.publish_status(
+                self._publish_runtime_status(
                     speaker_id=speaker_id,
                     target_lang=target_lang,
                     status="error",
@@ -509,6 +540,7 @@ class RoomInterpreterManager:
                 )
             )
 
+        client.on_input_transcript_delta = on_input_transcript_delta
         client.on_transcript_complete = on_transcript_complete
         client.on_text_delta = on_text_delta
         client.on_text_done = on_text_done
@@ -516,6 +548,36 @@ class RoomInterpreterManager:
         client.on_audio_done = on_audio_done
         client.on_status_change = on_status_change
         client.on_error = on_error
+
+    async def _publish_source_partial(self, speaker_id: str) -> None:
+        state = self.transcript_state.get(speaker_id)
+        if state is None or not state["source_text"]:
+            return
+
+        await self.publisher.publish_source_transcript_partial(
+            transcript_id=state["source_transcript_id"],
+            utterance_id=state["utterance_id"],
+            speaker_id=speaker_id,
+            speaker_name=self._speaker_name(speaker_id),
+            src_lang=state["src_lang"],
+            text=state["source_text"],
+            created_at=state["created_at"],
+        )
+
+    async def _publish_source_final(self, speaker_id: str) -> None:
+        state = self.transcript_state.get(speaker_id)
+        if state is None or not state["source_text"]:
+            return
+
+        await self.publisher.publish_source_transcript_final(
+            transcript_id=state["source_transcript_id"],
+            utterance_id=state["utterance_id"],
+            speaker_id=speaker_id,
+            speaker_name=self._speaker_name(speaker_id),
+            src_lang=state["src_lang"],
+            text=state["source_text"],
+            created_at=state["created_at"],
+        )
 
     async def _publish_partial(self, speaker_id: str) -> None:
         state = self.transcript_state.get(speaker_id)
@@ -526,7 +588,8 @@ class RoomInterpreterManager:
 
         for listener_id in sorted(router.listener_ids_for_language(target_lang)):
             await self.publisher.publish_transcript_partial(
-                transcript_id=state["transcript_id"],
+                transcript_id=state["translated_transcript_id"],
+                utterance_id=state["utterance_id"],
                 speaker_id=speaker_id,
                 speaker_name=self._speaker_name(speaker_id),
                 src_lang=state["src_lang"],
@@ -534,6 +597,7 @@ class RoomInterpreterManager:
                 target_lang=target_lang,
                 source_text=state["source_text"],
                 translated_text=state["translated_text"],
+                created_at=state["created_at"],
                 audio_track_name=router.audio_track_name(listener_id),
             )
 
@@ -547,7 +611,8 @@ class RoomInterpreterManager:
         latency_ms = int(max(0.0, time.monotonic() - state["started_at"]) * 1000)
         for listener_id in sorted(router.listener_ids_for_language(target_lang)):
             await self.publisher.publish_transcript_final(
-                transcript_id=state["transcript_id"],
+                transcript_id=state["translated_transcript_id"],
+                utterance_id=state["utterance_id"],
                 speaker_id=speaker_id,
                 speaker_name=self._speaker_name(speaker_id),
                 src_lang=state["src_lang"],
@@ -555,11 +620,43 @@ class RoomInterpreterManager:
                 target_lang=target_lang,
                 source_text=state["source_text"],
                 translated_text=state["translated_text"],
+                created_at=state["created_at"],
                 audio_track_name=router.audio_track_name(listener_id),
                 latency_ms=latency_ms,
             )
 
         self.transcript_state.pop(speaker_id, None)
+
+    async def _publish_runtime_status(
+        self,
+        *,
+        speaker_id: str,
+        target_lang: str,
+        status: str,
+        message: Optional[str] = None,
+    ) -> None:
+        router = self.routers.get(speaker_id)
+        source_language = self.speaker_sources.get(speaker_id)
+        listener_ids = sorted(self._listener_ids_for_target(speaker_id, target_lang))
+        audio_tracks = (
+            router.track_descriptors_for_language(target_lang)
+            if router is not None
+            else []
+        )
+        audio_track_name = None
+        if len(audio_tracks) == 1 and audio_tracks[0].get("track_available"):
+            audio_track_name = audio_tracks[0].get("track_name")
+
+        await self.publisher.publish_status(
+            speaker_id=speaker_id,
+            source_language=source_language,
+            target_lang=target_lang,
+            status=status,
+            message=message,
+            listener_ids=listener_ids,
+            audio_track_name=audio_track_name,
+            audio_tracks=audio_tracks,
+        )
 
     def _listener_target_languages(self, speaker_id: str) -> Set[str]:
         speaker_lang = self.participants.get(speaker_id, {}).get("language")
@@ -583,6 +680,34 @@ class RoomInterpreterManager:
 
     def _speaker_name(self, speaker_id: str) -> str:
         return self.participants.get(speaker_id, {}).get("display_name", speaker_id)
+
+    def _ensure_transcript_state(
+        self,
+        *,
+        speaker_id: str,
+        src_lang: str,
+        target_lang: str,
+    ) -> Dict[str, Any]:
+        state = self.transcript_state.get(speaker_id)
+        if state is not None:
+            return state
+
+        utterance_id = f"seg_{uuid.uuid4().hex[:12]}"
+        state = {
+            "utterance_id": utterance_id,
+            "source_transcript_id": f"{utterance_id}::source",
+            "translated_transcript_id": f"{utterance_id}::translated::{target_lang}",
+            "source_text": "",
+            "translated_text": "",
+            "started_at": time.monotonic(),
+            "created_at": self._now_str(),
+            "src_lang": src_lang,
+        }
+        self.transcript_state[speaker_id] = state
+        return state
+
+    def _now_str(self) -> str:
+        return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
     def _normalize_participant(self, participant: Any) -> Dict[str, Any]:
         if hasattr(participant, "model_dump"):

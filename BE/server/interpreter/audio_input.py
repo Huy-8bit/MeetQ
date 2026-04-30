@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections import deque
 import logging
 import queue
 import threading
@@ -36,6 +37,7 @@ class LiveKitAudioInput(AudioInput):
         channels: int = 1,
         chunk_ms: int = _CHUNK_MS,
         queue_maxsize: int = 300,
+        warmup_chunks: int = 12,
     ) -> None:
         if sample_rate <= 0:
             raise ValueError("sample_rate must be positive")
@@ -45,6 +47,8 @@ class LiveKitAudioInput(AudioInput):
             raise ValueError("chunk_ms must be positive")
         if queue_maxsize <= 0:
             raise ValueError("queue_maxsize must be positive")
+        if warmup_chunks <= 0:
+            raise ValueError("warmup_chunks must be positive")
 
         self.participant_id = participant_id
         self.audio_stream = audio_stream
@@ -67,7 +71,16 @@ class LiveKitAudioInput(AudioInput):
         self._sentinel_sent = False
         self._stream_close_requested = False
         self._close_stream_on_stop = True
+        self._consumer_ready = False
+        self._warmup_chunks = deque(maxlen=warmup_chunks)
         self._dropped_chunks = 0
+        self._dropped_chunks_total = 0
+        self._overflow_events_total = 0
+        self._warmup_dropped_total = 0
+        self._chunks_enqueued_total = 0
+        self._chunks_emitted_total = 0
+        self._queue_high_watermark = 0
+        self._warmup_high_watermark = 0
         self._last_drop_log_at = 0.0
 
     @property
@@ -92,9 +105,15 @@ class LiveKitAudioInput(AudioInput):
             if not self._loop.is_running():
                 raise RuntimeError("LiveKitAudioInput loop is not running")
 
+            self._drain_output_queue_locked()
+            self._buffer.clear()
+            self._warmup_chunks.clear()
             self._running = True
             self._sentinel_sent = False
             self._close_stream_on_stop = True
+            self._consumer_ready = False
+            self._queue_high_watermark = 0
+            self._warmup_high_watermark = 0
             self._pump_future = asyncio.run_coroutine_threadsafe(
                 self._pump_stream(),
                 self._loop,
@@ -116,6 +135,46 @@ class LiveKitAudioInput(AudioInput):
             self._request_stream_close()
         self._enqueue_sentinel()
         logger.info(f"LiveKitAudioInput stopped for {self.participant_id}")
+
+    def set_streaming_ready(self, ready: bool) -> None:
+        pending_chunks: list[bytes] = []
+        with self._state_lock:
+            if self._consumer_ready == ready:
+                return
+            self._consumer_ready = ready
+            if ready:
+                pending_chunks = list(self._warmup_chunks)
+                self._warmup_chunks.clear()
+
+        if ready and pending_chunks:
+            for chunk in pending_chunks:
+                self._enqueue_chunk(chunk)
+            logger.info(
+                "Audio consumer ready for %s; released %d warmup chunks",
+                self.participant_id,
+                len(pending_chunks),
+            )
+        elif ready:
+            logger.info("Audio consumer ready for %s", self.participant_id)
+        else:
+            logger.debug("Audio consumer paused for %s", self.participant_id)
+
+    def stats_snapshot(self) -> dict[str, int | bool]:
+        with self._state_lock:
+            warmup_depth = len(self._warmup_chunks)
+            ready = self._consumer_ready
+        return {
+            "ready": ready,
+            "queue_depth": min(self._q.qsize(), self._queue_capacity),
+            "warmup_depth": warmup_depth,
+            "dropped_chunks_total": self._dropped_chunks_total,
+            "overflow_events_total": self._overflow_events_total,
+            "warmup_dropped_total": self._warmup_dropped_total,
+            "chunks_enqueued_total": self._chunks_enqueued_total,
+            "chunks_emitted_total": self._chunks_emitted_total,
+            "queue_high_watermark": self._queue_high_watermark,
+            "warmup_high_watermark": self._warmup_high_watermark,
+        }
 
     async def _pump_stream(self) -> None:
         try:
@@ -147,6 +206,7 @@ class LiveKitAudioInput(AudioInput):
                 continue
             if chunk is None:
                 break
+            self._chunks_emitted_total += 1
             yield chunk
 
     def _frame_to_bytes(self, frame: object) -> bytes:
@@ -162,6 +222,15 @@ class LiveKitAudioInput(AudioInput):
             self._enqueue_chunk(chunk)
 
     def _enqueue_chunk(self, chunk: bytes) -> None:
+        with self._state_lock:
+            if not self._consumer_ready:
+                if len(self._warmup_chunks) == self._warmup_chunks.maxlen:
+                    self._warmup_dropped_total += 1
+                self._warmup_chunks.append(chunk)
+                if len(self._warmup_chunks) > self._warmup_high_watermark:
+                    self._warmup_high_watermark = len(self._warmup_chunks)
+                return
+
         dropped_now = 0
         while self._q.qsize() >= self._queue_capacity:
             try:
@@ -172,16 +241,25 @@ class LiveKitAudioInput(AudioInput):
 
         if dropped_now:
             self._dropped_chunks += dropped_now
+            self._dropped_chunks_total += dropped_now
+            self._overflow_events_total += 1
             now = time.monotonic()
             if now - self._last_drop_log_at >= 2.0:
                 logger.warning(
-                    "Audio buffer full for %s, dropped %d chunks in the recent interval",
+                    "Audio buffer full for %s, dropped %d chunks in the recent interval "
+                    "(total=%d overflow_events=%d)",
                     self.participant_id,
                     self._dropped_chunks,
+                    self._dropped_chunks_total,
+                    self._overflow_events_total,
                 )
                 self._dropped_chunks = 0
                 self._last_drop_log_at = now
         self._q.put_nowait(chunk)
+        self._chunks_enqueued_total += 1
+        queue_depth = min(self._q.qsize(), self._queue_capacity)
+        if queue_depth > self._queue_high_watermark:
+            self._queue_high_watermark = queue_depth
 
     def _enqueue_sentinel(self) -> None:
         with self._state_lock:
@@ -214,3 +292,10 @@ class LiveKitAudioInput(AudioInput):
             asyncio.run_coroutine_threadsafe(aclose(), loop)
         except RuntimeError:
             logger.debug("Unable to close audio stream for %s", self.participant_id)
+
+    def _drain_output_queue_locked(self) -> None:
+        while True:
+            try:
+                self._q.get_nowait()
+            except queue.Empty:
+                return

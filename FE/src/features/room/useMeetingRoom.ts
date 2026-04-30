@@ -22,7 +22,7 @@ import type {
 import type {
   GatewayConnectionState,
   InterpreterAudioFeed,
-  RemoteAudioFeed,
+  SameLanguagePassthroughAudioFeed,
   VideoFeed,
 } from "../../types/livekit";
 import type {
@@ -38,6 +38,7 @@ import type {
 import type { RoomSession } from "../../state/session";
 import {
   hydrateTranscriptEntries,
+  mergeTranscriptCollections,
   upsertTranscriptEntry,
   type TranscriptEntry,
 } from "./transcripts";
@@ -98,7 +99,8 @@ export function useMeetingRoom({
   const [livekitState, setLivekitState] =
     useState<GatewayConnectionState>("idle");
   const [videos, setVideos] = useState<VideoFeed[]>([]);
-  const [humanAudioFeeds, setHumanAudioFeeds] = useState<RemoteAudioFeed[]>([]);
+  const [sameLanguagePassthroughAudioFeeds, setSameLanguagePassthroughAudioFeeds] =
+    useState<SameLanguagePassthroughAudioFeed[]>([]);
   const [interpreterAudioFeeds, setInterpreterAudioFeeds] = useState<
     InterpreterAudioFeed[]
   >([]);
@@ -118,6 +120,8 @@ export function useMeetingRoom({
   } | null>(null);
   const hasLeftRef = useRef(false);
   const sessionInvalidatedRef = useRef(onSessionInvalidated);
+  const refreshMediaRef = useRef<(() => void) | null>(null);
+  const audioRoutingRef = useRef(session?.room.audio_routing ?? roomMeta?.audio_routing);
 
   useEffect(() => {
     sessionInvalidatedRef.current = onSessionInvalidated;
@@ -130,6 +134,10 @@ export function useMeetingRoom({
   useEffect(() => {
     selfRef.current = selfState;
   }, [selfState]);
+
+  useEffect(() => {
+    audioRoutingRef.current = roomMeta?.audio_routing ?? session?.room.audio_routing;
+  }, [roomMeta?.audio_routing, session?.room.audio_routing]);
 
   useEffect(() => {
     if (!initialRoom || session) {
@@ -155,12 +163,13 @@ export function useMeetingRoom({
       setGatewayState("idle");
       setLivekitState("idle");
       setVideos([]);
-      setHumanAudioFeeds([]);
+      setSameLanguagePassthroughAudioFeeds([]);
       setInterpreterAudioFeeds([]);
       setInterpreterStatuses([]);
       setConnectionError(null);
       setMediaError(null);
       setIsLeaving(false);
+      refreshMediaRef.current = null;
       return;
     }
 
@@ -176,6 +185,7 @@ export function useMeetingRoom({
       expires_at: current?.expires_at || session.room.expires_at,
       participant_limit: session.room.participant_limit,
       supported_languages: session.room.supported_languages,
+      audio_routing: session.room.audio_routing ?? current?.audio_routing,
       participant_count: session.snapshot.participants.length,
     }));
     setSelfState({
@@ -212,17 +222,24 @@ export function useMeetingRoom({
         selfParticipantId: currentSelf.participant_id,
         selfDisplayName: currentSelf.display_name,
         selfLanguage: currentSelf.language,
+        audioRouting: audioRoutingRef.current ?? session.room.audio_routing,
         participantsById: participantsRef.current,
       });
 
       setVideos(media.videos);
-      setHumanAudioFeeds(media.humanAudio);
+      setSameLanguagePassthroughAudioFeeds(
+        media.sameLanguagePassthroughAudio,
+      );
       setInterpreterAudioFeeds(
         media.interpreterAudio.filter(
-          (feed) => feed.info.listenerId === currentSelf.participant_id,
+          (feed) =>
+            feed.info.listenerId === currentSelf.participant_id &&
+            feed.info.tgtLang === currentSelf.language &&
+            feed.info.srcLang !== feed.info.tgtLang,
         ),
       );
     };
+    refreshMediaRef.current = refreshMedia;
 
     const gateway = retainGatewaySocket({
       roomId,
@@ -307,12 +324,22 @@ export function useMeetingRoom({
       gatewayRef.current = null;
       disconnectRoom(livekitRoom);
       livekitRoomRef.current = null;
+      refreshMediaRef.current = null;
     };
   }, [
     roomId,
     sessionKey,
     livekitUrl,
     livekitToken,
+  ]);
+
+  useEffect(() => {
+    refreshMediaRef.current?.();
+  }, [
+    participantsById,
+    selfState?.participant_id,
+    selfState?.language,
+    roomMeta?.audio_routing?.same_language_policy,
   ]);
 
   useEffect(() => {
@@ -442,17 +469,20 @@ export function useMeetingRoom({
       expires_at: current?.expires_at || new Date().toISOString(),
       participant_limit: event.payload.room.participant_limit,
       supported_languages: event.payload.room.supported_languages,
+      audio_routing:
+        event.payload.room.audio_routing ?? current?.audio_routing,
       participant_count: event.payload.participants.length,
     }));
 
     startTransition(() => {
       setTranscripts((current) =>
-        current.length > 0
-          ? current
-          : hydrateTranscriptEntries(
-              event.payload.recent_transcripts,
-              event.payload.self.language,
-            ),
+        mergeTranscriptCollections(
+          current,
+          hydrateTranscriptEntries(
+            event.payload.recent_transcripts,
+            event.payload.self.language,
+          ),
+        ),
       );
     });
   }
@@ -602,7 +632,7 @@ export function useMeetingRoom({
     livekitState,
     connectionState,
     videos,
-    humanAudioFeeds,
+    sameLanguagePassthroughAudioFeeds,
     interpreterAudioFeeds,
     connectionError,
     mediaError,
