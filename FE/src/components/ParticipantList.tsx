@@ -14,7 +14,7 @@ export function ParticipantList({
       <div className="panel-header">
         <div>
           <h3>Participants</h3>
-          <p>Gateway state remains the source of truth for language and presence.</p>
+          <p>Human attendees and the virtual BRSE AI participant are tracked from gateway room state.</p>
         </div>
         <span className="panel-count">{participants.length}</span>
       </div>
@@ -27,9 +27,21 @@ export function ParticipantList({
                 {participant.display_name}
                 {participant.participant_id === selfParticipantId ? " (You)" : ""}
               </strong>
-              <p>{participant.status}</p>
+              <p>
+                {participant.kind === "virtual_brse" || participant.is_virtual
+                  ? "AI relay participant"
+                  : participant.status}
+              </p>
             </div>
-            <span className="language-pill">{participant.language.toUpperCase()}</span>
+            <div className="participant-row-tags">
+              {participant.kind === "virtual_brse" || participant.is_virtual ? (
+                <span className="badge kind">BRSE AI</span>
+              ) : null}
+              {participant.is_screen_sharing ? (
+                <span className="badge live">Sharing screen</span>
+              ) : null}
+              <span className="language-pill">{participant.language.toUpperCase()}</span>
+            </div>
           </div>
         ))}
       </div>

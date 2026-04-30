@@ -133,10 +133,12 @@ class TranslationTestClient:
         api_key: str,
         src_lang: str,
         tgt_lang: str,
+        model: str = "gpt-realtime-1.5",
     ) -> None:
         self._api_key = api_key
         self._src_lang = src_lang
         self._tgt_lang = tgt_lang
+        self._model = model
         self._audio_input = _QueueAudioInput(sample_rate=_SAMPLE_RATE)
         self._client: Optional[InterpreterRealtimeClient] = None
         self._task: Optional[asyncio.Task] = None
@@ -155,6 +157,7 @@ class TranslationTestClient:
     async def start(self) -> None:
         client = InterpreterRealtimeClient(
             api_key=self._api_key,
+            model=self._model,
             src_lang=self._src_lang,
             tgt_lang=self._tgt_lang,
             audio_input=self._audio_input,

@@ -11,6 +11,7 @@ def generate_livekit_token(
     api_secret: str,
     ttl_seconds: int = 86400,
     kind: str = "human",
+    livekit_identity: str | None = None,
 ) -> str:
     grant = VideoGrants(
         room_join=True,
@@ -29,7 +30,7 @@ def generate_livekit_token(
 
     access_token = (
         AccessToken(api_key, api_secret)
-        .with_identity(participant_id)
+        .with_identity(livekit_identity or participant_id)
         .with_name(participant_name)
         .with_grants(grant)
         .with_metadata(json.dumps(metadata))

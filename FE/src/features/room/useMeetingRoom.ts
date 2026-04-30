@@ -1,12 +1,21 @@
 import { startTransition, useEffect, useRef, useState } from "react";
-import { api, buildApiUrl, ApiError } from "../../lib/api";
+import { api, leaveRoomBestEffort, ApiError } from "../../lib/api";
+import { setRoomAudioOutputDevice } from "../../lib/audioOutput";
 import {
   bindRoomRefresh,
   buildMediaSnapshot,
   connectLiveKit,
   createMeetingRoom,
   disconnectRoom,
+  enumerateAudioDevices,
+  getLocalMicrophoneTrack,
+  isMicrophoneMuted,
+  publishScreenShareTrack,
   publishLocalMedia,
+  setLocalMicrophoneMuted,
+  supportsAudioOutputSelection,
+  switchLocalMicrophoneTrack,
+  unpublishScreenShareTrack,
 } from "../../lib/livekit";
 import {
   GatewaySocket,
@@ -18,11 +27,14 @@ import type {
   Language,
   ParticipantSnapshot,
   RoomSnapshotResponse,
+  ScreenShareTrackInfo,
 } from "../../types/api";
 import type {
+  AudioDeviceOption,
+  BrseAudioFeed,
   GatewayConnectionState,
-  InterpreterAudioFeed,
-  SameLanguagePassthroughAudioFeed,
+  HumanAudioFeed,
+  ScreenShareFeed,
   VideoFeed,
 } from "../../types/livekit";
 import type {
@@ -31,11 +43,14 @@ import type {
   ParticipantLeftEvent,
   ParticipantUpdatedEvent,
   RoomSnapshotEvent,
+  ScreenShareStartedEvent,
+  ScreenShareStoppedEvent,
   ServerEvent,
   TranscriptFinalEvent,
   TranscriptPartialEvent,
 } from "../../types/ws";
 import type { RoomSession } from "../../state/session";
+import type { LocalTrack, LocalVideoTrack } from "livekit-client";
 import {
   hydrateTranscriptEntries,
   mergeTranscriptCollections,
@@ -99,13 +114,27 @@ export function useMeetingRoom({
   const [livekitState, setLivekitState] =
     useState<GatewayConnectionState>("idle");
   const [videos, setVideos] = useState<VideoFeed[]>([]);
-  const [sameLanguagePassthroughAudioFeeds, setSameLanguagePassthroughAudioFeeds] =
-    useState<SameLanguagePassthroughAudioFeed[]>([]);
-  const [interpreterAudioFeeds, setInterpreterAudioFeeds] = useState<
-    InterpreterAudioFeed[]
-  >([]);
+  const [humanAudioFeeds, setHumanAudioFeeds] = useState<HumanAudioFeed[]>([]);
+  const [brseAudioFeeds, setBrseAudioFeeds] = useState<BrseAudioFeed[]>([]);
+  const [screenShares, setScreenShares] = useState<ScreenShareFeed[]>([]);
   const [connectionError, setConnectionError] = useState<string | null>(null);
   const [mediaError, setMediaError] = useState<string | null>(null);
+  const [screenShareError, setScreenShareError] = useState<string | null>(null);
+  const [isScreenSharing, setIsScreenSharing] = useState(false);
+  const [isStartingScreenShare, setIsStartingScreenShare] = useState(false);
+  const [isStoppingScreenShare, setIsStoppingScreenShare] = useState(false);
+  const [isMicMuted, setIsMicMuted] = useState(false);
+  const [isTogglingMic, setIsTogglingMic] = useState(false);
+  const [micToggleError, setMicToggleError] = useState<string | null>(null);
+  const [audioInputDevices, setAudioInputDevices] = useState<AudioDeviceOption[]>([]);
+  const [selectedAudioInputDeviceId, setSelectedAudioInputDeviceId] = useState("");
+  const [isSwitchingAudioInput, setIsSwitchingAudioInput] = useState(false);
+  const [audioInputError, setAudioInputError] = useState<string | null>(null);
+  const [audioOutputDevices, setAudioOutputDevices] = useState<AudioDeviceOption[]>([]);
+  const [selectedAudioOutputDeviceId, setSelectedAudioOutputDeviceId] = useState("default");
+  const [isSwitchingAudioOutput, setIsSwitchingAudioOutput] = useState(false);
+  const [audioOutputSupported, setAudioOutputSupported] = useState(false);
+  const [audioOutputError, setAudioOutputError] = useState<string | null>(null);
   const [isLeaving, setIsLeaving] = useState(false);
 
   const gatewayRef = useRef<GatewaySocket | null>(null);
@@ -119,9 +148,19 @@ export function useMeetingRoom({
     requested: Language;
   } | null>(null);
   const hasLeftRef = useRef(false);
+  const hasSentLeaveRef = useRef(false);
+  const manualShutdownRef = useRef(false);
   const sessionInvalidatedRef = useRef(onSessionInvalidated);
   const refreshMediaRef = useRef<(() => void) | null>(null);
   const audioRoutingRef = useRef(session?.room.audio_routing ?? roomMeta?.audio_routing);
+  const localAudioTrackRef = useRef<LocalTrack | null>(null);
+  const localScreenTrackRef = useRef<LocalVideoTrack | null>(null);
+  const localScreenTrackCleanupRef = useRef<(() => void) | null>(null);
+  const stoppingScreenShareRef = useRef(false);
+  const isScreenSharingRef = useRef(false);
+  const selectedAudioInputDeviceIdRef = useRef(selectedAudioInputDeviceId);
+  const selectedAudioOutputDeviceIdRef = useRef(selectedAudioOutputDeviceId);
+  const isSwitchingAudioInputRef = useRef(isSwitchingAudioInput);
 
   useEffect(() => {
     sessionInvalidatedRef.current = onSessionInvalidated;
@@ -138,6 +177,22 @@ export function useMeetingRoom({
   useEffect(() => {
     audioRoutingRef.current = roomMeta?.audio_routing ?? session?.room.audio_routing;
   }, [roomMeta?.audio_routing, session?.room.audio_routing]);
+
+  useEffect(() => {
+    isScreenSharingRef.current = isScreenSharing;
+  }, [isScreenSharing]);
+
+  useEffect(() => {
+    selectedAudioInputDeviceIdRef.current = selectedAudioInputDeviceId;
+  }, [selectedAudioInputDeviceId]);
+
+  useEffect(() => {
+    selectedAudioOutputDeviceIdRef.current = selectedAudioOutputDeviceId;
+  }, [selectedAudioOutputDeviceId]);
+
+  useEffect(() => {
+    isSwitchingAudioInputRef.current = isSwitchingAudioInput;
+  }, [isSwitchingAudioInput]);
 
   useEffect(() => {
     if (!initialRoom || session) {
@@ -159,23 +214,47 @@ export function useMeetingRoom({
 
   useEffect(() => {
     if (!session) {
+      hasSentLeaveRef.current = false;
+      manualShutdownRef.current = false;
+      localAudioTrackRef.current = null;
       setSelfState(null);
       setGatewayState("idle");
       setLivekitState("idle");
       setVideos([]);
-      setSameLanguagePassthroughAudioFeeds([]);
-      setInterpreterAudioFeeds([]);
+      setHumanAudioFeeds([]);
+      setBrseAudioFeeds([]);
+      setScreenShares([]);
       setInterpreterStatuses([]);
       setConnectionError(null);
       setMediaError(null);
+      setScreenShareError(null);
+      setIsScreenSharing(false);
+      setIsStartingScreenShare(false);
+      setIsStoppingScreenShare(false);
+      setIsMicMuted(false);
+      setIsTogglingMic(false);
+      setMicToggleError(null);
+      setAudioInputDevices([]);
+      setSelectedAudioInputDeviceId("");
+      setIsSwitchingAudioInput(false);
+      setAudioInputError(null);
+      setAudioOutputDevices([]);
+      setSelectedAudioOutputDeviceId("default");
+      setIsSwitchingAudioOutput(false);
+      setAudioOutputSupported(false);
+      setAudioOutputError(null);
       setIsLeaving(false);
+      void setRoomAudioOutputDevice("").catch(() => undefined);
       refreshMediaRef.current = null;
       return;
     }
 
     hasLeftRef.current = false;
+    hasSentLeaveRef.current = false;
+    manualShutdownRef.current = false;
     setConnectionError(null);
     setMediaError(null);
+    setAudioOutputSupported(supportsAudioOutputSelection());
     setGatewayState("connecting");
     setLivekitState("connecting");
     setRoomMeta((current) => ({
@@ -185,8 +264,10 @@ export function useMeetingRoom({
       expires_at: current?.expires_at || session.room.expires_at,
       participant_limit: session.room.participant_limit,
       supported_languages: session.room.supported_languages,
+      meeting_mode: session.room.meeting_mode ?? current?.meeting_mode,
+      interpreter_mode: session.room.interpreter_mode ?? current?.interpreter_mode,
       audio_routing: session.room.audio_routing ?? current?.audio_routing,
-      participant_count: session.snapshot.participants.length,
+      participant_count: countHumanParticipants(session.snapshot.participants),
     }));
     setSelfState({
       participant_id: session.participant.participant_id,
@@ -205,7 +286,6 @@ export function useMeetingRoom({
     });
 
     let disposed = false;
-
     const refreshMedia = () => {
       if (disposed) {
         return;
@@ -221,23 +301,17 @@ export function useMeetingRoom({
         room: livekitRoom,
         selfParticipantId: currentSelf.participant_id,
         selfDisplayName: currentSelf.display_name,
-        selfLanguage: currentSelf.language,
-        audioRouting: audioRoutingRef.current ?? session.room.audio_routing,
         participantsById: participantsRef.current,
+        audioRouting: audioRoutingRef.current ?? session.room.audio_routing,
       });
 
       setVideos(media.videos);
-      setSameLanguagePassthroughAudioFeeds(
-        media.sameLanguagePassthroughAudio,
-      );
-      setInterpreterAudioFeeds(
-        media.interpreterAudio.filter(
-          (feed) =>
-            feed.info.listenerId === currentSelf.participant_id &&
-            feed.info.tgtLang === currentSelf.language &&
-            feed.info.srcLang !== feed.info.tgtLang,
-        ),
-      );
+      setHumanAudioFeeds(media.humanAudio);
+      setBrseAudioFeeds(media.brseAudio);
+      setScreenShares(media.screenShares);
+      const currentMicTrack = getLocalMicrophoneTrack(livekitRoom);
+      localAudioTrackRef.current = currentMicTrack;
+      setIsMicMuted(isMicrophoneMuted(currentMicTrack));
     };
     refreshMediaRef.current = refreshMedia;
 
@@ -253,6 +327,10 @@ export function useMeetingRoom({
           return;
         }
 
+        if (manualShutdownRef.current) {
+          return;
+        }
+
         handleGatewayEvent(event);
       },
       onStateChange: (state) => {
@@ -261,7 +339,7 @@ export function useMeetingRoom({
         }
       },
       onFatalClose: (code, reason) => {
-        if (disposed) {
+        if (disposed || manualShutdownRef.current) {
           return;
         }
 
@@ -296,12 +374,16 @@ export function useMeetingRoom({
 
         try {
           await publishLocalMedia(livekitRoom);
+          localAudioTrackRef.current = getLocalMicrophoneTrack(livekitRoom);
+          setIsMicMuted(isMicrophoneMuted(localAudioTrackRef.current));
+          await refreshAudioDevices();
         } catch (error) {
           setMediaError(
             error instanceof Error
               ? error.message
               : "Microphone or camera permission was denied.",
           );
+          await refreshAudioDevices();
         }
 
         refreshMedia();
@@ -318,11 +400,23 @@ export function useMeetingRoom({
 
     return () => {
       disposed = true;
+      manualShutdownRef.current = true;
+      if (localScreenTrackRef.current) {
+        try {
+          gatewayRef.current?.sendScreenShareStop();
+        } catch {
+          // best effort during teardown
+        }
+
+        void api.stopScreenShare(roomId, session.roomToken).catch(() => undefined);
+      }
       unbindRoom();
       unsubscribeGateway();
       releaseGatewaySocket(session.sessionKey);
       gatewayRef.current = null;
-      disconnectRoom(livekitRoom);
+      localAudioTrackRef.current = null;
+      clearLocalScreenTrack(livekitRoomRef.current);
+      disconnectRoom(livekitRoomRef.current);
       livekitRoomRef.current = null;
       refreshMediaRef.current = null;
     };
@@ -339,6 +433,9 @@ export function useMeetingRoom({
     participantsById,
     selfState?.participant_id,
     selfState?.language,
+    roomMeta?.meeting_mode,
+    roomMeta?.interpreter_mode,
+    roomMeta?.audio_routing?.model,
     roomMeta?.audio_routing?.same_language_policy,
   ]);
 
@@ -347,26 +444,72 @@ export function useMeetingRoom({
       return;
     }
 
-    const leaveUrl = buildApiUrl(`/api/rooms/${roomId}/leave`);
-    const handlePageHide = () => {
-      if (hasLeftRef.current) {
+    const tryCleanupUnload = () => {
+      if (hasLeftRef.current || hasSentLeaveRef.current) {
         return;
       }
 
-      void fetch(leaveUrl, {
-        method: "DELETE",
-        headers: {
-          Authorization: `Bearer ${session.roomToken}`,
-        },
-        keepalive: true,
-      }).catch(() => undefined);
+      hasSentLeaveRef.current = true;
+      hasLeftRef.current = true;
+      manualShutdownRef.current = true;
+      if (isScreenSharingRef.current) {
+        try {
+          gatewayRef.current?.sendScreenShareStop();
+        } catch {
+          // best effort for unload path
+        }
+      }
+      const gateway = gatewayRef.current;
+      gatewayRef.current = null;
+      gateway?.disconnectForUnload("Page lifecycle cleanup");
+      localAudioTrackRef.current = null;
+      const lkRoom = livekitRoomRef.current;
+      livekitRoomRef.current = null;
+      clearLocalScreenTrack(lkRoom);
+      disconnectRoom(lkRoom);
+      leaveRoomBestEffort(roomId, session.roomToken);
+      sessionInvalidatedRef.current();
     };
 
+    const handleBeforeUnload = () => {
+      tryCleanupUnload();
+    };
+
+    const handlePageHide = () => {
+      tryCleanupUnload();
+    };
+
+    const handleUnload = () => {
+      tryCleanupUnload();
+    };
+
+    window.addEventListener("beforeunload", handleBeforeUnload);
     window.addEventListener("pagehide", handlePageHide);
+    window.addEventListener("unload", handleUnload);
+
     return () => {
+      window.removeEventListener("beforeunload", handleBeforeUnload);
       window.removeEventListener("pagehide", handlePageHide);
+      window.removeEventListener("unload", handleUnload);
     };
   }, [roomId, session]);
+
+  useEffect(() => {
+    if (!session || typeof navigator === "undefined" || !navigator.mediaDevices) {
+      return;
+    }
+
+    void refreshAudioDevices();
+
+    const handleDeviceChange = () => {
+      void refreshAudioDevices();
+    };
+
+    navigator.mediaDevices.addEventListener("devicechange", handleDeviceChange);
+    return () => {
+      navigator.mediaDevices.removeEventListener("devicechange", handleDeviceChange);
+    };
+  }, [session]);
 
   async function leaveRoom(): Promise<void> {
     if (!session || isLeaving) {
@@ -374,19 +517,306 @@ export function useMeetingRoom({
     }
 
     setIsLeaving(true);
-    hasLeftRef.current = true;
+    manualShutdownRef.current = true;
 
     try {
-      await api.leaveRoom(roomId, session.roomToken);
-    } catch (error) {
-      if (!(error instanceof ApiError)) {
-        console.error("Failed to leave room", error);
+      if (!hasLeftRef.current) {
+        hasLeftRef.current = true;
+        if (isScreenSharing) {
+          await stopScreenShare({
+            reason: "leave_room",
+            notifyBackend: true,
+            signalWsFallback: false,
+          });
+        }
+        if (!hasSentLeaveRef.current) {
+          hasSentLeaveRef.current = true;
+          try {
+            await api.leaveRoom(roomId, session.roomToken);
+          } catch (error) {
+            if (!(error instanceof ApiError)) {
+              console.error("Failed to leave room", error);
+            }
+          }
+        }
       }
     } finally {
-      gatewayRef.current?.disconnect();
-      disconnectRoom(livekitRoomRef.current);
+      const gateway = gatewayRef.current;
+      gatewayRef.current = null;
+      gateway?.disconnect();
+      localAudioTrackRef.current = null;
+      const lkRoom = livekitRoomRef.current;
+      livekitRoomRef.current = null;
+      clearLocalScreenTrack(lkRoom);
+      disconnectRoom(lkRoom);
       sessionInvalidatedRef.current();
       setIsLeaving(false);
+    }
+  }
+
+  async function startScreenShare(): Promise<void> {
+    if (!session || isStartingScreenShare || isStoppingScreenShare || isScreenSharing) {
+      return;
+    }
+
+    const livekitRoom = livekitRoomRef.current;
+    if (!livekitRoom) {
+      setScreenShareError("LiveKit room is not ready for screen sharing.");
+      return;
+    }
+
+    setIsStartingScreenShare(true);
+    setScreenShareError(null);
+
+    try {
+      const published = await publishScreenShareTrack(livekitRoom);
+      localScreenTrackRef.current = published.track;
+
+      const handleTrackEnded = () => {
+        void stopScreenShare({
+          reason: "track_ended",
+          notifyBackend: true,
+          signalWsFallback: false,
+        });
+      };
+
+      published.track.mediaStreamTrack.addEventListener("ended", handleTrackEnded);
+      localScreenTrackCleanupRef.current = () => {
+        published.track.mediaStreamTrack.removeEventListener("ended", handleTrackEnded);
+      };
+
+      const response = await api.startScreenShare(roomId, session.roomToken, {
+        track_sid: published.trackSid,
+        track_name: published.trackName,
+        source: "screen_share",
+      });
+
+      setIsScreenSharing(response.active);
+      patchSelfScreenShareState({
+        active: true,
+        track_sid: response.track_sid ?? published.trackSid,
+        track_name: response.track_name ?? published.trackName,
+        timestamp: response.timestamp,
+      });
+      refreshMediaRef.current?.();
+    } catch (error) {
+      clearLocalScreenTrack(livekitRoom);
+      refreshMediaRef.current?.();
+      setScreenShareError(
+        error instanceof Error ? error.message : "Failed to start screen sharing.",
+      );
+    } finally {
+      setIsStartingScreenShare(false);
+    }
+  }
+
+  async function stopScreenShare(options?: {
+    reason?: string;
+    notifyBackend?: boolean;
+    signalWsFallback?: boolean;
+  }): Promise<void> {
+    if (stoppingScreenShareRef.current) {
+      return;
+    }
+
+    const reason = options?.reason ?? "manual_stop";
+    const notifyBackend = options?.notifyBackend ?? true;
+    const signalWsFallback = options?.signalWsFallback ?? false;
+    const hasLocalScreenTrack = !!localScreenTrackRef.current;
+    const canStop = hasLocalScreenTrack || isScreenSharing;
+    if (!canStop) {
+      return;
+    }
+
+    stoppingScreenShareRef.current = true;
+    setIsStoppingScreenShare(true);
+    setScreenShareError(null);
+
+    try {
+      if (session && notifyBackend) {
+        try {
+          await api.stopScreenShare(roomId, session.roomToken);
+        } catch (error) {
+          if (signalWsFallback) {
+            try {
+              gatewayRef.current?.sendScreenShareStop();
+            } catch {
+              // ignore fallback send failure
+            }
+          }
+
+          setScreenShareError(
+            error instanceof Error ? error.message : "Failed to sync screen share stop with backend.",
+          );
+        }
+      }
+    } finally {
+      clearLocalScreenTrack(livekitRoomRef.current);
+      setIsScreenSharing(false);
+      patchSelfScreenShareState({
+        active: false,
+        timestamp: new Date().toISOString(),
+      });
+      refreshMediaRef.current?.();
+      setIsStoppingScreenShare(false);
+      stoppingScreenShareRef.current = false;
+    }
+
+    if (reason === "track_ended") {
+      setScreenShareError("Screen sharing ended from browser controls.");
+    }
+  }
+
+  async function toggleMicrophoneMuted(): Promise<void> {
+    if (isTogglingMic) {
+      return;
+    }
+
+    const localTrack = localAudioTrackRef.current;
+    if (!localTrack) {
+      setMicToggleError("Microphone track is not ready.");
+      return;
+    }
+
+    setIsTogglingMic(true);
+    setMicToggleError(null);
+    try {
+      const nextMuted = !isMicrophoneMuted(localTrack);
+      await setLocalMicrophoneMuted(localTrack, nextMuted);
+      setIsMicMuted(nextMuted);
+    } catch (error) {
+      setMicToggleError(
+        error instanceof Error ? error.message : "Failed to update microphone mute state.",
+      );
+    } finally {
+      setIsTogglingMic(false);
+    }
+  }
+
+  async function switchAudioInput(deviceId: string): Promise<void> {
+    if (isSwitchingAudioInput || !deviceId) {
+      return;
+    }
+
+    const livekitRoom = livekitRoomRef.current;
+    if (!livekitRoom) {
+      setAudioInputError("LiveKit room is not ready for switching microphone.");
+      return;
+    }
+
+    setIsSwitchingAudioInput(true);
+    setAudioInputError(null);
+    try {
+      const previousTrack = localAudioTrackRef.current;
+      const shouldRemainMuted = isMicrophoneMuted(previousTrack);
+      const nextTrack = await switchLocalMicrophoneTrack(
+        livekitRoom,
+        previousTrack,
+        deviceId,
+      );
+      localAudioTrackRef.current = nextTrack;
+      if (shouldRemainMuted && !isMicrophoneMuted(nextTrack)) {
+        await setLocalMicrophoneMuted(nextTrack, true);
+      }
+
+      setSelectedAudioInputDeviceId(deviceId);
+      setIsMicMuted(isMicrophoneMuted(nextTrack));
+      refreshMediaRef.current?.();
+      await refreshAudioDevices();
+    } catch (error) {
+      setAudioInputError(
+        error instanceof Error ? error.message : "Failed to switch microphone input device.",
+      );
+    } finally {
+      setIsSwitchingAudioInput(false);
+    }
+  }
+
+  async function switchAudioOutput(deviceId: string): Promise<void> {
+    if (isSwitchingAudioOutput || !deviceId) {
+      return;
+    }
+
+    if (!audioOutputSupported) {
+      setAudioOutputError("This browser does not support output device selection.");
+      return;
+    }
+
+    setIsSwitchingAudioOutput(true);
+    setAudioOutputError(null);
+    try {
+      await setRoomAudioOutputDevice(deviceId);
+      setSelectedAudioOutputDeviceId(deviceId);
+    } catch (error) {
+      setAudioOutputError(
+        error instanceof Error ? error.message : "Failed to switch output device.",
+      );
+    } finally {
+      setIsSwitchingAudioOutput(false);
+    }
+  }
+
+  function reportAudioOutputApplyError(message: string): void {
+    setAudioOutputError(message);
+  }
+
+  async function refreshAudioDevices(): Promise<void> {
+    try {
+      const outputSupported = supportsAudioOutputSelection();
+      setAudioOutputSupported(outputSupported);
+      const deviceSet = await enumerateAudioDevices();
+      setAudioInputDevices(deviceSet.audioInputs);
+      setAudioOutputDevices(deviceSet.audioOutputs);
+      setAudioInputError(null);
+
+      const currentTrackDeviceId = getLocalTrackDeviceId(localAudioTrackRef.current);
+      const selectedInputDeviceId = selectedAudioInputDeviceIdRef.current;
+      const hasSelectedInput = deviceSet.audioInputs.some(
+        (device) => device.deviceId === selectedInputDeviceId,
+      );
+      const nextInputDeviceId = hasSelectedInput
+        ? selectedInputDeviceId
+        : deviceSet.audioInputs.find((device) => device.deviceId === currentTrackDeviceId)?.deviceId
+          || deviceSet.audioInputs[0]?.deviceId
+          || "";
+      setSelectedAudioInputDeviceId(nextInputDeviceId);
+
+      if (selectedInputDeviceId && !hasSelectedInput && deviceSet.audioInputs.length > 0) {
+        setAudioInputError("Selected microphone is unavailable. Switched to another device.");
+        if (nextInputDeviceId && !isSwitchingAudioInputRef.current) {
+          void switchAudioInput(nextInputDeviceId);
+        }
+      }
+
+      if (!outputSupported) {
+        setSelectedAudioOutputDeviceId("");
+        setAudioOutputError("This browser does not support output device selection.");
+        void setRoomAudioOutputDevice("").catch(() => undefined);
+        return;
+      }
+
+      const selectedOutputDeviceId = selectedAudioOutputDeviceIdRef.current;
+      const hasSelectedOutput = deviceSet.audioOutputs.some(
+        (device) => device.deviceId === selectedOutputDeviceId,
+      );
+      const nextOutputDeviceId = hasSelectedOutput
+        ? selectedOutputDeviceId
+        : deviceSet.audioOutputs[0]?.deviceId || "default";
+      setSelectedAudioOutputDeviceId(nextOutputDeviceId);
+      await setRoomAudioOutputDevice(nextOutputDeviceId);
+
+      if (selectedOutputDeviceId && !hasSelectedOutput && deviceSet.audioOutputs.length > 0) {
+        setAudioOutputError("Selected output device is unavailable. Switched to another device.");
+      } else {
+        setAudioOutputError(null);
+      }
+    } catch (error) {
+      setAudioInputError(
+        error instanceof Error ? error.message : "Failed to enumerate audio input devices.",
+      );
+      setAudioOutputError(
+        error instanceof Error ? error.message : "Failed to enumerate audio output devices.",
+      );
     }
   }
 
@@ -443,6 +873,12 @@ export function useMeetingRoom({
       case "participant.left":
         applyParticipantLeft(event);
         return;
+      case "screen_share.started":
+        applyScreenShareStarted(event);
+        return;
+      case "screen_share.stopped":
+        applyScreenShareStopped(event);
+        return;
       case "transcript.partial":
       case "transcript.final":
         applyTranscriptEvent(event);
@@ -462,6 +898,7 @@ export function useMeetingRoom({
   function applyRoomSnapshot(event: RoomSnapshotEvent): void {
     setSelfState(event.payload.self);
     setParticipantsById(mapParticipants(event.payload.participants));
+    syncLocalScreenShareState(event.payload.participants, event.payload.self.participant_id);
     setRoomMeta((current) => ({
       room_id: current?.room_id || roomId,
       state: event.payload.room.state,
@@ -469,9 +906,12 @@ export function useMeetingRoom({
       expires_at: current?.expires_at || new Date().toISOString(),
       participant_limit: event.payload.room.participant_limit,
       supported_languages: event.payload.room.supported_languages,
+      meeting_mode: event.payload.room.meeting_mode ?? current?.meeting_mode,
+      interpreter_mode:
+        event.payload.room.interpreter_mode ?? current?.interpreter_mode,
       audio_routing:
         event.payload.room.audio_routing ?? current?.audio_routing,
-      participant_count: event.payload.participants.length,
+      participant_count: countHumanParticipants(event.payload.participants),
     }));
 
     startTransition(() => {
@@ -488,6 +928,7 @@ export function useMeetingRoom({
   }
 
   function applyParticipantJoined(event: ParticipantJoinedEvent): void {
+    const isVirtual = event.payload.kind === "virtual_brse" || event.payload.is_virtual;
     setParticipantsById((current) => ({
       ...current,
       [event.payload.participant_id]: {
@@ -496,13 +937,21 @@ export function useMeetingRoom({
         language: event.payload.language,
         status: event.payload.status,
         joined_at: event.payload.joined_at,
+        kind: event.payload.kind,
+        is_virtual: event.payload.is_virtual,
+        livekit_identity: event.payload.livekit_identity,
+        metadata: event.payload.metadata,
+        is_screen_sharing: event.payload.is_screen_sharing ?? false,
+        screen_share: event.payload.screen_share ?? null,
       },
     }));
     setRoomMeta((current) =>
       current
         ? {
             ...current,
-            participant_count: current.participant_count + 1,
+            participant_count: isVirtual
+              ? current.participant_count
+              : current.participant_count + 1,
           }
         : current,
     );
@@ -518,7 +967,15 @@ export function useMeetingRoom({
           display_name: event.payload.display_name,
           language: event.payload.language,
           status: event.payload.status,
-          joined_at: existing?.joined_at,
+          joined_at: event.payload.joined_at ?? existing?.joined_at,
+          kind: event.payload.kind ?? existing?.kind,
+          is_virtual: event.payload.is_virtual ?? existing?.is_virtual,
+          livekit_identity:
+            event.payload.livekit_identity ?? existing?.livekit_identity,
+          metadata: event.payload.metadata ?? existing?.metadata,
+          is_screen_sharing:
+            event.payload.is_screen_sharing ?? existing?.is_screen_sharing ?? false,
+          screen_share: event.payload.screen_share ?? existing?.screen_share ?? null,
         },
       };
     });
@@ -537,10 +994,19 @@ export function useMeetingRoom({
       if (pendingLanguageRef.current?.requested === event.payload.language) {
         pendingLanguageRef.current = null;
       }
+
+      const backendSaysSharing = !!event.payload.is_screen_sharing;
+      setIsScreenSharing(backendSaysSharing);
+      if (!backendSaysSharing) {
+        clearLocalScreenTrack(livekitRoomRef.current);
+      }
     }
   }
 
   function applyParticipantLeft(event: ParticipantLeftEvent): void {
+    const leftParticipant = participantsRef.current[event.payload.participant_id];
+    const isVirtual =
+      leftParticipant?.kind === "virtual_brse" || leftParticipant?.is_virtual;
     setParticipantsById((current) => {
       if (!(event.payload.participant_id in current)) {
         return current;
@@ -554,10 +1020,68 @@ export function useMeetingRoom({
       current
         ? {
             ...current,
-            participant_count: Math.max(0, current.participant_count - 1),
+            participant_count: isVirtual
+              ? current.participant_count
+              : Math.max(0, current.participant_count - 1),
           }
         : current,
     );
+
+    if (event.payload.participant_id === selfRef.current?.participant_id) {
+      setIsScreenSharing(false);
+      clearLocalScreenTrack(livekitRoomRef.current);
+    }
+  }
+
+  function applyScreenShareStarted(event: ScreenShareStartedEvent): void {
+    setParticipantsById((current) => {
+      const existing = current[event.payload.participant_id];
+      if (!existing) {
+        return current;
+      }
+
+      return {
+        ...current,
+        [event.payload.participant_id]: {
+          ...existing,
+          is_screen_sharing: true,
+          screen_share: {
+            active: true,
+            source: event.payload.source,
+            track_sid: event.payload.track_sid,
+            track_name: event.payload.track_name,
+            started_at: event.payload.timestamp,
+          },
+        },
+      };
+    });
+
+    if (event.payload.participant_id === selfRef.current?.participant_id) {
+      setIsScreenSharing(true);
+    }
+  }
+
+  function applyScreenShareStopped(event: ScreenShareStoppedEvent): void {
+    setParticipantsById((current) => {
+      const existing = current[event.payload.participant_id];
+      if (!existing) {
+        return current;
+      }
+
+      return {
+        ...current,
+        [event.payload.participant_id]: {
+          ...existing,
+          is_screen_sharing: false,
+          screen_share: null,
+        },
+      };
+    });
+
+    if (event.payload.participant_id === selfRef.current?.participant_id) {
+      setIsScreenSharing(false);
+      clearLocalScreenTrack(livekitRoomRef.current);
+    }
   }
 
   function applyTranscriptEvent(
@@ -616,30 +1140,152 @@ export function useMeetingRoom({
 
   const connectionState = deriveConnectionState(gatewayState, livekitState);
   const activeParticipants = Object.values(participantsById).sort((left, right) =>
-    left.display_name.localeCompare(right.display_name),
+    compareParticipants(left, right, selfState?.participant_id),
   );
-  const relevantInterpreterStatuses = interpreterStatuses.filter((item) =>
-    selfState ? item.targetLanguage === selfState.language : true,
+  const relayStatuses = [...interpreterStatuses].sort((left, right) =>
+    right.updatedAt.localeCompare(left.updatedAt),
   );
 
   return {
     roomMeta,
+    meetingMode:
+      roomMeta?.meeting_mode ?? session?.room.meeting_mode ?? null,
+    interpreterMode:
+      roomMeta?.interpreter_mode ?? session?.room.interpreter_mode ?? null,
     selfState,
     participants: activeParticipants,
     transcripts,
-    interpreterStatuses: relevantInterpreterStatuses,
+    interpreterStatuses: relayStatuses,
     gatewayState,
     livekitState,
     connectionState,
     videos,
-    sameLanguagePassthroughAudioFeeds,
-    interpreterAudioFeeds,
+    humanAudioFeeds,
+    brseAudioFeeds,
+    screenShares,
     connectionError,
     mediaError,
+    screenShareError,
+    isScreenSharing,
+    isStartingScreenShare,
+    isStoppingScreenShare,
+    isMicMuted,
+    isTogglingMic,
+    micToggleError,
+    audioInputDevices,
+    selectedAudioInputDeviceId,
+    isSwitchingAudioInput,
+    audioInputError,
+    audioOutputDevices,
+    selectedAudioOutputDeviceId,
+    isSwitchingAudioOutput,
+    audioOutputSupported,
+    audioOutputError,
     isLeaving,
     changeLanguage,
+    toggleMicrophoneMuted,
+    switchAudioInput,
+    switchAudioOutput,
+    reportAudioOutputApplyError,
+    startScreenShare,
+    stopScreenShare,
     leaveRoom,
   };
+
+  function clearLocalScreenTrack(livekitRoom: ReturnType<typeof createMeetingRoom> | null): void {
+    const localTrack = localScreenTrackRef.current;
+    localScreenTrackCleanupRef.current?.();
+    localScreenTrackCleanupRef.current = null;
+
+    if (livekitRoom) {
+      try {
+        unpublishScreenShareTrack(livekitRoom, localTrack);
+      } catch {
+        localTrack?.stop();
+      }
+    } else if (localTrack) {
+      localTrack.stop();
+    }
+
+    localScreenTrackRef.current = null;
+  }
+
+  function patchSelfScreenShareState(next: {
+    active: boolean;
+    track_sid?: string | null;
+    track_name?: string | null;
+    timestamp: string;
+  }): void {
+    const currentSelf = selfRef.current;
+    if (!currentSelf) {
+      return;
+    }
+
+    setParticipantsById((current) => {
+      const existing = current[currentSelf.participant_id];
+      if (!existing) {
+        return current;
+      }
+
+      const screenShare: ScreenShareTrackInfo | null = next.active
+        ? {
+            active: true,
+            source: "screen_share",
+            track_sid: next.track_sid ?? undefined,
+            track_name: next.track_name ?? undefined,
+            started_at: next.timestamp,
+          }
+        : null;
+
+      return {
+        ...current,
+        [currentSelf.participant_id]: {
+          ...existing,
+          is_screen_sharing: next.active,
+          screen_share: screenShare,
+        },
+      };
+    });
+  }
+
+  function syncLocalScreenShareState(
+    participants: ParticipantSnapshot[],
+    selfParticipantId: string,
+  ): void {
+    const selfParticipant = participants.find(
+      (participant) => participant.participant_id === selfParticipantId,
+    );
+    const backendSaysSharing = !!selfParticipant?.is_screen_sharing;
+    setIsScreenSharing(backendSaysSharing);
+    if (!backendSaysSharing) {
+      clearLocalScreenTrack(livekitRoomRef.current);
+    }
+  }
+}
+
+function compareParticipants(
+  left: ParticipantSnapshot,
+  right: ParticipantSnapshot,
+  selfParticipantId?: string,
+): number {
+  if (left.participant_id === selfParticipantId) {
+    return -1;
+  }
+  if (right.participant_id === selfParticipantId) {
+    return 1;
+  }
+
+  const leftRank = left.kind === "virtual_brse" || left.is_virtual ? 1 : 0;
+  const rightRank = right.kind === "virtual_brse" || right.is_virtual ? 1 : 0;
+  if (leftRank !== rightRank) {
+    return leftRank - rightRank;
+  }
+
+  return left.display_name.localeCompare(right.display_name);
+}
+
+function countHumanParticipants(participants: ParticipantSnapshot[]): number {
+  return participants.filter((participant) => participant.kind !== "virtual_brse" && !participant.is_virtual).length;
 }
 
 function mapParticipants(
@@ -649,6 +1295,16 @@ function mapParticipants(
     acc[item.participant_id] = item;
     return acc;
   }, {});
+}
+
+function getLocalTrackDeviceId(track: LocalTrack | null): string | null {
+  if (!track || !("mediaStreamTrack" in track)) {
+    return null;
+  }
+
+  const mediaStreamTrack = (track as { mediaStreamTrack?: MediaStreamTrack }).mediaStreamTrack;
+  const deviceId = mediaStreamTrack?.getSettings().deviceId;
+  return deviceId ?? null;
 }
 
 function deriveConnectionState(

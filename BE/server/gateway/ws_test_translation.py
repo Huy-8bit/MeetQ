@@ -80,6 +80,7 @@ async def ws_translation_test(websocket: WebSocket, session_id: str) -> None:
 
     client = TranslationTestClient(
         api_key=settings.openai_api_key,
+        model=settings.openai_realtime_model,
         src_lang=session.src_lang,
         tgt_lang=session.tgt_lang,
     )

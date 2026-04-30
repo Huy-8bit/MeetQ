@@ -1,21 +1,32 @@
 import type {
   Language,
+  ParticipantKind,
+  ParticipantReference,
   RecentTranscriptSnapshot,
 } from "../../types/api";
 import type { TranscriptPayload } from "../../types/ws";
 
-export type TranscriptKind = "source" | "translated";
+export type TranscriptKind = "source" | "translated" | "relay";
 
 export interface TranscriptEntry {
   transcriptId: string;
   utteranceId: string | null;
-  speakerParticipantId: string;
-  speakerName: string;
-  speakerLanguage: Language;
   kind: TranscriptKind;
-  srcLang: Language;
-  tgtLang: Language | null;
+  actorParticipantId: string;
+  actorName: string;
+  actorLanguage: Language;
+  actorKind: ParticipantKind;
+  sourceSpeakerId: string;
+  sourceSpeakerName: string;
+  sourceSpeakerLanguage: Language;
+  relayParticipantId: string | null;
+  relayParticipantName: string | null;
+  relayTargetLanguage: Language | null;
+  sourceText: string;
+  relayText: string | null;
   text: string;
+  audioTrackName: string | null;
+  canonicalAudioTrackName: string | null;
   fallbackUsed: boolean;
   isFinal: boolean;
   timestamp: string;
@@ -71,25 +82,56 @@ function normalizeSnapshotTranscript(
   targetLanguage: Language | null,
 ): TranscriptEntry {
   const kind = item.kind ?? inferSnapshotKind(item);
-  const srcLang = item.src_lang;
-  const speakerLanguage =
-    item.speaker_language ?? item.speaker?.language ?? item.speaker?.source_language ?? srcLang;
+  const sourceSpeakerRef = pickSourceSpeakerRef({
+    speakerId: item.speaker_id,
+    speakerName: item.speaker_display_name,
+    srcLang: item.src_lang,
+    speaker: item.speaker,
+    originalSpeaker: item.original_speaker,
+  });
+  const relayParticipant = pickRelayParticipantRef(item.brse_participant);
+  const relayTargetLanguage =
+    item.relay_target?.target_language
+    ?? item.target_lang
+    ?? item.listener?.target_language
+    ?? targetLanguage;
+  const actor = pickActor({
+    kind,
+    sourceSpeakerRef,
+    relayParticipant,
+    relayTargetLanguage,
+  });
+  const sourceText = item.source_text ?? item.text ?? "";
+  const relayText = pickRelayText(kind, {
+    text: item.text,
+    brseText: item.brse_text,
+    translatedText: item.translated_text,
+  });
   const text =
-    item.text ??
-    (kind === "translated"
-      ? item.translated_text ?? item.source_text
-      : item.source_text);
+    kind === "relay"
+      ? relayText ?? sourceText
+      : item.text ?? (kind === "translated" ? relayText ?? sourceText : sourceText);
 
   return {
     transcriptId: item.transcript_id,
     utteranceId: item.utterance_id ?? null,
-    speakerParticipantId: item.speaker?.participant_id ?? item.speaker_id,
-    speakerName: item.speaker?.display_name ?? item.speaker_display_name,
-    speakerLanguage,
     kind,
-    srcLang,
-    tgtLang: item.target_lang ?? item.listener?.target_language ?? targetLanguage,
+    actorParticipantId: actor.participant_id,
+    actorName: actor.display_name,
+    actorLanguage: actor.language,
+    actorKind: actor.kind,
+    sourceSpeakerId: sourceSpeakerRef.participant_id,
+    sourceSpeakerName: sourceSpeakerRef.display_name,
+    sourceSpeakerLanguage: sourceSpeakerRef.source_language ?? sourceSpeakerRef.language,
+    relayParticipantId: relayParticipant?.participant_id ?? null,
+    relayParticipantName: relayParticipant?.display_name ?? null,
+    relayTargetLanguage: relayTargetLanguage ?? null,
+    sourceText,
+    relayText,
     text,
+    audioTrackName: item.audio_track_name ?? null,
+    canonicalAudioTrackName:
+      item.audio_output?.track_name ?? item.audio_track_name ?? null,
     fallbackUsed: item.fallback_used ?? false,
     isFinal: item.is_final ?? true,
     timestamp: item.created_at,
@@ -102,27 +144,64 @@ function normalizeLiveTranscript(
   sentAt: string,
 ): TranscriptEntry {
   const kind = payload.kind ?? inferLiveKind(payload);
-  const srcLang =
-    payload.src_lang ??
-    payload.speaker.source_language ??
-    payload.speaker.language ??
-    payload.listener?.target_language ??
-    "en";
-  const speakerLanguage =
-    payload.speaker.language ?? payload.speaker.source_language ?? srcLang;
-  const text = payload.text ?? pickTranscriptText(kind, payload);
+  const sourceSpeakerRef = pickSourceSpeakerRef({
+    speakerId: payload.speaker.participant_id,
+    speakerName: payload.speaker.display_name,
+    srcLang:
+      payload.src_lang
+      ?? payload.original_speaker?.source_language
+      ?? payload.original_speaker?.language
+      ?? payload.speaker.source_language
+      ?? payload.speaker.language
+      ?? "auto",
+    speaker: payload.speaker,
+    originalSpeaker: payload.original_speaker,
+  });
+  const relayParticipant = pickRelayParticipantRef(payload.brse_participant);
+  const relayTargetLanguage =
+    payload.relay_target?.target_language
+    ?? payload.tgt_lang
+    ?? payload.listener?.target_language
+    ?? payload.audio_output?.target_language
+    ?? null;
+  const actor = pickActor({
+    kind,
+    sourceSpeakerRef,
+    relayParticipant,
+    relayTargetLanguage,
+  });
+  const sourceText = payload.source_text ?? payload.text ?? "";
+  const relayText = pickRelayText(kind, {
+    text: payload.text,
+    brseText: payload.brse_text,
+    translatedText: payload.translated_text,
+  });
+  const text =
+    kind === "relay"
+      ? relayText ?? sourceText
+      : payload.text ?? (kind === "translated" ? relayText ?? sourceText : sourceText);
   const timestamp = payload.created_at ?? sentAt;
 
   return {
     transcriptId: payload.transcript_id,
     utteranceId: payload.utterance_id ?? null,
-    speakerParticipantId: payload.speaker.participant_id,
-    speakerName: payload.speaker.display_name,
-    speakerLanguage,
     kind,
-    srcLang,
-    tgtLang: payload.tgt_lang ?? payload.listener?.target_language ?? null,
+    actorParticipantId: actor.participant_id,
+    actorName: actor.display_name,
+    actorLanguage: actor.language,
+    actorKind: actor.kind,
+    sourceSpeakerId: sourceSpeakerRef.participant_id,
+    sourceSpeakerName: sourceSpeakerRef.display_name,
+    sourceSpeakerLanguage: sourceSpeakerRef.source_language ?? sourceSpeakerRef.language,
+    relayParticipantId: relayParticipant?.participant_id ?? null,
+    relayParticipantName: relayParticipant?.display_name ?? null,
+    relayTargetLanguage,
+    sourceText,
+    relayText,
     text,
+    audioTrackName: payload.audio_track_name ?? null,
+    canonicalAudioTrackName:
+      payload.audio_output?.track_name ?? payload.audio_track_name ?? null,
     fallbackUsed: payload.fallback_used,
     isFinal: payload.is_final,
     timestamp,
@@ -164,6 +243,9 @@ function choosePreferredTranscript(
 }
 
 function inferSnapshotKind(item: RecentTranscriptSnapshot): TranscriptKind {
+  if (item.brse_text || item.brse_participant || item.relay_target) {
+    return "relay";
+  }
   if (item.translated_text && item.target_lang && item.target_lang !== item.src_lang) {
     return "translated";
   }
@@ -171,6 +253,9 @@ function inferSnapshotKind(item: RecentTranscriptSnapshot): TranscriptKind {
 }
 
 function inferLiveKind(payload: TranscriptPayload): TranscriptKind {
+  if (payload.brse_text || payload.brse_participant || payload.relay_target) {
+    return "relay";
+  }
   if (payload.tgt_lang && payload.src_lang && payload.tgt_lang !== payload.src_lang) {
     return "translated";
   }
@@ -182,11 +267,86 @@ function inferLiveKind(payload: TranscriptPayload): TranscriptKind {
   return "source";
 }
 
-function pickTranscriptText(kind: TranscriptKind, payload: TranscriptPayload): string {
-  if (kind === "translated") {
-    return payload.translated_text ?? payload.source_text ?? "";
+function pickSourceSpeakerRef(input: {
+  speakerId: string;
+  speakerName: string;
+  srcLang: Language;
+  speaker?: ParticipantReference | null;
+  originalSpeaker?: ParticipantReference | null;
+}): RequiredParticipantReference {
+  const ref = input.originalSpeaker ?? input.speaker;
+  return {
+    participant_id: ref?.participant_id ?? input.speakerId,
+    display_name: ref?.display_name ?? input.speakerName,
+    language:
+      ref?.language
+      ?? ref?.source_language
+      ?? input.srcLang,
+    source_language:
+      ref?.source_language
+      ?? ref?.language
+      ?? input.srcLang,
+    kind: ref?.kind ?? "human",
+  };
+}
+
+function pickRelayParticipantRef(
+  ref?: ParticipantReference | null,
+): RequiredParticipantReference | null {
+  if (!ref) {
+    return null;
   }
-  return payload.source_text ?? payload.translated_text ?? "";
+
+  return {
+    participant_id: ref.participant_id,
+    display_name: ref.display_name,
+    language: ref.language ?? "auto",
+    source_language: ref.source_language ?? ref.language ?? "auto",
+    kind: ref.kind ?? "virtual_brse",
+  };
+}
+
+function pickActor(input: {
+  kind: TranscriptKind;
+  sourceSpeakerRef: RequiredParticipantReference;
+  relayParticipant: RequiredParticipantReference | null;
+  relayTargetLanguage: Language | null;
+}): RequiredParticipantReference {
+  if (input.kind !== "relay") {
+    return input.sourceSpeakerRef;
+  }
+
+  const relayActor = input.relayParticipant ?? {
+    participant_id: "brse_ai",
+    display_name: "BRSE AI",
+    language: "auto" as Language,
+    source_language: "auto" as Language,
+    kind: "virtual_brse" as ParticipantKind,
+  };
+
+  return {
+    ...relayActor,
+    language: input.relayTargetLanguage ?? relayActor.language,
+  };
+}
+
+function pickRelayText(
+  kind: TranscriptKind,
+  input: {
+    text?: string | null;
+    brseText?: string | null;
+    translatedText?: string | null;
+  },
+): string | null {
+  if (kind === "relay") {
+    return input.brseText ?? input.translatedText ?? input.text ?? null;
+  }
+
+  if (kind === "translated") {
+    return input.translatedText ?? input.text ?? null;
+  }
+
+  return null;
 }
 
 function sortTranscriptEntries(left: TranscriptEntry, right: TranscriptEntry): number {
@@ -195,4 +355,12 @@ function sortTranscriptEntries(left: TranscriptEntry, right: TranscriptEntry): n
     return byTime;
   }
   return left.updatedAt.localeCompare(right.updatedAt);
+}
+
+interface RequiredParticipantReference {
+  participant_id: string;
+  display_name: string;
+  language: Language;
+  source_language: Language;
+  kind: ParticipantKind;
 }

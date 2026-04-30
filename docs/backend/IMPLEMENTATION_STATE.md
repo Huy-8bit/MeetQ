@@ -1,8 +1,169 @@
 # Backend Implementation State
 
+## Turn Update: 2026-05-01 Room Create 500 Hotfix (JSON Serialization)
+
+- Time: 2026-05-01T15:26:00+07:00
+- Mode: CODE-ONLY
+- Testing deferred: yes
+
+### Root Cause
+
+- `POST /api/rooms` failed with 500 because `RoomService.create_room()` publishes `participant.joined` for virtual participants.
+- `room.virtual_participants` is typed as `List[ParticipantSnapshot]`, so `_publish(...)` received Pydantic objects.
+- `_publish` used `json.dumps(envelope)` directly, causing `TypeError: Object of type ParticipantSnapshot is not JSON serializable`.
+
+### Fix Applied
+
+- Updated `BE/server/gateway/room_service.py`:
+  - `_publish(...)` now accepts `payload: Any` and applies `fastapi.encoders.jsonable_encoder(payload)` before building/publishing envelope.
+  - This normalizes Pydantic payloads to JSON-safe dict/list primitives and keeps existing event semantics unchanged.
+
+### Impact
+
+- Hotfix unblocks room creation path and Redis event publish path for virtual participant payloads.
+- No feature redesign, no test changes, no FE changes.
+
+## Turn Update: 2026-05-01 Interpreter Startup Hotfix (Kickoff)
+
+- Time: 2026-05-01T15:05:00+07:00
+- Mode: CODE-ONLY
+- Testing deferred: yes
+
+### Root Cause (Locked)
+
+- Interpreter container crash-loop is caused by a Python indentation regression in `BE/server/interpreter/livekit_runtime.py`.
+- In `LiveKitRuntime.connect()`, `_sync_existing_audio_tracks()` is dedented outside method body, causing `IndentationError: unexpected indent` at import/runtime startup.
+
+### Plan (Current Turn)
+
+- Repair indentation/block structure in `connect()` so method body is structurally valid.
+- Re-scan nearby methods in the same file (`disconnect`, callbacks, `_sync_existing_audio_tracks`) for adjacent block regressions.
+- Keep semantics unchanged except minimal structural fixes needed to unblock interpreter startup.
+
+## Turn Update: 2026-05-01 Interpreter Startup Hotfix (Post-Major)
+
+- Time: 2026-05-01T15:10:00+07:00
+- Status: implementation completed
+
+### Files Updated
+
+- `BE/server/interpreter/livekit_runtime.py`
+- `docs/backend/IMPLEMENTATION_STATE.md`
+
+### Structural Fix Applied
+
+- Fixed indentation regression in `LiveKitRuntime.connect()`:
+  - restored `_sync_existing_audio_tracks()` into the `connect()` method body.
+  - method statement order is now structurally correct:
+    - `await self.room.connect(...)`
+    - `self._sync_existing_audio_tracks()`
+    - `logger.info(...)`
+
+### Nearby Block Scan (Same File)
+
+- Reviewed adjacent blocks for similar indentation/structure breakage:
+  - `async def connect`
+  - `async def disconnect`
+  - callbacks `_on_track_subscribed`, `_on_track_published`, `_on_track_unsubscribed`, `_on_participant_disconnected`
+  - helper `_sync_existing_audio_tracks`
+- No additional indentation regressions found in those blocks.
+
+### Impact
+
+- This is a hotfix to unblock interpreter module import/startup path that was failing with `IndentationError`.
+- No feature redesign or behavior expansion in this turn.
+- Testing deferred by instruction (no test execution).
+
+## Turn Update: 2026-05-01 Interpreter Startup Hotfix (Final Sync)
+
+- Time: 2026-05-01T15:12:00+07:00
+- Scope confirmation: backend runtime hotfix only.
+- Startup blocker addressed: `BE/server/interpreter/livekit_runtime.py` indentation in `connect()` fixed.
+- Testing status: deferred by instruction.
+
+## Turn Update: 2026-05-01 Stale/Ghost Participant Cleanup (Kickoff)
+
+- Time: 2026-05-01T14:05:00+07:00
+- Mode: CODE-ONLY
+- Testing deferred: yes
+
+### Root Cause (Locked)
+
+- Room websocket disconnect path can remove socket references but still leave participant record in Redis participant map, so snapshots/participant lists can retain stale entries.
+- Leave semantics are spread across paths; REST leave is the strongest path while disconnect/stale paths can be weaker or delayed.
+- Old session disconnect can race with reconnect; without strict session ownership checks, delayed cleanup can remove newer active presence.
+
+### Implementation Plan (Current Turn)
+
+- Unify all leave/disconnect/stale cleanup into one canonical, idempotent room-service path.
+- Ensure websocket disconnect and dead-socket failures trigger the same cleanup path as REST leave.
+- Enforce session-safe cleanup guard (cleanup only when session matches active participant session).
+- Ensure participant removal is destructive in room state (remove stale participant from Redis participant map), not only status flip.
+- Keep interpreter/BRSE cleanup synchronized through participant lifecycle event path.
+- Reconfirm stale fallback (heartbeat/last_seen timeout) and wire to unified cleanup path.
+
+### Batch B1: Unified Cleanup + Redis Ghost Removal (Completed)
+
+- Unified cleanup path confirmed and reinforced:
+  - REST `DELETE /leave` -> `RoomService.cleanup_participant(...)`
+  - WS disconnect/failure -> `WSHub.on_connection_lost(...)` -> same `cleanup_participant(...)`
+  - stale timeout sweeper -> same WS lost callback -> same `cleanup_participant(...)`
+- Session-safety strategy active:
+  - destructive cleanup only runs when provided `session_id` matches active participant session in room state.
+  - delayed disconnect from old session is ignored for destructive path.
+- Root ghost fix implemented:
+  - participant cleanup now removes participant entry from Redis participant hash (destructive removal), not only status flag update.
+  - snapshot projection skips legacy disconnected rows to avoid old ghost entries surfacing.
+- Idempotency hardened:
+  - repeated cleanup on an already-disconnected legacy row now performs silent purge without duplicate `participant.left` publish.
+- WS lifecycle hardening:
+  - websocket endpoint now uses `finally` disconnect hook so unexpected loop exit still triggers unified cleanup.
+
+### Files Updated In Batch B1
+
+- `BE/server/gateway/room_store.py`
+- `BE/server/gateway/room_service.py`
+- `BE/server/gateway/ws_endpoint.py`
+
+### Batch B2: Lifecycle Consistency Notes (Completed)
+
+- Room snapshot consistency:
+  - participant snapshot projection now excludes disconnected rows to prevent legacy ghost participants from resurfacing.
+  - canonical cleanup path now removes participant row from Redis hash, ensuring subsequent snapshots remain clean.
+- `participant.left` live event path:
+  - still emitted from unified cleanup path only.
+  - includes contract-required fields (`participant_id`, `left_at`) and diagnostic fields (`session_id`, `reason`) for disconnect root-cause observability.
+- WSHub dead-socket handling:
+  - send/broadcast failures continue to drop socket references and trigger same cleanup callback path.
+- Interpreter/BRSE dependency cleanup:
+  - interpreter daemon consumes `participant.left` and invokes `remove_participant(...)`; with unified disconnect cleanup this path now also runs when tab/browser/network dies without REST leave.
+
+### Batch B3: Final Turn Sync (Completed)
+
+- stale participant root cause (final):
+  - stale/ghost participant came from non-destructive disconnect handling path (socket drop without guaranteed participant-row removal from Redis participant map).
+- unified cleanup path (final):
+  - REST leave, WS disconnect, send/broadcast socket failure, and stale timeout now converge on one canonical cleanup method in room service.
+- session-safety strategy (final):
+  - cleanup enforces active-session ownership when session id is available; old delayed disconnect events cannot remove new active reconnect session.
+- heartbeat/last_seen strategy (final):
+  - kept in runtime: hub-level stale timeout sweeper + per-message activity touch + Redis `last_seen_at` updates via presence touch path.
+- room snapshot consistency (final):
+  - disconnected legacy rows are filtered out from snapshot projection.
+  - current cleanup removes participant row entirely from Redis participant hash.
+- participant.left contract behavior (final):
+  - event emitted once from unified path; includes required payload fields and diagnostic metadata (`session_id`, `reason`) while preserving contract compatibility.
+- files updated in this turn:
+  - `BE/server/gateway/room_store.py`
+  - `BE/server/gateway/room_service.py`
+  - `BE/server/gateway/ws_endpoint.py`
+  - `docs/backend/IMPLEMENTATION_STATE.md`
+- testing status:
+  - deferred by instruction (no test execution, no verification run).
+
 ## Last Updated
 
-- Time: 2026-04-30T14:30:00+07:00
+- Time: 2026-05-01T13:22:00+07:00
 - Agent: Codex
 - Branch: develop
 
@@ -13,345 +174,380 @@
 
 ---
 
-## DONE THIS TURN: Mic Test + Translation Test Backend
+## Current Objective
 
-### Architecture
+- FIX backend BRSE runtime so `brse_ai` participant actually operates in live meeting rooms.
+- Fix room mode/runtime routing so BRSE relay runtime materializes reliably.
+- Fix BRSE ingest/output runtime path for transcript + audio relay to room-wide contract.
+- Align gateway/interpreter Redis channel wiring and WS fan-out projection when needed.
+- Keep CODE-ONLY constraints: no tests, no test edits, no verification run.
 
-**Mic test** — WebSocket only (no room join, no AI pipeline):
+## Work Log (Current Turn)
 
-1. `POST /api/test/mic` → create session → returns `session_id` + `websocket.url`
-2. FE connects `ws://host/ws/test/mic/{session_id}`
-3. FE streams raw PCM16 binary frames
-4. Server computes RMS + peak per chunk and emits `mic_test.level` events
-5. Server emits `mic_test.silence` when RMS stays below threshold for >500 ms
-6. FE or server can stop: `mic_test.stop` JSON → `mic_test.stopped` → close 1000
+### Batch A0: Mandatory Read + Root Cause Lock (Completed)
 
-**Translation test** — REST create + WebSocket stream + OpenAI Realtime pipeline:
+- Mandatory files re-read before code changes (gateway/interpreter/runtime/models/docs).
+- Confirmed BRSE architecture is partially implemented but runtime has critical reliability gaps.
+- Root cause candidates locked for fix in this turn:
+  - Redis pub/sub channel wiring is hard-coded and not environment-configurable across gateway/interpreter runtime.
+  - BRSE runtime creation is gated by audience presence (`audience_ids`) so runtime can silently not materialize.
+  - LiveKit runtime ingestion path is brittle for pre-existing publications / callback-loop handling.
+  - Virtual BRSE participant exists in room snapshot but lacks explicit join materialization event on room creation.
+- Next step: apply backend/runtime patches only, then update this state file again before finishing.
 
-1. `POST /api/test/translation` → `{src_lang, tgt_lang}` → returns `session_id` + `websocket.url`
-2. FE connects `ws://host/ws/test/translation/{session_id}`
-3. FE streams raw PCM16 binary frames
-4. Server pipes audio through `InterpreterRealtimeClient` in text-only mode (no LiveKit)
-5. OpenAI VAD detects speech, transcribes, translates
-6. Server emits `translation_test.partial` (incremental) and `translation_test.final` (per utterance)
-7. Audio output: **text-only in this turn** — contract has reserved fields for future audio path
+### Batch A1: BRSE Runtime Path Fixes (Completed)
 
-**Session store** — Redis, TTL 900 s, keys `test:mic:{id}` and `test:trans:{id}`, separate from room state.
+- Redis pub/sub wiring made environment-configurable (gateway + interpreter):
+  - added settings keys:
+    - `redis_channel_gateway_control`
+    - `redis_channel_interpreter_events`
+  - updated publish/subscribe paths in:
+    - `BE/server/gateway/room_service.py`
+    - `BE/server/gateway/event_consumer.py`
+    - `BE/server/interpreter/event_publisher.py`
+    - `BE/server/interpreter/daemon.py`
+- BRSE participant materialization improved:
+  - room creation now emits explicit `participant.joined` for virtual BRSE participant(s), not snapshot-only presence.
+- BRSE runtime materialization gating fixed:
+  - removed strict `audience_ids` non-empty requirement in `RoomInterpreterManager._build_routing_resolution(...)`.
+  - BRSE runtime now starts for active mapped speaker route even when audience list is temporarily empty.
+- LiveKit ingest path hardened in interpreter runtime:
+  - bind audio stream creation to stable runtime loop.
+  - add tolerant handling for `track_published` to force subscribe on human audio publications.
+  - sync existing remote audio publications right after room connect to avoid missing already-published mic tracks.
+  - add defensive error handling for callback failures to avoid silent ingest break.
 
-### New Files
+### Batch A2: Completion Sync (Completed)
 
-- `BE/server/gateway/test_session_store.py`
-- `BE/server/gateway/api_test_sessions.py`
-- `BE/server/gateway/ws_test_mic.py`
-- `BE/server/gateway/ws_test_translation.py`
-- `BE/server/interpreter/translation_test_client.py`
+- Backend-only runtime/code path updates completed.
+- No tests executed, no test files modified, no verification commands run (per instruction).
+- Required state file updated at kickoff and at completion for this BRSE-fix turn.
 
-### Modified Files
+## Work Log (This Turn)
 
-- `BE/server/models.py` — `MicTestSession`, `TranslationTestSession`, `TestSessionStatus`, REST DTOs
-- `BE/server/events.py` — `MIC_TEST_*`, `TRANSLATION_TEST_*` event type constants + `build_test_event()`
-- `BE/server/gateway/app_state.py` — added `test_session_store` field
-- `BE/server/gateway/main.py` — registered 3 new routers, initialized `TestSessionStore` in lifespan
+### Batch 0: Mandatory Read + Screen Share Strategy Lock
 
-### REST Contract
-
-| Method | Path | Body | Success |
-|--------|------|------|---------|
-| `POST` | `/api/test/mic` | `{}` | `201 {session_id, status, created_at, expires_at, websocket}` |
-| `DELETE` | `/api/test/mic/{session_id}` | — | `204` |
-| `POST` | `/api/test/translation` | `{src_lang, tgt_lang}` | `201 {session_id, src_lang, tgt_lang, status, created_at, expires_at, websocket}` |
-| `DELETE` | `/api/test/translation/{session_id}` | — | `204` |
-
-### WebSocket Event Schema (FE-usable)
-
-**Mic test** (all events carry `session_id`, `type`, `event_id`, `sent_at`):
-
-```json
-{ "type": "mic_test.started", "session_id": "ts_...", "sent_at": "...",
-  "payload": { "session_id": "ts_...", "status": "active", "timestamp": "..." } }
-
-{ "type": "mic_test.level", ...,
-  "payload": { "session_id": "ts_...", "status": "active",
-               "rms": 0.032, "peak": 0.045, "db": -29.8,
-               "chunk_ms": 20.0, "timestamp": "..." } }
-
-{ "type": "mic_test.silence", ...,
-  "payload": { "session_id": "ts_...", "status": "active",
-               "silence_ms": 600, "timestamp": "..." } }
-
-{ "type": "mic_test.stopped", ...,
-  "payload": { "session_id": "ts_...", "status": "stopped", "timestamp": "..." } }
-
-{ "type": "mic_test.error", ...,
-  "payload": { "session_id": "ts_...", "code": "...", "message": "...", "timestamp": "..." } }
-```
-
-**Translation test**:
-
-```json
-{ "type": "translation_test.started", ...,
-  "payload": { "session_id": "ts_...", "src_lang": "vi", "tgt_lang": "ja",
-               "status": "listening", "timestamp": "..." } }
-
-{ "type": "translation_test.partial", ...,
-  "payload": { "session_id": "ts_...", "src_lang": "vi", "tgt_lang": "ja",
-               "source_text": "xin chào...", "translated_text": "こんにちは...",
-               "is_final": false, "timestamp": "..." } }
-
-{ "type": "translation_test.final", ...,
-  "payload": { "session_id": "ts_...", "src_lang": "vi", "tgt_lang": "ja",
-               "source_text": "Xin chào bạn.", "translated_text": "こんにちは。",
-               "is_final": true, "timestamp": "..." } }
-
-{ "type": "translation_test.error", ...,
-  "payload": { "session_id": "ts_...", "code": "...", "message": "...", "timestamp": "..." } }
-```
-
-### State Lifecycle
-
-Mic test: `created → active → stopped → (auto-expired 15 min)`
-
-Translation test: `created → listening → translating → completed → (auto-expired 15 min)`
-
-### Audio Output Policy (this turn)
-
-Translation test delivers **text-only** translation. Audio output path is intentionally deferred.
-Contract placeholder fields (`audio_track_name`, `audio_url`) are documented in ws_test_translation.py
-comments so the contract is extensible without breaking FE in a future turn.
-
-### Testing
-
-Deferred per instruction. No runtime verification executed.
-
----
-
-## Completed Runtime Work
-
-
-- [x] FND-001 - Platform Dependency And Env Scaffolding
-- [x] FND-002 - Shared Server Package
-- [x] FND-003 - Test Bootstrap And Fixtures (Testing deferred)
-- [x] GTW-001 - Room JWT Auth And LiveKit Token Builder
-- [x] GTW-002 - Redis Room Store
-- [x] GTW-003 - Room Service Domain Logic
-- [x] GTW-004 - REST Routes
-- [x] GTW-005 - WebSocket Hub And Endpoint
-- [x] GTW-006 - Interpreter Event Consumer
-- [x] INT-001 - LiveKit Room Runtime
-- [x] INT-002 - LiveKitAudioInput Adapter
-- [x] INT-003 - Gateway Event Publisher
-- [x] INT-004 - Room Interpreter Manager
-- [x] INT-005 - Redis Interpreter Daemon
-- [x] INT-006 - Interpreter Entrypoint
-- [x] Infra configuration (`docker-compose.yml`, `ops/livekit/livekit.yaml`)
-
-## In Progress
-- [ ] Deferred verification only
-- Current objective: next turn should live-verify FE can render speaker-attributed source + translated transcript streams from the new websocket/schema path
-- Files being edited:
-  - `BE/server/models.py`
-  - `BE/server/gateway/ws_endpoint.py`
-  - `BE/server/gateway/event_consumer.py`
-  - `BE/server/gateway/room_service.py`
-  - `BE/server/gateway/room_store.py`
-  - `BE/server/interpreter/event_publisher.py`
-  - `BE/server/interpreter/room_manager.py`
-  - `BE/server/interpreter/interpreter_client.py`
+- Read required files before coding:
   - `docs/backend/API_CONTRACT.md`
   - `docs/backend/GATEWAY_DESIGN.md`
   - `docs/backend/IMPLEMENTATION_STATE.md`
-
-## Remaining Runtime Work
-- none
-
-## Files Created
-- `docker-compose.yml`
-- `ops/livekit/livekit.yaml`
-- `BE/server/gateway/__init__.py`
-- `BE/server/gateway/app_state.py`
-- `BE/server/gateway/auth.py`
-- `BE/server/gateway/livekit_tokens.py`
-- `BE/server/gateway/room_store.py`
-- `BE/server/gateway/room_service.py`
-- `BE/server/gateway/api_health.py`
-- `BE/server/gateway/api_rooms.py`
-- `BE/server/gateway/dependencies.py`
-- `BE/server/gateway/main.py`
-- `BE/server/gateway/ws_hub.py`
-- `BE/server/gateway/ws_endpoint.py`
-- `BE/server/gateway/event_consumer.py`
-- `BE/server/gateway/room_store.py`
-- `BE/server/interpreter/__init__.py`
-- `BE/server/interpreter/livekit_runtime.py`
-- `BE/server/interpreter/event_publisher.py`
-- `BE/server/interpreter/meeting_config.py`
-- `BE/server/interpreter/output_router.py`
-- `BE/server/interpreter/room_manager.py`
-- `BE/server/interpreter/daemon.py`
-- `BE/server/interpreter/main.py`
-
-## Files Modified
-- `BE/requirements.txt`
-- `BE/.env.example`
-- `BE/.dockerignore`
-- `BE/.gitignore`
-- `BE/Dockerfile`
-- `BE/README.md`
-- `BE/server/config.py`
-- `BE/server/gateway/event_consumer.py`
-- `BE/server/gateway/livekit_tokens.py`
-- `BE/server/gateway/room_service.py`
-- `BE/server/gateway/ws_endpoint.py`
-- `BE/server/interpreter/audio_input.py`
-- `BE/server/interpreter/event_publisher.py`
-- `BE/server/interpreter/interpreter_client.py`
-- `BE/server/interpreter/meeting_config.py`
-- `BE/server/interpreter/output_router.py`
-- `BE/server/interpreter/room_manager.py`
-- `BE/server/interpreter/livekit_runtime.py`
-- `BE/server/models.py`
-- `docs/backend/API_CONTRACT.md`
-- `docs/backend/GATEWAY_DESIGN.md`
-
-## Latest Fix
-- Objective: expose live transcript events that FE can render directly by speaker, while preserving translated transcript personalization and backward compatibility.
-- Root cause confirmed in code:
-  - Gateway/FE contract only had listener-personalized translated transcript payloads, so web clients could not reliably render a generic "who is speaking now" transcript panel from websocket events alone.
-  - Interpreter runtime published translated text after `input_audio_transcription.completed`, but it never emitted live source transcript partials from `conversation.item.input_audio_transcription.delta`.
-  - Snapshot transcript storage was too minimal and non-personalized; it did not carry `kind`, `text`, `utterance_id`, nested `speaker`, or stable source-vs-translated semantics, and translated snapshots could leak transcripts intended for other listeners.
-  - Speaker attribution existed implicitly in `RoomInterpreterManager`, but it was not normalized into a FE-usable transcript schema across interpreter publish -> Redis -> gateway consume -> websocket snapshot/live fan-out.
-- Approach chosen:
-  - Keep CLI/base runtime untouched; constrain the new speaker-transcript contract to `BE/server/interpreter/*`, `BE/server/gateway/*`, and shared Pydantic models.
-  - Standardize transcript payload around FE-usable fields:
-    - `transcript_id`
-    - `utterance_id`
-    - `kind = source | translated`
-    - nested `speaker`
-    - `text`
-    - `src_lang`
-    - `tgt_lang`
-    - `is_final`
-    - `created_at`
-    - `audio_track_name`
-  - Add live source transcript publishing from interpreter input transcription deltas/completions:
-    - `conversation.item.input_audio_transcription.delta` -> `transcript.partial` with `kind = "source"`
-    - `conversation.item.input_audio_transcription.completed` -> `transcript.final` with `kind = "source"`
-  - Keep translated transcript listener-specific, but normalize it into the same schema with `kind = "translated"` and stable `utterance_id`.
-  - Split transcript IDs by stream to avoid FE collisions when a client receives both source and translated text:
-    - source: `{utterance_id}::source`
-    - translated: `{utterance_id}::translated::{tgt_lang}`
-  - Enrich speaker attribution at the interpreter publish source, not late in FE:
-    - `RoomInterpreterManager` owns `speaker_id`, `display_name`, `src_lang`
-    - `RedisEventPublisher` serializes nested `speaker`/`listener` metadata into each transcript payload
-  - Personalize snapshot transcript history in gateway join / websocket snapshot:
-    - always include source transcripts
-    - only include translated transcripts targeted to the current participant
-  - Preserve backward compatibility as much as possible by keeping legacy fields (`source_text`, `translated_text`, `listener`, `audio_track_name`) alongside the new direct-render fields.
-- Files changed for this fix:
   - `BE/server/models.py`
+  - `BE/server/gateway/api_rooms.py`
+  - `BE/server/gateway/ws_endpoint.py`
+  - `BE/server/gateway/ws_hub.py`
   - `BE/server/gateway/event_consumer.py`
   - `BE/server/gateway/room_service.py`
-  - `BE/server/gateway/ws_endpoint.py`
-  - `BE/server/interpreter/event_publisher.py`
-  - `BE/server/interpreter/interpreter_client.py`
-  - `BE/server/interpreter/room_manager.py`
-  - `docs/backend/API_CONTRACT.md`
-  - `docs/backend/GATEWAY_DESIGN.md`
+  - `BE/server/interpreter/livekit_runtime.py`
+  - FE reference only:
+    - `FE/src/types/ws.ts`
+    - `FE/src/types/livekit.ts`
+    - `FE/src/features/room/useMeetingRoom.ts`
+- Strategy locked:
+  - Extend participant state/snapshot with explicit screen-share fields (not hidden in free-form metadata only).
+  - Add dedicated room events `screen_share.started` and `screen_share.stopped` for FE usability.
+  - Keep `participant.updated` in sync when screen-share state changes for backward compatibility.
+  - Support state sync through both:
+    - WS client messages (`screen_share.start`, `screen_share.stop`)
+    - REST endpoints (`POST /api/rooms/{room_id}/screen-share/start|stop`)
+  - Preserve multi-share-capable data model (per-participant state), no hard single-share enforcement.
+  - Ensure cleanup clears screen-share state on participant leave/disconnect/stale timeout.
+- Testing remains deferred by instruction.
 
-## Transcript Schema
-- Live websocket transcript events now expose a FE-usable shape for both `transcript.partial` and `transcript.final`:
-  - `transcript_id`
-  - `utterance_id`
-  - `kind`
-  - `speaker.participant_id`
-  - `speaker.display_name`
-  - `speaker.language`
-  - `text`
+### Batch 1: Screen Share State + Service Lifecycle (Completed)
+
+- Extended shared models in `BE/server/models.py`:
+  - added `ScreenShareTrackInfo`.
+  - added `ParticipantState.is_screen_sharing` and `ParticipantState.screen_share`.
+  - added same fields to `ParticipantSnapshot` for snapshot contract parity.
+  - added DTOs: `ScreenShareStartRequest`, `ScreenShareStateResponse`.
+- Extended event vocabulary in `BE/server/events.py`:
+  - `screen_share.started`
+  - `screen_share.stopped`
+- Extended snapshot projection in `BE/server/gateway/room_store.py`:
+  - participant snapshot now includes screen-share fields.
+- Implemented service lifecycle in `BE/server/gateway/room_service.py`:
+  - `start_screen_share(...)`
+  - `stop_screen_share(...)`
+  - both publish `participant.updated` plus dedicated screen-share events.
+  - idempotent behavior for repeated start/stop.
+
+### Batch 2: Signaling Entry Points + Stale Cleanup Paths (Completed)
+
+- Added REST signaling endpoints in `BE/server/gateway/api_rooms.py`:
+  - `POST /api/rooms/{room_id}/screen-share/start`
+  - `POST /api/rooms/{room_id}/screen-share/stop`
+  - both room-token authenticated via existing dependency and session-aware.
+- Added WS signaling handlers in `BE/server/gateway/ws_endpoint.py`:
+  - `screen_share.start`
+  - `screen_share.stop`
+  - returns `error` envelope on session mismatch / participant invalid.
+- Strengthened stale cleanup in `BE/server/gateway/event_consumer.py`:
+  - on `participant.media_disconnected`, gateway now also attempts `stop_screen_share(...)`.
+- Participant disconnect cleanup in service now proactively clears active screen-share state before final leave mutation.
+
+### Batch 3: Backend Contract Docs Sync (Completed)
+
+- Updated `docs/backend/API_CONTRACT.md` with screen-share addendum:
+  - participant state fields in snapshot/events.
+  - REST start/stop request-response examples.
+  - WS client message and server broadcast event examples.
+- Updated `docs/backend/GATEWAY_DESIGN.md` with runtime notes:
+  - explicit screen-share state model.
+  - signaling paths (REST + WS).
+  - stale cleanup behavior and lifecycle consistency.
+
+### Batch 4: Finalization State Sync (Completed)
+
+- Required state-file updates performed after major implementation batches and at end of turn.
+- No tests executed, no test files touched, per explicit instruction.
+- Final hardening in this batch: normalize unexpected `source` values to `screen_share` in service layer to keep DTO/model validation stable.
+
+## Architecture Decision Locked In
+
+- Default meeting mode for room runtime in this turn: `brse_relay`
+- Interpreter mode for room runtime in this turn: `brse_participant`
+- Virtual participant identity in backend contract:
+  - `participant_id = brse_ai`
+  - `display_name = BRSE AI`
+  - `kind = virtual_brse`
+- LiveKit runtime strategy:
+  - human participants still publish original audio directly to LiveKit
+  - interpreter runtime joins as the BRSE participant and subscribes to all human mic tracks
+  - BRSE relay audio is published as canonical BRSE participant track(s), not per-listener private tracks
+
+## BRSE Output Language Strategy
+
+- Strategy chosen for this batch: deterministic room-level speaker-language map
+- Implemented pair in this turn:
+  - `vi -> ja`
+  - `ja -> vi`
+- Scope note:
+  - `en` remains an allowed room language in shared models/contracts
+  - BRSE relay target mapping is intentionally locked to the primary `vi <-> ja` bridge for now
+  - architecture will be shaped so the map can be extended later without reviving per-listener routing
+
+## Runtime Paths To Change
+
+- Bypass old per-listener runtime assumptions in:
+  - `BE/server/interpreter/room_manager.py`
+  - `BE/server/interpreter/output_router.py`
+  - `BE/server/interpreter/livekit_runtime.py`
+  - `BE/server/interpreter/event_publisher.py`
+- Extend gateway/snapshot contract in:
+  - `BE/server/models.py`
+  - `BE/server/gateway/room_store.py`
+  - `BE/server/gateway/room_service.py`
+  - `BE/server/gateway/event_consumer.py`
+  - `BE/server/gateway/ws_endpoint.py`
+- Update BRSE relay prompt/instructions in:
+  - `BE/server/interpreter/meeting_config.py`
+  - `BE/server/interpreter/interpreter_client.py`
+
+## Contract Assumptions For FE
+
+- Room snapshot will expose room-level mode fields for BRSE relay.
+- Participant list will include a virtual BRSE participant with explicit non-human metadata.
+- Transcript events for BRSE relay will be broadcast room-wide and include:
+  - original speaker identity
+  - BRSE participant identity
+  - `source_text`
+  - `brse_text`
   - `src_lang`
   - `tgt_lang`
-  - `is_final`
-  - `created_at`
-  - `audio_track_name`
-- Snapshot `recent_transcripts` now stores the same semantics in flattened + nested form:
-  - flattened compatibility fields: `speaker_id`, `speaker_display_name`, `speaker_language`, `src_lang`, `source_text`, `translated_text`
-  - direct-render fields: `kind`, `text`, `is_final`, `utterance_id`
-  - nested compatibility fields: `speaker`, `listener`
+  - partial/final state
+- Old listener-private translated audio is no longer the authoritative meeting output in BRSE rooms.
+- FE changes are out of scope in this turn; backend contract will carry enough metadata for later FE alignment.
 
-## Speaker Attribution
-- Speaker attribution is enriched at the interpreter source in `BE/server/interpreter/room_manager.py`, where each utterance is bound to:
-  - `speaker_id`
-  - `speaker_display_name`
-  - participant-selected `src_lang`
-- `BE/server/interpreter/event_publisher.py` serializes that attribution into both source and translated transcript events before they hit Redis.
-- `BE/server/gateway/event_consumer.py` preserves the metadata end-to-end and uses `kind` to choose broadcast strategy:
-  - source transcripts -> room broadcast
-  - translated transcripts -> listener-specific websocket fan-out
+## Work Log
 
-## FE-Usable Fields
-- FE can now render a live script panel directly from websocket payloads using:
-  - `payload.speaker.display_name`
-  - `payload.text`
-  - `payload.kind`
-  - `payload.transcript_id`
-  - `payload.is_final`
-  - `payload.created_at`
-- If FE wants to correlate source and translated transcript for the same utterance, it can use `payload.utterance_id`.
-- If FE wants translated-audio binding for the translated line, it can still use `payload.audio_track_name` and `payload.audio_output`.
+### Batch 0: Stale Participant Cleanup Kickoff (In Progress)
 
-## Backend Audio Model
-- Room-level backend audio model now declared as `translated_audio_first`.
-- Cross-language listener policy:
-  - canonical remote audio path is the interpreter-published LiveKit track
-  - transcript `audio_track_name` is the usable translated track when available
-  - transcript/status `audio_output` declares the authoritative translated path even before the track is fully usable
-- Same-language temporary policy:
-  - `same_language_policy = "human_passthrough"`
-  - backend does not spin up interpreter routing for same-language listeners in this turn
-  - this is explicit in room `audio_routing` and event `audio_output`
+- Re-read required design + contract + runtime files before code changes:
+  - `docs/backend/GATEWAY_DESIGN.md`
+  - `docs/backend/API_CONTRACT.md`
+  - `docs/backend/IMPLEMENTATION_STATE.md`
+  - `BE/server/gateway/ws_endpoint.py`
+  - `BE/server/gateway/ws_hub.py`
+  - `BE/server/gateway/room_service.py`
+  - `BE/server/gateway/event_consumer.py`
+  - `BE/server/models.py`
+  - `BE/server/redis.py`
+  - `BE/server/interpreter/room_manager.py`
+- Root cause identified:
+  - websocket disconnect currently only removes in-memory socket (`WSHub.disconnect`) but does not invoke room-state participant leave cleanup.
+  - `RoomService.leave_room` is not session-aware; delayed cleanup from stale socket can remove a newer reconnect session.
+  - No stale websocket fallback cleanup path (heartbeat/last_seen timeout) exists in gateway runtime.
+- Plan locked for this turn:
+  - add unified participant disconnect/leave service path with optional session ownership guard.
+  - wire websocket disconnect and send-failure cleanup to the same idempotent service path.
+  - add participant last_seen tracking and stale session sweeper in websocket hub.
+  - keep testing deferred per instruction.
 
-## FE Contract Assumptions
-- FE can treat room `audio_routing` as the canonical meeting audio policy.
-- For cross-language listeners, FE should prefer interpreter audio over human remote audio.
-- `transcript.partial/final.payload.audio_track_name` remains backward-compatible and only points to a usable translated track.
-- `transcript.partial/final.payload.audio_output.track_name` is the deterministic canonical translated track name for that listener, even if publish is still warming up.
-- `interpreter.status.payload.audio_output.tracks[]` provides the authoritative translated listener-track bindings for the current route.
+### Batch 1: Unified Leave + Session-Safe WS Cleanup (Completed)
+
+- Core stale participant root cause fixed:
+  - `ws_endpoint` disconnect path no longer only removes in-memory websocket; it now triggers room-state cleanup via shared service path.
+  - `ws_hub` send-failure/broadcast-failure cleanup now also routes into the same participant cleanup flow.
+- Unified cleanup method implemented in gateway service:
+  - added `RoomService.cleanup_participant(room_id, participant_id, session_id, reason)` as the canonical leave/disconnect handler.
+  - `RoomService.leave_room(...)` now delegates to this core method.
+  - idempotent behavior:
+    - missing participant -> no-op
+    - already disconnected -> no-op
+    - repeated cleanup -> no duplicate state mutation
+- Session-safety strategy implemented:
+  - cleanup only applies when provided `session_id` matches participant's current room state session.
+  - old websocket/session cleanup is ignored if participant session has moved.
+  - REST `/leave` now forwards claim `session_id` into leave flow.
+- Redis room-state consistency updates:
+  - participant state now carries and updates `ws_connected` + `last_seen_at`.
+  - disconnect cleanup sets `status=disconnected`, `ws_connected=false`, `left_at`, and `last_seen_at` atomically in same patch path.
+  - snapshots now include these presence fields.
+- Participant left broadcast contract behavior:
+  - `participant.left` is emitted only from shared cleanup path.
+  - payload now includes `participant_id`, `session_id`, `left_at`, `reason` for downstream consumers.
+- Interpreter dependency cleanup path confirmed:
+  - interpreter daemon already consumes `participant.left` and removes participant runtime via `manager.remove_participant(...)`.
+  - with unified WS cleanup publishing `participant.left`, abrupt tab/browser close now flows into interpreter recompute/cleanup as well.
+- Heartbeat/stale fallback implemented:
+  - `ws_hub` now tracks `last_seen_monotonic` per active connection.
+  - inbound websocket messages touch connection activity and update participant `last_seen_at` in Redis.
+  - background sweeper closes stale sockets on timeout and triggers same shared cleanup path.
+  - new settings:
+    - `ws_stale_timeout_seconds` (default 90)
+    - `ws_stale_sweep_interval_seconds` (default 15)
+- Testing remains deferred per CODE-ONLY instruction.
+
+### Batch 2: Lifecycle Hardening + Finalization (Completed)
+
+- Room lifecycle consistency hardened:
+  - join flow now transitions room to `active` when previous state is `created` or `empty`.
+  - this keeps room-empty lifecycle coherent after last-participant disconnect and later rejoin.
+- Store helper consistency:
+  - `mark_participant_left` now also clears websocket presence (`ws_connected=false`) and updates `last_seen_at`.
+- WS endpoint readiness guard:
+  - websocket route now requires `room_store` initialized before accepting handshake because session ownership validation depends on store reads.
+
+## Stale Participant Fix Summary (This Turn)
+
+- Stale participant root cause:
+  - abrupt tab/browser close path only removed websocket in memory but did not always remove participant from Redis-backed room state.
+- Cleanup paths added/updated:
+  - REST `/leave` -> `RoomService.cleanup_participant(...)`
+  - websocket disconnect -> `WSHub` connection-lost callback -> same `cleanup_participant(...)`
+  - websocket send/broadcast failure -> same callback path
+  - stale websocket timeout sweep -> same callback path
+- Session-safety strategy:
+  - cleanup requires session ownership match when session id is available.
+  - delayed stale disconnect from old session cannot remove newer session state.
+- Heartbeat / last_seen usage:
+  - yes, implemented.
+  - participant state now tracks `last_seen_at` in Redis.
+  - WS hub tracks in-memory monotonic activity and sweeps stale connections on timeout.
+  - inbound websocket messages refresh both in-memory last-seen and Redis `last_seen_at`.
+- Broadcast behavior:
+  - `participant.left` now emitted from one shared idempotent cleanup method to avoid duplicate/fragmented leave semantics.
+- Interpreter dependency cleanup:
+  - unchanged consumer path, but now reliably triggered because WS-based cleanup publishes `participant.left` even when REST leave is missing.
+
+## Deferred Verification
+
+- No tests were run in this turn (explicitly deferred by instruction: CODE-ONLY, no test/verification execution).
+
+### Batch 0: Mandatory Read + Migration Plan
+
+- Read required architecture, contract, gateway, interpreter, runtime, and FE reference files.
+- Confirmed current implementation is still `translated_audio_first`.
+- Confirmed current interpreter runtime is keyed by speaker + listener-target semantics and private LiveKit tracks.
+- Confirmed current websocket transcript visibility is listener-scoped for translated events and must be widened for BRSE relay.
+
+### Batch 1: Shared Models + Gateway State
+
+- Added shared backend mode helpers in `BE/server/meeting_modes.py`.
+- Room state now carries:
+  - `meeting_mode = brse_relay`
+  - `interpreter_mode = brse_participant`
+  - `virtual_participants`
+  - BRSE audio routing metadata and relay language map
+- Gateway snapshot/store now merges the BRSE virtual participant into `participants`.
+- Human join-limit and room-empty logic now use human-only participant counting so BRSE does not consume capacity or keep rooms alive by itself.
+- Transcript visibility rules now treat `relay` transcripts as room-wide, not listener-private.
+
+### Batch 2: Interpreter Runtime Rewrite
+
+- `LiveKitRuntime` now joins the room as the BRSE participant identity instead of a generic per-room interpreter identity.
+- `RoomInterpreterManager` no longer resolves runtime by per-listener target sets.
+- New runtime routing is:
+  - `speaker + source_language -> deterministic bridge target language`
+  - runtime only starts when there is at least one human audience participant for that target language
+- `OutputRouter` no longer publishes private listener tracks.
+- BRSE relay audio is now published as canonical BRSE participant track name:
+  - `brse::{speaker_id}::{src_lang}::{tgt_lang}`
+- `event_publisher` now emits room-wide BRSE relay transcript payloads with:
+  - `kind = relay`
+  - `original_speaker`
+  - `brse_participant`
+  - `relay_target`
+  - `brse_text`
+  - BRSE audio descriptor metadata
+- Interpreter prompt/instructions were changed from literal translator posture to BRSE relay posture:
+  - natural interpreted restatement allowed
+  - no answering on behalf of speaker
+  - no adding facts or business logic
+
+### Batch 3: Contract Doc Sync
+
+- Added update notes at the top of:
+  - `docs/architecture.md`
+  - `docs/backend/API_CONTRACT.md`
+  - `docs/backend/GATEWAY_DESIGN.md`
+  - `docs/backend/INTERPRETER_DESIGN.md`
+- These notes explicitly mark old per-listener translated-audio sections as historical/legacy context and point current readers to BRSE relay semantics.
+
+## Files Changed This Turn
+
+- `docs/backend/IMPLEMENTATION_STATE.md`
+- `docs/architecture.md`
+- `docs/backend/API_CONTRACT.md`
+- `docs/backend/GATEWAY_DESIGN.md`
+- `docs/backend/INTERPRETER_DESIGN.md`
+- `BE/server/meeting_modes.py`
+- `BE/server/models.py`
+- `BE/server/gateway/room_store.py`
+- `BE/server/gateway/room_service.py`
+- `BE/server/gateway/event_consumer.py`
+- `BE/server/gateway/livekit_tokens.py`
+- `BE/server/interpreter/daemon.py`
+- `BE/server/interpreter/meeting_config.py`
+- `BE/server/interpreter/livekit_runtime.py`
+- `BE/server/interpreter/output_router.py`
+- `BE/server/interpreter/event_publisher.py`
+- `BE/server/interpreter/room_manager.py`
+
+## Per-Listener Path Bypass
+
+- Bypassed as authoritative meeting output in BRSE mode:
+  - listener-scoped routing resolution in `BE/server/interpreter/room_manager.py`
+  - listener-private track publish/unpublish and subscription permissions in `BE/server/interpreter/output_router.py`
+  - listener-private translated transcript fan-out semantics in `BE/server/gateway/event_consumer.py`
+- Backward-compatible fields such as `listener_id`, `listener_ids`, and `translated_text` may still appear in some payload shapes where useful, but BRSE relay mode no longer depends on them for core runtime semantics.
+
+## Current FE Contract Assumptions
+
+- FE should treat human audio from LiveKit as canonical original audio.
+- FE should treat BRSE audio as supplemental relay audio coming from a virtual participant.
+- Snapshot participants now include explicit non-human metadata:
+  - `kind`
+  - `is_virtual`
+  - `livekit_identity`
+  - `metadata`
+- Room payload now includes:
+  - `meeting_mode`
+  - `interpreter_mode`
+  - updated `audio_routing`
+- Relay transcript payloads are room-wide and include both the original human speaker and BRSE participant references.
+- Current batch does not include FE code changes, so any FE logic still hard-coded to old per-listener track naming will need follow-up alignment against the new backend contract.
 
 ## Deferred Testing
-- Test execution has been fully deferred in this turn by instruction.
-- The following tests/smoke tests must be run in the next turn:
-  - 2-participant manual room verification: confirm FE receives room-broadcast source transcript partial/final with correct speaker attribution
-  - Confirm the same utterance also produces listener-specific translated transcript partial/final with the same `utterance_id`
-  - Confirm `transcript_id` stays stable across partial -> final for both source and translated streams
-  - Confirm `room.snapshot` and join snapshot only include translated transcripts targeted to the current participant, while still including source transcripts for the room
-  - Confirm existing FE does not break on source transcript events because legacy fields are still present
-  - Confirm translated audio track still publishes and `audio_track_name` is preserved
-  - `docker compose up redis livekit gateway interpreter`
-  - `python -m server.interpreter.main`
 
-## Verification Run This Turn
-- Commands executed:
-- none (code-only turn; verification intentionally deferred)
-- Result:
-  - no runtime verification executed
-- Not executed in this turn:
-  - `docker compose up ...`
-  - real room join with two participants
-  - confirmation from logs that tuned VAD/prompt reduce end-to-end latency and improve translation accuracy
-  - live confirmation that capture failures, input overflow, and sender queue drops remain low in happy path
-
-## Open Risks
-- Multi-target-language fanout for one active speaker is still not implemented; current behavior is to fail clearly with `interpreter_unavailable` instead of routing to the wrong target.
-- Source transcript partials currently assume OpenAI transcription deltas are append-only; if the upstream protocol emits corrective deltas, FE may need a smarter merge strategy in a later turn.
-- `GET /api/rooms/{room_id}` is still an unpersonalized public snapshot, so translated transcripts there may include entries intended for other listeners. Personalized filtering is currently applied in join snapshot and websocket `room.snapshot`.
-- Existing FE code still needs explicit adoption of the new authoritative fields (`text`, `kind`, `utterance_id`) to fully benefit from the normalized schema.
-- FE has not yet been switched in this turn to actively suppress cross-language human audio playback; backend now publishes the canonical policy and metadata, but frontend enforcement still needs live verification / follow-up implementation.
-
-## Resume Instructions
-- Start with live verification of the new transcript schema on the meeting path, not CLI demo flow
-- Bring up `docker compose up redis livekit gateway interpreter`
-- Join 2 participants with different languages and confirm:
-  - source transcript partial/final events arrive room-wide with correct `speaker.display_name`, `text`, `kind = source`, `transcript_id`, and `utterance_id`
-  - translated transcript partial/final events arrive only to the target listener with `kind = translated`, `src_lang`, `tgt_lang`, and `audio_track_name`
-  - join snapshot and websocket `room.snapshot` include source transcript history plus only the translated items targeted to the current participant
-  - FE can replace partial -> final using stable `transcript_id`
-- Then verify translated audio still matches the translated transcript line on `interp::{speaker_id}::{listener_id}::{src_lang}::{tgt_lang}`
+- Per instruction, no tests, smoke runs, or runtime verification will be executed in this turn.

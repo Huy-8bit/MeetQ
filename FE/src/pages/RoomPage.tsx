@@ -3,9 +3,10 @@ import { useNavigate, useParams } from "react-router-dom";
 import { api, ApiError } from "../lib/api";
 import { useSessionStore } from "../state/session";
 import type { Language, RoomSnapshotResponse } from "../types/api";
-import { AudioTrackSink } from "../components/MediaElements";
+import { AudioTrackSink, VideoTrackView } from "../components/MediaElements";
 import { JoinRoomCard } from "../components/JoinRoomCard";
 import { ConnectionBadge } from "../components/ConnectionBadge";
+import { AudioDevicePanel } from "../components/AudioDevicePanel";
 import { InterpreterStatusPanel } from "../components/InterpreterStatusPanel";
 import { ParticipantList } from "../components/ParticipantList";
 import { ParticipantTile } from "../components/ParticipantTile";
@@ -74,6 +75,19 @@ export function RoomPage() {
     session,
     onSessionInvalidated: handleSessionInvalidated,
   });
+
+  const activeScreenShareParticipants = meeting.participants.filter(
+    (participant) => participant.is_screen_sharing,
+  );
+  const selectedScreenSharer =
+    activeScreenShareParticipants.find(
+      (participant) => participant.participant_id === meeting.selfState?.participant_id,
+    ) || activeScreenShareParticipants[0] || null;
+  const selectedScreenFeed = selectedScreenSharer
+    ? meeting.screenShares.find(
+        (feed) => feed.participantId === selectedScreenSharer.participant_id,
+      ) || null
+    : null;
 
   async function handleJoin(payload: {
     displayName: string;
@@ -157,7 +171,9 @@ export function RoomPage() {
           <span className="eyebrow">Room {roomId}</span>
           <h1>{meeting.selfState?.display_name || "Meeting Room"}</h1>
           <p>
-            Listening language controls translated audio routing and transcript targeting.
+            {meeting.meetingMode === "brse_relay"
+              ? "Everyone hears original human audio. BRSE AI joins as a virtual participant and relays across languages."
+              : "Language still controls meeting interpretation behavior for this room."}
           </p>
         </div>
 
@@ -165,7 +181,7 @@ export function RoomPage() {
           <ConnectionBadge state={meeting.connectionState} />
 
           <label className="compact-field">
-            <span>Language</span>
+            <span>Your Language</span>
             <select
               value={meeting.selfState?.language || session.participant.language}
               onChange={(event) =>
@@ -177,6 +193,31 @@ export function RoomPage() {
               <option value="ja">JA</option>
             </select>
           </label>
+
+          <button
+            className="button-secondary"
+            onClick={() => {
+              if (meeting.isScreenSharing) {
+                void meeting.stopScreenShare({ reason: "manual_stop" });
+                return;
+              }
+
+              void meeting.startScreenShare();
+            }}
+            disabled={
+              meeting.isStartingScreenShare
+              || meeting.isStoppingScreenShare
+              || meeting.isLeaving
+            }
+          >
+            {meeting.isStartingScreenShare
+              ? "Requesting screen permission..."
+              : meeting.isStoppingScreenShare
+                ? "Stopping share..."
+                : meeting.isScreenSharing
+                  ? "Stop sharing screen"
+                  : "Start sharing screen"}
+          </button>
 
           <button
             className="button-danger"
@@ -196,17 +237,59 @@ export function RoomPage() {
       {meeting.mediaError ? (
         <div className="banner banner-warning">{meeting.mediaError}</div>
       ) : null}
+      {meeting.screenShareError ? (
+        <div className="banner banner-warning">{meeting.screenShareError}</div>
+      ) : null}
 
       <div className="room-layout">
         <section className="video-stage">
+          <section className="panel screen-stage-panel">
+            <div className="panel-header">
+              <div>
+                <h3>Shared Screen Stage</h3>
+                <p>
+                  {selectedScreenSharer
+                    ? `${selectedScreenSharer.display_name} is sharing screen`
+                    : "No active screen share"}
+                </p>
+              </div>
+              <span className="panel-count">{activeScreenShareParticipants.length}</span>
+            </div>
+
+            {selectedScreenSharer ? (
+              <div className="screen-stage-frame">
+                {selectedScreenFeed?.track ? (
+                  <VideoTrackView track={selectedScreenFeed.track} />
+                ) : (
+                  <div className="screen-stage-placeholder">
+                    <strong>{selectedScreenSharer.display_name}</strong>
+                    <p>Screen stream is starting or reconnecting.</p>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="empty-state small">
+                <strong>No one is sharing screen</strong>
+                <p>Start sharing to present documents, code, or slides to the room.</p>
+              </div>
+            )}
+          </section>
+
           <div className="video-grid">
             {meeting.videos.map((feed) => (
               <ParticipantTile
                 key={feed.participantId}
                 feed={feed}
+                isScreenSharing={Boolean(
+                  meeting.participants.find(
+                    (participant) => participant.participant_id === feed.participantId,
+                  )?.is_screen_sharing,
+                )}
                 label={
                   feed.isLocal
                     ? "You"
+                    : feed.kind === "virtual_brse"
+                      ? "AI BRSE relay"
                     : meeting.participants.find(
                         (participant) => participant.participant_id === feed.participantId,
                       )?.status || "Participant"
@@ -221,23 +304,48 @@ export function RoomPage() {
           />
 
           <div className="audio-sinks" aria-hidden="true">
-            {meeting.interpreterAudioFeeds.map((feed) => (
+            {meeting.humanAudioFeeds.map((feed) => (
               <AudioTrackSink
-                key={`interp-${feed.trackSid}`}
+                key={`human-${feed.participantId}-${feed.track.sid}`}
                 track={feed.track}
+                onOutputDeviceError={meeting.reportAudioOutputApplyError}
               />
             ))}
 
-            {meeting.sameLanguagePassthroughAudioFeeds.map((feed) => (
+            {meeting.brseAudioFeeds.map((feed) => (
               <AudioTrackSink
-                key={`passthrough-${feed.participantId}-${feed.track.sid}`}
+                key={`brse-${feed.trackSid}`}
                 track={feed.track}
+                onOutputDeviceError={meeting.reportAudioOutputApplyError}
               />
             ))}
           </div>
         </section>
 
         <aside className="sidebar-stack">
+          <AudioDevicePanel
+            isMicMuted={meeting.isMicMuted}
+            isTogglingMic={meeting.isTogglingMic}
+            micToggleError={meeting.micToggleError}
+            onToggleMic={() => {
+              void meeting.toggleMicrophoneMuted();
+            }}
+            audioInputDevices={meeting.audioInputDevices}
+            selectedAudioInputDeviceId={meeting.selectedAudioInputDeviceId}
+            isSwitchingAudioInput={meeting.isSwitchingAudioInput}
+            audioInputError={meeting.audioInputError}
+            onSelectAudioInput={(deviceId) => {
+              void meeting.switchAudioInput(deviceId);
+            }}
+            audioOutputSupported={meeting.audioOutputSupported}
+            audioOutputDevices={meeting.audioOutputDevices}
+            selectedAudioOutputDeviceId={meeting.selectedAudioOutputDeviceId}
+            isSwitchingAudioOutput={meeting.isSwitchingAudioOutput}
+            audioOutputError={meeting.audioOutputError}
+            onSelectAudioOutput={(deviceId) => {
+              void meeting.switchAudioOutput(deviceId);
+            }}
+          />
           <InterpreterStatusPanel statuses={meeting.interpreterStatuses} />
           <TranscriptPanel entries={meeting.transcripts} />
         </aside>

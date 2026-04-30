@@ -1,5 +1,7 @@
 # Interpreter Service Design
 
+> Update note (2026-04-30): active interpreter runtime now uses BRSE participant semantics instead of per-listener translated tracks. The interpreter joins as virtual participant `BRSE AI`, subscribes to human mic audio, and publishes canonical BRSE relay audio/text back to the room. Legacy per-listener sections below remain as background context only.
+
 Interpreter Service là bridge giữa LiveKit SFU và OpenAI Realtime API.
 
 Nó chịu trách nhiệm:

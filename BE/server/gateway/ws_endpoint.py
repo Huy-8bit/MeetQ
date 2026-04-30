@@ -10,7 +10,7 @@ router = APIRouter()
 
 @router.websocket("/ws/rooms/{room_id}")
 async def websocket_endpoint(websocket: WebSocket, room_id: str, token: str = Query(None)):
-    if not app_state.ws_hub or not app_state.room_service or not app_state.settings:
+    if not app_state.ws_hub or not app_state.room_service or not app_state.room_store or not app_state.settings:
         await websocket.close(code=1011)
         return
 
@@ -21,6 +21,7 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str, token: str = Qu
     try:
         claims = verify_room_token(token, app_state.settings.room_jwt_secret, room_id)
         participant_id = claims["participant_id"]
+        session_id = claims.get("session_id")
     except ExpiredTokenError:
         await websocket.close(code=4401, reason="Token expired")
         return
@@ -34,16 +35,32 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str, token: str = Qu
     # Check if participant is still in the room
     try:
         snapshot = await app_state.room_service.get_room(room_id)
-        # Verify participant is in the snapshot and not disconnected
-        participant = next((p for p in snapshot.participants if p.participant_id == participant_id and p.status != "disconnected"), None)
+        participant = next((p for p in snapshot.participants if p.participant_id == participant_id), None)
         if not participant:
             await websocket.close(code=4403, reason="Participant not active in room")
+            return
+        if participant.status == "disconnected":
+            await websocket.close(code=4403, reason="Participant not active in room")
+            return
+        state_participant = await app_state.room_store.get_participant(room_id, participant_id)
+        if not state_participant:
+            await websocket.close(code=4403, reason="Participant not active in room")
+            return
+        if session_id and state_participant.session_id != session_id:
+            await websocket.close(code=4403, reason="Session mismatch")
             return
     except RoomNotFoundError:
         await websocket.close(code=4404, reason="Room not found")
         return
 
-    await app_state.ws_hub.connect(room_id, participant_id, websocket)
+    await app_state.ws_hub.connect(room_id, participant_id, state_participant.session_id, websocket)
+    await app_state.room_service.touch_participant_presence(
+        room_id,
+        participant_id,
+        state_participant.session_id,
+        ws_connected=True,
+        status="connected",
+    )
 
     # Send initial snapshot
     # Add 'self' to snapshot payload
@@ -73,6 +90,13 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str, token: str = Qu
                 msg_type = msg.get("type")
                 event_id = msg.get("event_id")
                 payload = msg.get("payload", {})
+
+                app_state.ws_hub.touch(room_id, participant_id, websocket)
+                await app_state.room_service.touch_participant_presence(
+                    room_id,
+                    participant_id,
+                    state_participant.session_id,
+                )
                 
                 if msg_type == "ping":
                     pong_payload = {
@@ -106,7 +130,79 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str, token: str = Qu
                     except (RoomNotFoundError, ParticipantNotFoundError):
                         pass
 
+                elif msg_type == "screen_share.start":
+                    try:
+                        ok = await app_state.room_service.start_screen_share(
+                            room_id=room_id,
+                            participant_id=participant_id,
+                            session_id=state_participant.session_id,
+                            track_sid=payload.get("track_sid"),
+                            track_name=payload.get("track_name"),
+                            source=payload.get("source", "screen_share"),
+                        )
+                        if not ok:
+                            await websocket.send_json({
+                                "type": "error",
+                                "event_id": event_id,
+                                "room_id": room_id,
+                                "sent_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                                "payload": {
+                                    "code": "session_mismatch",
+                                    "message": "session is no longer valid",
+                                },
+                            })
+                    except ParticipantNotFoundError:
+                        await websocket.send_json({
+                            "type": "error",
+                            "event_id": event_id,
+                            "room_id": room_id,
+                            "sent_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                            "payload": {
+                                "code": "participant_not_found",
+                                "message": "participant no longer active",
+                            },
+                        })
+
+                elif msg_type == "screen_share.stop":
+                    try:
+                        ok = await app_state.room_service.stop_screen_share(
+                            room_id=room_id,
+                            participant_id=participant_id,
+                            session_id=state_participant.session_id,
+                            reason="ws_stop",
+                        )
+                        if not ok:
+                            await websocket.send_json({
+                                "type": "error",
+                                "event_id": event_id,
+                                "room_id": room_id,
+                                "sent_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                                "payload": {
+                                    "code": "session_mismatch",
+                                    "message": "session is no longer valid",
+                                },
+                            })
+                    except ParticipantNotFoundError:
+                        await websocket.send_json({
+                            "type": "error",
+                            "event_id": event_id,
+                            "room_id": room_id,
+                            "sent_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                            "payload": {
+                                "code": "participant_not_found",
+                                "message": "participant no longer active",
+                            },
+                        })
+
             except json.JSONDecodeError:
                 pass # Ignore malformed
     except WebSocketDisconnect:
-        app_state.ws_hub.disconnect(room_id, participant_id, websocket)
+        pass
+    finally:
+        app_state.ws_hub.disconnect(
+            room_id,
+            participant_id,
+            websocket,
+            reason="client_disconnect",
+            trigger_cleanup=True,
+        )

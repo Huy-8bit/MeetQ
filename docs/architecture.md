@@ -1,5 +1,7 @@
 # Architecture — brseAI Meeting Platform
 
+> Update note (2026-04-30): active backend meeting runtime now defaults to `meeting_mode=brse_relay` and `interpreter_mode=brse_participant`. Human participants keep hearing original human audio; AI relay is published as virtual participant `BRSE AI`. Historical sections below that describe listener-private translated tracks are retained as legacy context only.
+
 ---
 
 ## Tổng quan hệ thống

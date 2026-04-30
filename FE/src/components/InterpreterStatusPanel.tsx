@@ -11,25 +11,27 @@ export function InterpreterStatusPanel({
     <section className="panel interpreter-panel">
       <div className="panel-header">
         <div>
-          <h3>Interpreter Status</h3>
-          <p>Only statuses relevant to your current listening language are shown.</p>
+          <h3>BRSE AI Status</h3>
+          <p>Shows room-wide relay activity from the virtual BRSE participant.</p>
         </div>
       </div>
 
       <div className="status-list">
         {statuses.length === 0 ? (
           <div className="empty-state small">
-            <strong>No interpreter activity yet</strong>
-            <p>Status updates appear once the backend begins routing speech.</p>
+            <strong>No BRSE relay activity yet</strong>
+            <p>Status updates appear once BRSE AI begins listening or relaying speech.</p>
           </div>
         ) : null}
 
         {statuses.map((item) => (
           <div className="status-item" key={item.key}>
             <div>
-              <strong>{item.speakerName}</strong>
+              <strong>{item.brseParticipantName}</strong>
               <p>
-                {item.targetLanguage.toUpperCase()} listener track
+                Relaying {item.speakerName}
+                {item.sourceLanguage ? ` ${item.sourceLanguage.toUpperCase()}` : ""}
+                {` -> ${item.targetLanguage.toUpperCase()}`}
                 {item.message ? ` · ${item.message}` : ""}
               </p>
             </div>

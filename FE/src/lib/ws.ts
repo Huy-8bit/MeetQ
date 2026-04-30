@@ -115,6 +115,23 @@ export class GatewaySocket {
     }
   }
 
+  disconnectForUnload(reason = "Client unload"): void {
+    this.intentionalClose = true;
+    this.clearTimers();
+    this.rejectPendingConnect(new GatewaySocketCancelledError());
+    this.setState("disconnected");
+
+    if (!this.socket) {
+      return;
+    }
+
+    const socket = this.socket;
+    this.socket = null;
+    if (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING) {
+      socket.close(1001, reason);
+    }
+  }
+
   ping(): void {
     this.sendEnvelope("ping", {
       client_time: new Date().toISOString(),
@@ -125,6 +142,18 @@ export class GatewaySocket {
     this.sendEnvelope("set_language", {
       language,
     });
+  }
+
+  sendScreenShareStart(payload: {
+    track_sid?: string;
+    track_name?: string;
+    source?: "screen_share";
+  }): void {
+    this.sendEnvelope("screen_share.start", payload);
+  }
+
+  sendScreenShareStop(): void {
+    this.sendEnvelope("screen_share.stop", {});
   }
 
   private openSocket(isReconnect: boolean): void {

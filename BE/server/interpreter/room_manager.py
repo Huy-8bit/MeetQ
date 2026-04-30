@@ -16,10 +16,16 @@ from server.interpreter.event_publisher import RedisEventPublisher
 from server.interpreter.interpreter_client import InterpreterRealtimeClient
 from server.interpreter.livekit_runtime import LiveKitRuntime
 from server.interpreter.meeting_config import (
+    BRSE_RELAY_LANGUAGE_MAP,
     INTERPRETER_INPUT_QUEUE_MAXSIZE,
     INTERPRETER_INPUT_WARMUP_CHUNKS,
 )
 from server.interpreter.output_router import OutputRouter
+from server.meeting_modes import (
+    BRSE_PARTICIPANT_ID,
+    is_active_human_participant,
+    relay_target_language,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +39,7 @@ _INPUT_WARMUP_CHUNKS = INTERPRETER_INPUT_WARMUP_CHUNKS
 class _RoutingPlan:
     src_lang: str
     tgt_lang: str
-    listener_ids: frozenset[str]
+    audience_ids: frozenset[str]
 
 
 @dataclass(frozen=True)
@@ -41,7 +47,7 @@ class _RoutingResolution:
     plan: Optional[_RoutingPlan]
     error_code: Optional[str] = None
     error_message: Optional[str] = None
-    error_targets: tuple[str, ...] = ()
+    error_target_lang: Optional[str] = None
 
 
 class RoomInterpreterManager:
@@ -64,6 +70,7 @@ class RoomInterpreterManager:
         self.tasks: Dict[str, asyncio.Task] = {}
         self.speaker_sources: Dict[str, str] = {}
         self.speaker_targets: Dict[str, str] = {}
+        self.speaker_audiences: Dict[str, frozenset[str]] = {}
         self.transcript_state: Dict[str, Dict[str, Any]] = {}
         self.route_failures: Dict[str, tuple[Any, ...]] = {}
         self._closed = False
@@ -139,8 +146,8 @@ class RoomInterpreterManager:
             await self._publish_route_failure(
                 speaker_id=speaker_id,
                 error_code=resolution.error_code,
-                message=resolution.error_message or "Interpreter routing failed.",
-                target_languages=resolution.error_targets,
+                message=resolution.error_message or "BRSE relay routing failed.",
+                target_lang=resolution.error_target_lang,
             )
             await self._teardown_speaker(speaker_id, keep_participant=True, drop_stream=False)
             return
@@ -162,7 +169,8 @@ class RoomInterpreterManager:
             )
         else:
             await self._ensure_speaker_runtime(speaker_id, plan)
-        await self._sync_runtime_listeners(speaker_id, plan)
+
+        self.speaker_audiences[speaker_id] = plan.audience_ids
         await self._publish_runtime_status(
             speaker_id=speaker_id,
             target_lang=plan.tgt_lang,
@@ -171,47 +179,37 @@ class RoomInterpreterManager:
 
     def _build_routing_resolution(self, speaker_id: str) -> _RoutingResolution:
         speaker = self.participants.get(speaker_id)
-        if speaker is None or not self._is_active_participant(speaker):
+        if speaker is None or not self._is_active_human_participant(speaker):
             return _RoutingResolution(plan=None)
 
         speaker_lang = speaker.get("language")
         if speaker_lang not in _SUPPORTED_LANGS:
-            target_languages = tuple(sorted(self._listener_target_languages(speaker_id)))
             return _RoutingResolution(
                 plan=None,
                 error_code="invalid_language",
                 error_message=(
                     f"Speaker {speaker_id} does not have a concrete meeting language. "
-                    "Interpreter runtime requires explicit vi/en/ja selection."
+                    "BRSE relay requires explicit vi/en/ja selection."
                 ),
-                error_targets=target_languages,
             )
 
-        target_languages = sorted(self._listener_target_languages(speaker_id))
-        if not target_languages:
-            return _RoutingResolution(plan=None)
-
-        if len(target_languages) > 1:
+        target_lang = relay_target_language(speaker_lang, BRSE_RELAY_LANGUAGE_MAP)
+        if target_lang is None:
             return _RoutingResolution(
                 plan=None,
-                error_code="interpreter_unavailable",
+                error_code="unsupported_bridge_language",
                 error_message=(
-                    f"Speaker {speaker_id} currently has multiple listener target languages "
-                    f"({', '.join(target_languages)}). Runtime rebuild is required per target."
+                    f"Speaker {speaker_id} uses language {speaker_lang}, but current BRSE relay "
+                    "mapping only supports deterministic room-level bridge targets."
                 ),
-                error_targets=tuple(target_languages),
             )
 
-        tgt_lang = target_languages[0]
-        listener_ids = frozenset(self._listener_ids_for_target(speaker_id, tgt_lang))
-        if not listener_ids:
-            return _RoutingResolution(plan=None)
-
+        audience_ids = frozenset(self._audience_ids_for_target(speaker_id, target_lang))
         return _RoutingResolution(
             plan=_RoutingPlan(
                 src_lang=speaker_lang,
-                tgt_lang=tgt_lang,
-                listener_ids=listener_ids,
+                tgt_lang=target_lang,
+                audience_ids=audience_ids,
             )
         )
 
@@ -224,13 +222,14 @@ class RoomInterpreterManager:
             return
 
         logger.info(
-            "Starting interpreter runtime for speaker=%s room=%s route=%s->%s listeners=%d",
+            "Starting BRSE relay runtime for speaker=%s room=%s route=%s->%s audience=%d",
             speaker_id,
             self.room_id,
             plan.src_lang,
             plan.tgt_lang,
-            len(plan.listener_ids),
+            len(plan.audience_ids),
         )
+
         audio_input = LiveKitAudioInput(
             speaker_id,
             stream,
@@ -241,11 +240,10 @@ class RoomInterpreterManager:
         )
         self.active_inputs[speaker_id] = audio_input
 
-        def on_track_failure(listener_id: str, target_lang: str, message: str) -> None:
+        def on_track_failure(target_lang: str, message: str) -> None:
             asyncio.create_task(
                 self._publish_audio_track_failure(
                     speaker_id=speaker_id,
-                    listener_id=listener_id,
                     target_lang=target_lang,
                     message=message,
                 )
@@ -253,18 +251,20 @@ class RoomInterpreterManager:
 
         router = OutputRouter(
             self.runtime.room,
-            speaker_id,
+            brse_participant_id=BRSE_PARTICIPANT_ID,
+            brse_livekit_identity=self.runtime.livekit_identity,
+            speaker_id=speaker_id,
             src_lang=plan.src_lang,
+            target_lang=plan.tgt_lang,
             output_sample_rate=getattr(self.settings, "realtime_output_sample_rate", 24000),
             on_track_failure=on_track_failure,
         )
         self.routers[speaker_id] = router
-
-        for listener_id in sorted(plan.listener_ids):
-            await router.ensure_listener(listener_id, plan.tgt_lang)
+        await router.ensure_track()
 
         client = InterpreterRealtimeClient(
             api_key=self.settings.openai_api_key,
+            model=self.settings.openai_realtime_model,
             src_lang=plan.src_lang,
             tgt_lang=plan.tgt_lang,
             audio_input=audio_input,
@@ -280,6 +280,7 @@ class RoomInterpreterManager:
         self.clients[speaker_id] = client
         self.speaker_sources[speaker_id] = plan.src_lang
         self.speaker_targets[speaker_id] = plan.tgt_lang
+        self.speaker_audiences[speaker_id] = plan.audience_ids
         client._running = True
         self.tasks[speaker_id] = asyncio.create_task(client._run_with_retry())
 
@@ -297,7 +298,7 @@ class RoomInterpreterManager:
             return
 
         logger.info(
-            "Reconfiguring interpreter runtime for %s in room %s: %s -> %s",
+            "Reconfiguring BRSE relay runtime for %s in room %s: %s -> %s",
             speaker_id,
             self.room_id,
             f"{current_src}->{current_tgt}",
@@ -308,7 +309,7 @@ class RoomInterpreterManager:
             try:
                 await client._cancel_response(client._ws)
             except Exception:
-                logger.exception("Failed to cancel in-flight interpreter response for %s", speaker_id)
+                logger.exception("Failed to cancel in-flight BRSE relay response for %s", speaker_id)
 
         self.transcript_state.pop(speaker_id, None)
 
@@ -316,11 +317,10 @@ class RoomInterpreterManager:
         if router is not None:
             await router.shutdown()
 
-        def on_track_failure(listener_id: str, target_lang: str, message: str) -> None:
+        def on_track_failure(target_lang: str, message: str) -> None:
             asyncio.create_task(
                 self._publish_audio_track_failure(
                     speaker_id=speaker_id,
-                    listener_id=listener_id,
                     target_lang=target_lang,
                     message=message,
                 )
@@ -328,15 +328,16 @@ class RoomInterpreterManager:
 
         router = OutputRouter(
             self.runtime.room,
-            speaker_id,
+            brse_participant_id=BRSE_PARTICIPANT_ID,
+            brse_livekit_identity=self.runtime.livekit_identity,
+            speaker_id=speaker_id,
             src_lang=plan.src_lang,
+            target_lang=plan.tgt_lang,
             output_sample_rate=getattr(self.settings, "realtime_output_sample_rate", 24000),
             on_track_failure=on_track_failure,
         )
         self.routers[speaker_id] = router
-
-        for listener_id in sorted(plan.listener_ids):
-            await router.ensure_listener(listener_id, plan.tgt_lang)
+        await router.ensure_track()
 
         self._bind_client_callbacks(
             speaker_id=speaker_id,
@@ -347,21 +348,8 @@ class RoomInterpreterManager:
         )
         self.speaker_sources[speaker_id] = plan.src_lang
         self.speaker_targets[speaker_id] = plan.tgt_lang
+        self.speaker_audiences[speaker_id] = plan.audience_ids
         await client.update_routing(plan.src_lang, plan.tgt_lang)
-
-    async def _sync_runtime_listeners(self, speaker_id: str, plan: _RoutingPlan) -> None:
-        router = self.routers.get(speaker_id)
-        if router is None:
-            return
-
-        current_listeners = set(router.listener_languages.keys())
-        desired_listeners = set(plan.listener_ids)
-
-        for listener_id in current_listeners - desired_listeners:
-            await router.remove_listener(listener_id)
-        for listener_id in desired_listeners:
-            if listener_id not in current_listeners or router.audio_track_name(listener_id) is None:
-                await router.ensure_listener(listener_id, plan.tgt_lang)
 
     async def _publish_route_failure(
         self,
@@ -369,21 +357,23 @@ class RoomInterpreterManager:
         speaker_id: str,
         error_code: str,
         message: str,
-        target_languages: tuple[str, ...],
+        target_lang: Optional[str],
     ) -> None:
-        failure_key = (error_code, message, target_languages)
+        failure_key = (error_code, message, target_lang)
         if self.route_failures.get(speaker_id) == failure_key:
             return
 
         self.route_failures[speaker_id] = failure_key
-        logger.warning("Interpreter routing failure for %s in room %s: %s", speaker_id, self.room_id, message)
+        logger.warning("BRSE relay routing failure for %s in room %s: %s", speaker_id, self.room_id, message)
 
         await self.publisher.publish_error(
             code=error_code,
             message=message,
             speaker_id=speaker_id,
+            target_language=target_lang,
+            brse_livekit_identity=self.runtime.livekit_identity,
         )
-        for target_lang in target_languages:
+        if target_lang is not None:
             await self._publish_runtime_status(
                 speaker_id=speaker_id,
                 target_lang=target_lang,
@@ -395,18 +385,16 @@ class RoomInterpreterManager:
         self,
         *,
         speaker_id: str,
-        listener_id: str,
         target_lang: str,
         message: str,
     ) -> None:
-        full_message = (
-            f"Interpreter audio track failure for listener {listener_id}: {message}"
-        )
+        full_message = f"BRSE relay audio track failure: {message}"
         await self.publisher.publish_error(
             code="interpreter_unavailable",
             message=full_message,
             speaker_id=speaker_id,
             target_language=target_lang,
+            brse_livekit_identity=self.runtime.livekit_identity,
         )
         await self._publish_runtime_status(
             speaker_id=speaker_id,
@@ -434,7 +422,7 @@ class RoomInterpreterManager:
             except asyncio.CancelledError:
                 pass
             except Exception:
-                logger.exception("Interpreter task cleanup failed for %s", speaker_id)
+                logger.exception("BRSE relay task cleanup failed for %s", speaker_id)
 
         audio_input = self.active_inputs.pop(speaker_id, None)
         if audio_input is not None:
@@ -446,6 +434,7 @@ class RoomInterpreterManager:
 
         self.speaker_sources.pop(speaker_id, None)
         self.speaker_targets.pop(speaker_id, None)
+        self.speaker_audiences.pop(speaker_id, None)
         self.transcript_state.pop(speaker_id, None)
         if drop_stream:
             self.active_streams.pop(speaker_id, None)
@@ -488,7 +477,7 @@ class RoomInterpreterManager:
                 src_lang=src_lang,
                 target_lang=target_lang,
             )
-            state["translated_text"] = f"{state['translated_text']}{delta}"
+            state["brse_text"] = f"{state['brse_text']}{delta}"
             asyncio.create_task(self._publish_partial(speaker_id))
 
         def on_text_done(text: str) -> None:
@@ -499,20 +488,19 @@ class RoomInterpreterManager:
                     src_lang=src_lang,
                     target_lang=target_lang,
                 )
-            state["translated_text"] = text
-
+            state["brse_text"] = text
             asyncio.create_task(self._publish_final(speaker_id))
 
         def on_audio_delta(encoded: str) -> None:
-            asyncio.create_task(router.capture_base64_audio(target_lang, encoded))
+            asyncio.create_task(router.capture_base64_audio(encoded))
 
         def on_audio_done() -> None:
-            asyncio.create_task(router.flush(target_lang))
+            asyncio.create_task(router.flush())
 
         def on_status_change(status: str) -> None:
             if status == "capturing":
                 self.transcript_state.pop(speaker_id, None)
-                router.clear_queues()
+                router.clear_queue()
             asyncio.create_task(
                 self._publish_runtime_status(
                     speaker_id=speaker_id,
@@ -522,13 +510,14 @@ class RoomInterpreterManager:
             )
 
         def on_error(err: Dict[str, Any]) -> None:
-            message = err.get("message") or err.get("type") or "Interpreter runtime error"
+            message = err.get("message") or err.get("type") or "BRSE relay runtime error"
             asyncio.create_task(
                 self.publisher.publish_error(
                     code="interpreter_unavailable",
                     message=message,
                     speaker_id=speaker_id,
                     target_language=target_lang,
+                    brse_livekit_identity=self.runtime.livekit_identity,
                 )
             )
             asyncio.create_task(
@@ -586,20 +575,20 @@ class RoomInterpreterManager:
         if state is None or target_lang is None or router is None:
             return
 
-        for listener_id in sorted(router.listener_ids_for_language(target_lang)):
-            await self.publisher.publish_transcript_partial(
-                transcript_id=state["translated_transcript_id"],
-                utterance_id=state["utterance_id"],
-                speaker_id=speaker_id,
-                speaker_name=self._speaker_name(speaker_id),
-                src_lang=state["src_lang"],
-                target_id=listener_id,
-                target_lang=target_lang,
-                source_text=state["source_text"],
-                translated_text=state["translated_text"],
-                created_at=state["created_at"],
-                audio_track_name=router.audio_track_name(listener_id),
-            )
+        await self.publisher.publish_relay_transcript_partial(
+            transcript_id=state["relay_transcript_id"],
+            utterance_id=state["utterance_id"],
+            speaker_id=speaker_id,
+            speaker_name=self._speaker_name(speaker_id),
+            src_lang=state["src_lang"],
+            target_lang=target_lang,
+            source_text=state["source_text"],
+            brse_text=state["brse_text"],
+            created_at=state["created_at"],
+            brse_livekit_identity=self.runtime.livekit_identity,
+            audio_track_name=router.audio_track_name(),
+            audience_participant_ids=sorted(self.speaker_audiences.get(speaker_id, frozenset())),
+        )
 
     async def _publish_final(self, speaker_id: str) -> None:
         state = self.transcript_state.get(speaker_id)
@@ -609,21 +598,21 @@ class RoomInterpreterManager:
             return
 
         latency_ms = int(max(0.0, time.monotonic() - state["started_at"]) * 1000)
-        for listener_id in sorted(router.listener_ids_for_language(target_lang)):
-            await self.publisher.publish_transcript_final(
-                transcript_id=state["translated_transcript_id"],
-                utterance_id=state["utterance_id"],
-                speaker_id=speaker_id,
-                speaker_name=self._speaker_name(speaker_id),
-                src_lang=state["src_lang"],
-                target_id=listener_id,
-                target_lang=target_lang,
-                source_text=state["source_text"],
-                translated_text=state["translated_text"],
-                created_at=state["created_at"],
-                audio_track_name=router.audio_track_name(listener_id),
-                latency_ms=latency_ms,
-            )
+        await self.publisher.publish_relay_transcript_final(
+            transcript_id=state["relay_transcript_id"],
+            utterance_id=state["utterance_id"],
+            speaker_id=speaker_id,
+            speaker_name=self._speaker_name(speaker_id),
+            src_lang=state["src_lang"],
+            target_lang=target_lang,
+            source_text=state["source_text"],
+            brse_text=state["brse_text"],
+            created_at=state["created_at"],
+            brse_livekit_identity=self.runtime.livekit_identity,
+            audio_track_name=router.audio_track_name(),
+            audience_participant_ids=sorted(self.speaker_audiences.get(speaker_id, frozenset())),
+            latency_ms=latency_ms,
+        )
 
         self.transcript_state.pop(speaker_id, None)
 
@@ -637,15 +626,11 @@ class RoomInterpreterManager:
     ) -> None:
         router = self.routers.get(speaker_id)
         source_language = self.speaker_sources.get(speaker_id)
-        listener_ids = sorted(self._listener_ids_for_target(speaker_id, target_lang))
-        audio_tracks = (
-            router.track_descriptors_for_language(target_lang)
-            if router is not None
-            else []
-        )
+        audience_ids = sorted(self.speaker_audiences.get(speaker_id, frozenset()))
+        audio_track = router.track_descriptor() if router is not None else None
         audio_track_name = None
-        if len(audio_tracks) == 1 and audio_tracks[0].get("track_available"):
-            audio_track_name = audio_tracks[0].get("track_name")
+        if audio_track is not None and audio_track.get("track_available"):
+            audio_track_name = audio_track.get("track_name")
 
         await self.publisher.publish_status(
             speaker_id=speaker_id,
@@ -653,28 +638,18 @@ class RoomInterpreterManager:
             target_lang=target_lang,
             status=status,
             message=message,
-            listener_ids=listener_ids,
+            brse_livekit_identity=self.runtime.livekit_identity,
+            audience_participant_ids=audience_ids,
             audio_track_name=audio_track_name,
-            audio_tracks=audio_tracks,
+            audio_track=audio_track,
         )
 
-    def _listener_target_languages(self, speaker_id: str) -> Set[str]:
-        speaker_lang = self.participants.get(speaker_id, {}).get("language")
-        return {
-            payload.get("language")
-            for participant_id, payload in self.participants.items()
-            if participant_id != speaker_id
-            and self._is_active_participant(payload)
-            and payload.get("language") in _SUPPORTED_LANGS
-            and payload.get("language") != speaker_lang
-        }
-
-    def _listener_ids_for_target(self, speaker_id: str, target_lang: str) -> Set[str]:
+    def _audience_ids_for_target(self, speaker_id: str, target_lang: str) -> Set[str]:
         return {
             participant_id
             for participant_id, payload in self.participants.items()
             if participant_id != speaker_id
-            and self._is_active_participant(payload)
+            and self._is_active_human_participant(payload)
             and payload.get("language") == target_lang
         }
 
@@ -696,9 +671,9 @@ class RoomInterpreterManager:
         state = {
             "utterance_id": utterance_id,
             "source_transcript_id": f"{utterance_id}::source",
-            "translated_transcript_id": f"{utterance_id}::translated::{target_lang}",
+            "relay_transcript_id": f"{utterance_id}::relay::{target_lang}",
             "source_text": "",
-            "translated_text": "",
+            "brse_text": "",
             "started_at": time.monotonic(),
             "created_at": self._now_str(),
             "src_lang": src_lang,
@@ -719,7 +694,9 @@ class RoomInterpreterManager:
 
         payload.setdefault("status", "connected")
         payload.setdefault("display_name", payload.get("participant_id", "unknown"))
+        payload.setdefault("kind", "human")
+        payload.setdefault("is_virtual", False)
         return payload
 
-    def _is_active_participant(self, payload: Dict[str, Any]) -> bool:
-        return payload.get("status") != "disconnected" and payload.get("left_at") is None
+    def _is_active_human_participant(self, payload: Dict[str, Any]) -> bool:
+        return is_active_human_participant(payload)

@@ -20,6 +20,24 @@ from server.gateway.event_consumer import start_event_consumer
 import uuid
 
 
+async def _on_ws_connection_lost(room_id: str, participant_id: str, session_id: str, reason: str):
+    if not app_state.room_service:
+        return
+    await app_state.room_service.cleanup_participant(
+        room_id=room_id,
+        participant_id=participant_id,
+        session_id=session_id,
+        reason=f"ws_{reason}",
+    )
+
+
+async def _ws_stale_sweeper():
+    while True:
+        await asyncio.sleep(max(app_state.settings.ws_stale_sweep_interval_seconds, 5))
+        if app_state.ws_hub:
+            await app_state.ws_hub.close_stale_connections()
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
@@ -27,17 +45,26 @@ async def lifespan(app: FastAPI):
     app_state.redis = await create_redis_client(app_state.settings.redis_url)
     app_state.room_store = RoomStore(app_state.redis, ttl_seconds=app_state.settings.room_token_ttl_seconds)
     app_state.room_service = RoomService(app_state.room_store, app_state.settings, app_state.redis)
-    app_state.ws_hub = WSHub()
+    app_state.ws_hub = WSHub(
+        on_connection_lost=_on_ws_connection_lost,
+        stale_timeout_seconds=app_state.settings.ws_stale_timeout_seconds,
+    )
     app_state.test_session_store = TestSessionStore(app_state.redis)
 
     # Start consumer
     consumer_task = asyncio.create_task(start_event_consumer(app_state.redis))
+    stale_sweeper_task = asyncio.create_task(_ws_stale_sweeper())
 
     yield
     # Shutdown
     consumer_task.cancel()
+    stale_sweeper_task.cancel()
     try:
         await consumer_task
+    except asyncio.CancelledError:
+        pass
+    try:
+        await stale_sweeper_task
     except asyncio.CancelledError:
         pass
 

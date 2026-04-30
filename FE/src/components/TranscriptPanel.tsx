@@ -30,8 +30,8 @@ export function TranscriptPanel({ entries }: TranscriptPanelProps) {
     <section className="panel transcript-panel">
       <div className="panel-header">
         <div>
-          <h3>Realtime Transcript</h3>
-          <p>Speaker lines update live. Partial segments are upgraded to final in place.</p>
+          <h3>Conversation + BRSE Relay</h3>
+          <p>Original speech stays visible, and BRSE AI relay lines are rendered as separate room-wide events.</p>
         </div>
       </div>
 
@@ -39,7 +39,7 @@ export function TranscriptPanel({ entries }: TranscriptPanelProps) {
         {entries.length === 0 ? (
           <div className="empty-state small">
             <strong>Waiting for speech</strong>
-            <p>Transcripts will appear here as the interpreter publishes events.</p>
+            <p>Human speech and BRSE relay transcripts will appear here as the meeting progresses.</p>
           </div>
         ) : null}
 
@@ -50,17 +50,19 @@ export function TranscriptPanel({ entries }: TranscriptPanelProps) {
           >
             <header className="transcript-item-header">
               <div>
-                <strong>{entry.speakerName}</strong>
-                <span>{entry.speakerLanguage.toUpperCase()}</span>
+                <strong>{entry.actorName}</strong>
+                <span>{entry.actorLanguage.toUpperCase()}</span>
               </div>
               <div className="transcript-badges">
                 <span className={`badge ${entry.isFinal ? "" : "live"}`}>
                   {entry.isFinal ? "Final" : "Partial"}
                 </span>
                 <span className="badge kind">
-                  {entry.kind === "translated"
-                    ? `Translated ${entry.srcLang.toUpperCase()}->${(entry.tgtLang ?? "-").toUpperCase()}`
-                    : `Source ${entry.srcLang.toUpperCase()}`}
+                  {entry.kind === "relay"
+                    ? `BRSE Relay ${entry.sourceSpeakerLanguage.toUpperCase()}->${(entry.relayTargetLanguage ?? "AUTO").toUpperCase()}`
+                    : entry.kind === "translated"
+                      ? `Translated ${entry.sourceSpeakerLanguage.toUpperCase()}->${(entry.relayTargetLanguage ?? "AUTO").toUpperCase()}`
+                      : `Human Source ${entry.sourceSpeakerLanguage.toUpperCase()}`}
                 </span>
                 {entry.fallbackUsed ? (
                   <span className="badge warning">Degraded</span>
@@ -68,7 +70,22 @@ export function TranscriptPanel({ entries }: TranscriptPanelProps) {
               </div>
             </header>
             <div className="transcript-copy">
-              <p className="transcript-source">{entry.text}</p>
+              {entry.kind === "relay" ? (
+                <>
+                  <p className="transcript-source">
+                    <strong>{entry.sourceSpeakerName}</strong>
+                    {` (${entry.sourceSpeakerLanguage.toUpperCase()}): `}
+                    {entry.sourceText}
+                  </p>
+                  <p className="transcript-relay">
+                    <strong>{entry.actorName}</strong>
+                    {` (${(entry.relayTargetLanguage ?? entry.actorLanguage).toUpperCase()}): `}
+                    {entry.relayText ?? entry.text}
+                  </p>
+                </>
+              ) : (
+                <p className="transcript-source">{entry.text}</p>
+              )}
             </div>
           </article>
         ))}

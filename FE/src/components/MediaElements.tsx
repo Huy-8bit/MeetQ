@@ -4,6 +4,12 @@ import type {
   RemoteAudioTrack,
   RemoteVideoTrack,
 } from "livekit-client";
+import {
+  getRoomAudioOutputDevice,
+  registerAudioSink,
+  setRoomAudioOutputDevice,
+  unregisterAudioSink,
+} from "../lib/audioOutput";
 
 interface VideoTrackViewProps {
   track: LocalVideoTrack | RemoteVideoTrack | null;
@@ -44,9 +50,13 @@ export function VideoTrackView({
 
 interface AudioTrackSinkProps {
   track: RemoteAudioTrack;
+  onOutputDeviceError?: (message: string) => void;
 }
 
-export function AudioTrackSink({ track }: AudioTrackSinkProps) {
+export function AudioTrackSink({
+  track,
+  onOutputDeviceError,
+}: AudioTrackSinkProps) {
   const ref = useRef<HTMLAudioElement | null>(null);
 
   useEffect(() => {
@@ -55,14 +65,27 @@ export function AudioTrackSink({ track }: AudioTrackSinkProps) {
       return;
     }
 
+    registerAudioSink(element);
     track.attach(element);
     void element.play().catch(() => undefined);
+
+    const outputDeviceId = getRoomAudioOutputDevice();
+    if (outputDeviceId) {
+      void setRoomAudioOutputDevice(outputDeviceId).catch((error) => {
+        onOutputDeviceError?.(
+          error instanceof Error
+            ? error.message
+            : "Failed to apply selected output device.",
+        );
+      });
+    }
 
     return () => {
       track.detach(element);
       element.srcObject = null;
+      unregisterAudioSink(element);
     };
-  }, [track]);
+  }, [track, onOutputDeviceError]);
 
   return <audio ref={ref} autoPlay playsInline />;
 }

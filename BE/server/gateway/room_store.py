@@ -1,7 +1,17 @@
 import json
+from typing import Any, Dict, List, Optional
+
 import redis.asyncio as redis
-from typing import Optional, Dict, Any, List
-from server.models import RoomState, ParticipantState, TranscriptEvent, SnapshotData, ParticipantSnapshot, RoomSnapshotResponseRoom, RoomSnapshotResponse
+
+from server.models import (
+    ParticipantSnapshot,
+    ParticipantState,
+    RoomSnapshotResponse,
+    RoomSnapshotResponseRoom,
+    RoomState,
+    TranscriptEvent,
+)
+
 
 class RoomStore:
     def __init__(self, client: redis.Redis, ttl_seconds: int = 86400, transcript_limit: int = 50):
@@ -34,22 +44,21 @@ class RoomStore:
             return None
 
         room_state = RoomState.model_validate_json(meta_json)
-        
+        participants: List[ParticipantSnapshot] = []
+
         parts_data = await self.client.hgetall(self._parts_key(room_id))
-        participants = []
-        participant_count = 0
         for p_json in parts_data.values():
             p_state = ParticipantState.model_validate_json(p_json)
-            # count only connected/joining ? The contract says count of active? Let's just say count all non-left
-            if p_state.left_at is None:
-                participant_count += 1
-            participants.append(ParticipantSnapshot(
-                participant_id=p_state.participant_id,
-                display_name=p_state.display_name,
-                language=p_state.language,
-                status=p_state.status,
-                joined_at=p_state.joined_at
-            ))
+            if p_state.status == "disconnected":
+                continue
+            participants.append(self._participant_state_to_snapshot(p_state))
+
+        participants.extend(
+            payload if isinstance(payload, ParticipantSnapshot) else ParticipantSnapshot.model_validate(payload)
+            for payload in room_state.virtual_participants
+        )
+
+        participant_count = sum(1 for participant in participants if participant.status != "disconnected")
 
         trans_data = await self.client.lrange(self._trans_key(room_id), 0, -1)
         transcripts = [TranscriptEvent.model_validate_json(t) for t in trans_data]
@@ -61,32 +70,52 @@ class RoomStore:
             expires_at=room_state.expires_at,
             participant_limit=room_state.participant_limit,
             supported_languages=room_state.supported_languages,
+            meeting_mode=room_state.meeting_mode,
+            interpreter_mode=room_state.interpreter_mode,
             audio_routing=room_state.audio_routing,
-            participant_count=participant_count
+            participant_count=participant_count,
         )
 
         return RoomSnapshotResponse(
             room=room_res,
             participants=participants,
-            recent_transcripts=transcripts
+            recent_transcripts=transcripts,
         )
 
     async def add_participant(self, room_id: str, participant: ParticipantState):
         await self.client.hset(self._parts_key(room_id), participant.participant_id, participant.model_dump_json())
         await self._refresh_ttl(room_id)
 
+    async def get_participant(self, room_id: str, participant_id: str) -> Optional[ParticipantState]:
+        p_json = await self.client.hget(self._parts_key(room_id), participant_id)
+        if not p_json:
+            return None
+        return ParticipantState.model_validate_json(p_json)
+
     async def update_participant(self, room_id: str, participant_id: str, patch: Dict[str, Any]):
         p_json = await self.client.hget(self._parts_key(room_id), participant_id)
         if p_json:
             p_data = json.loads(p_json)
             p_data.update(patch)
-            # Revalidate to ensure correctness
             updated_p = ParticipantState(**p_data)
             await self.client.hset(self._parts_key(room_id), participant_id, updated_p.model_dump_json())
             await self._refresh_ttl(room_id)
 
     async def mark_participant_left(self, room_id: str, participant_id: str, left_at: str):
-        await self.update_participant(room_id, participant_id, {"status": "disconnected", "left_at": left_at})
+        await self.update_participant(
+            room_id,
+            participant_id,
+            {
+                "status": "disconnected",
+                "ws_connected": False,
+                "left_at": left_at,
+                "last_seen_at": left_at,
+            },
+        )
+
+    async def remove_participant(self, room_id: str, participant_id: str):
+        await self.client.hdel(self._parts_key(room_id), participant_id)
+        await self._refresh_ttl(room_id)
 
     async def append_transcript(self, room_id: str, transcript: TranscriptEvent):
         key = self._trans_key(room_id)
@@ -108,5 +137,22 @@ class RoomStore:
         await self.client.delete(
             self._meta_key(room_id),
             self._parts_key(room_id),
-            self._trans_key(room_id)
+            self._trans_key(room_id),
+        )
+
+    def _participant_state_to_snapshot(self, participant: ParticipantState) -> ParticipantSnapshot:
+        return ParticipantSnapshot(
+            participant_id=participant.participant_id,
+            display_name=participant.display_name,
+            language=participant.language,
+            status=participant.status,
+            joined_at=participant.joined_at,
+            last_seen_at=participant.last_seen_at,
+            ws_connected=participant.ws_connected,
+            kind=participant.kind,
+            is_virtual=participant.is_virtual,
+            livekit_identity=participant.livekit_identity,
+            metadata=participant.metadata,
+            is_screen_sharing=participant.is_screen_sharing,
+            screen_share=participant.screen_share,
         )

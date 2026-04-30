@@ -1,14 +1,286 @@
 # Frontend Implementation State
 
+## Turn Update: 2026-05-01 Audio Device Controls Bugfix (Kickoff)
+
+- Time: 2026-05-01T14:30:00+07:00
+- Mode: CODE-ONLY
+- Testing deferred: yes
+
+### Root Cause (Locked)
+
+- Mic input switching path relies on best-effort in-place device switch; when in-place switch is unsupported or reports unsuccessful transition, runtime does not always guarantee microphone track replacement.
+- Audio output switching currently depends on per-element sink application path, but lacks centralized sink management for consistent application across existing and future audio elements.
+- Device selected state can drift from real runtime apply state when devices change dynamically (plug/unplug) and sink/device apply fails.
+
+### Strategy (Current Turn)
+
+- Harden input switching path to always guarantee real microphone replacement fallback in room runtime.
+- Introduce centralized audio sink output-device manager for all room audio playback elements.
+- Align `useMeetingRoom` device state with runtime apply result and dynamic device availability.
+- Keep mute/unmute semantics stable across input device switch.
+
+## Turn Update: 2026-05-01 Audio Device Controls Bugfix (Post-Major)
+
+- Time: 2026-05-01T14:48:00+07:00
+- Status: major implementation completed
+
+### Changes Implemented
+
+- Hardened microphone input switch fallback in `FE/src/lib/livekit.ts`:
+  - in-place `setDeviceId` now only accepts successful transition result;
+  - when unsupported or unsuccessful, runtime falls back to full track replacement flow.
+- Added centralized output sink manager in `FE/src/lib/audioOutput.ts`:
+  - registry of active audio elements;
+  - centralized `setRoomAudioOutputDevice()` applies sink id to all registered sinks;
+  - new sinks auto-apply currently selected output device.
+- Updated `FE/src/components/MediaElements.tsx`:
+  - `AudioTrackSink` now registers/unregisters audio element in centralized registry;
+  - applies current output device via centralized manager and reports apply errors upstream.
+- Updated `FE/src/features/room/useMeetingRoom.ts`:
+  - integrated centralized output apply in `switchAudioOutput()` and device refresh path;
+  - added refs for selected input/output and switching flags to avoid stale-state drift during refresh/device-change;
+  - resets centralized output target on session clear and on unsupported browser output path.
+- Updated `FE/src/pages/RoomPage.tsx`:
+  - removed per-sink output-device prop usage; sink output now managed centrally.
+
+### Validation
+
+- Static diagnostics (`get_errors`) on changed FE files: no TypeScript errors reported.
+- Runtime/browser verification: deferred by instruction.
+
+## Turn Update: 2026-05-01 Audio Device Controls Bugfix (Final Sync)
+
+- Time: 2026-05-01T14:50:00+07:00
+- Scope confirmation: frontend-only changes, no backend files modified in this turn.
+- Testing note: no tests executed (explicitly deferred by instruction).
+
 ## Last Updated
 
-- Time: 2026-04-30T15:30:00+07:00
-- Agent: Claude Sonnet 4.6
+- Time: 2026-05-01T13:31:00+07:00
+- Agent: Codex
 - Branch: develop
 
 ## Current Phase
 
-- Mic Test + Translation Test UI
+- Audio Device Controls FE Runtime Integration
+
+## Current Objective
+
+- Implement room audio device controls for meeting runtime:
+  - mic mute/unmute
+  - audio input device enumeration + switching
+  - audio output device enumeration + sink switching when browser supports it
+- Keep existing join/leave, websocket lifecycle, transcript, screen share, and BRSE/human audio flow stable.
+- Testing deferred by instruction (CODE-ONLY).
+
+## Work Log (Current Turn)
+
+### Batch 0: Mandatory Read + Device Strategy Lock (Completed)
+
+- Read required files before code changes:
+  - `docs/frontend/IMPLEMENTATION_STATE.md`
+  - `docs/backend/API_CONTRACT.md`
+  - `FE/src/features/room/useMeetingRoom.ts`
+  - `FE/src/lib/livekit.ts`
+  - `FE/src/components/MediaElements.tsx`
+  - `FE/src/pages/RoomPage.tsx`
+  - `FE/src/types/livekit.ts`
+  - all current components under `FE/src/components/`
+- Strategy locked for this turn:
+  - add local runtime state in `useMeetingRoom` for input/output device lists, selected ids, switching flags, mute flags, and error messages.
+  - mic toggle strategy: operate on local published microphone track (`mute/unmute`) with explicit loading/error state.
+  - mic switch strategy: prefer in-place `setDeviceId` on current local audio track; fallback to republish a new local audio track bound to selected device and replace stale reference.
+  - output switch strategy: central sink-id propagation to all room playback audio elements (`AudioTrackSink`) via shared `outputDeviceId` prop.
+  - browser support degrade path: detect sink-id support; keep selector disabled + show short unsupported message when unavailable.
+  - edge handling: `devicechange` refresh, missing selected device fallback, empty labels before permission, and switch-failure feedback.
+- Testing remains deferred by instruction.
+
+### Batch 1: Audio Device Runtime + UI Integration (Completed)
+
+- Runtime changes in `FE/src/features/room/useMeetingRoom.ts`:
+  - Added mic control state/action:
+    - `isMicMuted`, `isTogglingMic`, `micToggleError`, `toggleMicrophoneMuted()`
+  - Added audio input state/action:
+    - `audioInputDevices`, `selectedAudioInputDeviceId`, `isSwitchingAudioInput`, `audioInputError`, `switchAudioInput()`
+  - Added audio output state/action:
+    - `audioOutputDevices`, `selectedAudioOutputDeviceId`, `isSwitchingAudioOutput`, `audioOutputSupported`, `audioOutputError`, `switchAudioOutput()`
+  - Added sink apply error bridge:
+    - `reportAudioOutputApplyError()`
+  - Added browser device lifecycle handling:
+    - enumerate devices on session start
+    - subscribe to `navigator.mediaDevices.devicechange`
+    - fallback selected device if previous selection disappears
+  - Added stale-reference prevention:
+    - local mic track ref is updated during media refresh and cleared on teardown/unload/leave
+- Helper changes in `FE/src/lib/livekit.ts`:
+  - added device helpers:
+    - `enumerateAudioDevices()`
+    - `supportsAudioOutputSelection()`
+    - `getLocalMicrophoneTrack()`
+    - `isMicrophoneMuted()`
+    - `setLocalMicrophoneMuted()`
+    - `switchLocalMicrophoneTrack()`
+  - mic switch strategy implemented:
+    - prefer in-place `setDeviceId` on current local mic track
+    - fallback to republish replacement local audio track bound to selected device and unpublish/stop old track
+- UI + sink integration:
+  - created `FE/src/components/AudioDevicePanel.tsx`
+    - includes mic mute/unmute button
+    - includes input device selector
+    - includes output device selector + unsupported browser hint
+    - includes error feedback rows for toggle/input/output actions
+  - updated `FE/src/pages/RoomPage.tsx`
+    - renders `AudioDevicePanel` in room sidebar stack
+    - wires all new meeting hook state/actions
+    - passes selected output device to every room `AudioTrackSink`
+  - updated `FE/src/components/MediaElements.tsx`
+    - `AudioTrackSink` now accepts `outputDeviceId`
+    - applies `setSinkId` per sink when browser supports it
+    - reports sink-apply failures back to runtime via callback
+  - updated `FE/src/types/livekit.ts`
+    - added `AudioDeviceOption` for input/output selectors
+  - updated `FE/src/index.css`
+    - added styles for `audio-settings-panel` and control rows/errors/hints
+- Output device support/degrade path:
+  - if browser supports `setSinkId`: output selector enabled and sink id is applied to all room playback audio sinks
+  - if unsupported: selector disabled and short unsupported hint shown; runtime keeps playback on default browser routing
+- Audio sink apply strategy:
+  - propagate single selected output device id from room runtime to all `AudioTrackSink` instances
+  - each sink applies `setSinkId` on attach/update so human/BRSE playback paths stay consistent
+
+### Batch 2: Finalization Sync (Completed)
+
+- Final code path for this turn includes:
+  - mic mute/unmute runtime action + UI control
+  - audio input enumeration + runtime switching action + UI selector
+  - audio output support detection + selector + sink-id propagation to all room sinks
+  - device-change refresh handling and selected-device fallback behavior
+- Files created/updated in this turn:
+  - `FE/src/components/AudioDevicePanel.tsx` (new)
+  - `FE/src/features/room/useMeetingRoom.ts`
+  - `FE/src/lib/livekit.ts`
+  - `FE/src/components/MediaElements.tsx`
+  - `FE/src/pages/RoomPage.tsx`
+  - `FE/src/types/livekit.ts`
+  - `FE/src/index.css`
+  - `docs/frontend/IMPLEMENTATION_STATE.md`
+- Testing remains deferred by instruction (CODE-ONLY, no test execution).
+
+## Work Log (This Turn)
+
+### Batch 0: Mandatory Read + Strategy Lock (Completed)
+
+- Read required files before coding:
+  - `docs/backend/API_CONTRACT.md`
+  - `docs/backend/IMPLEMENTATION_STATE.md`
+  - `docs/frontend/IMPLEMENTATION_STATE.md`
+  - `FE/src/lib/api.ts`
+  - `FE/src/lib/ws.ts`
+  - `FE/src/lib/livekit.ts`
+  - `FE/src/features/room/useMeetingRoom.ts`
+  - `FE/src/pages/RoomPage.tsx`
+  - `FE/src/components/MediaElements.tsx`
+  - `FE/src/types/api.ts`
+  - `FE/src/types/ws.ts`
+  - `FE/src/types/livekit.ts`
+- Strategy locked for this turn:
+  - Backend sync path ưu tiên REST idempotent endpoints (`/screen-share/start|stop`) sau publish/unpublish LiveKit để tránh phụ thuộc socket state khi browser capture callback kết thúc bất ngờ.
+  - FE vẫn consume đầy đủ backend events (`screen_share.started`, `screen_share.stopped`, `participant.updated`) + snapshot fields (`is_screen_sharing`, `screen_share`) để đồng bộ state nguồn sự thật từ backend.
+  - Local runtime giữ reference screen-share track/publication rõ ràng trong `useMeetingRoom` để stop/cleanup deterministic.
+  - Stage strategy: single-main active shared screen UX (ưu tiên local sharer nếu local đang share, fallback participant remote active đầu tiên theo danh sách).
+  - Cleanup strategy: stop button, track ended callback, leave, unload, unmount đều đi qua một stop path idempotent gồm notify backend stop + unpublish/stop local track + clear local state.
+  - Không sửa backend, không test run, không đụng test files.
+
+### Batch 1: FE Contract + Runtime Integration (Completed)
+
+- Updated FE contract/types:
+  - `FE/src/types/api.ts`
+    - added participant screen-share fields: `is_screen_sharing`, `screen_share`
+    - added screen-share DTOs: `ScreenShareStartRequest`, `ScreenShareStateResponse`, `ScreenShareTrackInfo`
+  - `FE/src/types/ws.ts`
+    - added client messages: `screen_share.start`, `screen_share.stop`
+    - added server events: `screen_share.started`, `screen_share.stopped`
+    - extended `participant.joined` / `participant.updated` payload typings with screen-share fields
+  - `FE/src/types/livekit.ts`
+    - added `ScreenShareFeed` for dedicated shared-screen stage rendering
+- Updated FE API/WS client paths:
+  - `FE/src/lib/api.ts`
+    - added REST methods:
+      - `startScreenShare(roomId, token, body)`
+      - `stopScreenShare(roomId, token)`
+  - `FE/src/lib/ws.ts`
+    - added optional signal helpers:
+      - `sendScreenShareStart(...)`
+      - `sendScreenShareStop()`
+- Updated LiveKit helper/runtime:
+  - `FE/src/lib/livekit.ts`
+    - added actual publish path using browser screen capture:
+      - `publishScreenShareTrack(room)`
+    - added local cleanup helper:
+      - `unpublishScreenShareTrack(room, track)`
+    - extended media snapshot to include `screenShares` from local + remote publications (`Track.Source.ScreenShare`)
+
+### Batch 2: Meeting Hook + UI Stage/Badges + Cleanup Paths (Completed)
+
+- Core runtime flow implemented in `FE/src/features/room/useMeetingRoom.ts`:
+  - added local state:
+    - `isScreenSharing`
+    - `isStartingScreenShare`
+    - `isStoppingScreenShare`
+    - `screenShareError`
+  - added public actions:
+    - `startScreenShare()`
+    - `stopScreenShare(...)`
+  - start flow:
+    1) capture screen + publish to LiveKit
+    2) extract `track_sid` / `track_name`
+    3) sync backend via REST `/screen-share/start`
+    4) patch local participant state
+  - stop flow:
+    1) sync backend via REST `/screen-share/stop`
+    2) unpublish + stop local screen track
+    3) clear local state and participant flags
+  - consume backend updates from:
+    - snapshot participant fields
+    - `participant.updated`
+    - `screen_share.started`
+    - `screen_share.stopped`
+  - cleanup coverage:
+    - manual stop button
+    - browser track ended callback (`MediaStreamTrack ended`)
+    - leave room path
+    - unload/pagehide path (best-effort)
+    - hook teardown/unmount (best-effort)
+- UI updates:
+  - `FE/src/pages/RoomPage.tsx`
+    - added start/stop screen share control with loading/error state
+    - added dedicated `Shared Screen Stage` panel
+    - strategy for multi-share: prefer local sharer if active, else first active sharer
+  - `FE/src/components/ParticipantList.tsx`
+    - added participant badge: `Sharing screen`
+  - `FE/src/components/ParticipantTile.tsx`
+    - added tile badge: `Sharing screen`
+  - `FE/src/index.css`
+    - added stage layout/frame styles and compact header control behavior
+
+### Testing Status
+
+- Testing deferred by instruction: no test run, no test changes.
+
+### Batch 3: Finalization Sync (Completed)
+
+- Final state sync completed before end of turn as required.
+- Strategy locked in implementation:
+  - primary backend sync via REST (`start/stop` screen-share endpoints)
+  - websocket signaling methods retained as fallback/best-effort path during teardown
+  - active shared-screen stage driven by backend participant state + LiveKit screen tracks
+- Cleanup paths confirmed in code:
+  - explicit stop button
+  - browser track ended callback
+  - leave room path
+  - unload/pagehide path
+  - hook teardown/unmount path
+- Testing remains deferred (CODE-ONLY).
 
 ## Completed
 
@@ -75,16 +347,126 @@
 - [x] Implemented smooth in-place partial -> final upgrade by `transcript_id` to avoid noisy duplicate lines
 - [x] Updated room transcript panel UI to render speaker-attributed realtime transcript with `source/translated` and `partial/final` badges
 - [x] Added scrollable transcript history with newest line emphasis for room usability
+- [x] Read backend BRSE relay contract updates and backend runtime metadata for `meeting_mode=brse_relay`
+- [x] Updated FE meeting types for `virtual_brse`, `meeting_mode`, `interpreter_mode`, BRSE relay transcript refs, and `brse_participant_audio`
+- [x] Switched meeting runtime from translated-audio-first to BRSE participant mode
+- [x] Restored normal remote human audio playback as the primary human audio path
+- [x] Added room-wide BRSE AI audio feed handling from virtual participant LiveKit tracks
+- [x] Rendered `BRSE AI` as a distinct participant in room grid, participant list, and join-room preview
+- [x] Updated transcript normalization/UI to distinguish human source speech from BRSE relay lines
+- [x] Bypassed old listener-targeted interpreter audio filtering and removed cross-language human-audio suppression from the active room runtime
+- [x] Added FE best-effort leave helper for unload path via authenticated `fetch(..., keepalive: true)`
+- [x] Added explicit websocket unload disconnect path (`disconnectForUnload`) to suppress reconnect during tab close/unload
+- [x] Hardened room runtime leave guards (`hasLeftRef`, `hasSentLeaveRef`, `manualShutdownRef`) to prevent duplicate leave/disconnect spam
+- [x] Unified unload cleanup to always stop local media + disconnect LiveKit + close gateway before session invalidation
+- [x] Added lifecycle handlers for `beforeunload` / `pagehide` / `unload` with idempotent cleanup behavior
+- [x] Protected runtime event/fatal-close handlers from stale-manual-shutdown races
 
 ## In Progress
 
 - [ ] Testing deferred by instruction
-- Current objective: none for implementation; mic test + translation test batch completed, runtime verification intentionally deferred
+
+## Completed This Turn
+
+- [x] FE lifecycle cleanup hardening — stale closure fix, deterministic ref teardown
+- [x] Added `isScreenSharingRef` to mirror `isScreenSharing` state without closure capture
+- [x] Removed `isScreenSharing` from unload effect deps — handlers now stable per session, no re-registration race on screen share toggle
+- [x] `tryCleanupUnload` uses `isScreenSharingRef.current` — always reads current value at unload time
+- [x] `tryCleanupUnload` and `leaveRoom` both save refs to locals before nulling, then operate on saved locals — prevents dangling ref use after teardown
+- [x] `gatewayRef.current` nulled after `disconnectForUnload()` in unload path
+- [x] `livekitRoomRef.current` nulled after `disconnectRoom()` in both unload and explicit leave paths
+- [x] No changes to `api.ts`, `ws.ts`, `RoomPage.tsx`, or backend
+
+## Work Log (This Turn)
+
+### Batch 0: Required Read + Plan Lock (Completed)
+
+- Read required files before code changes:
+  - `docs/frontend/IMPLEMENTATION_STATE.md`
+  - `docs/backend/API_CONTRACT.md`
+  - `docs/backend/IMPLEMENTATION_STATE.md`
+  - `FE/src/features/room/useMeetingRoom.ts`
+  - `FE/src/lib/ws.ts`
+  - `FE/src/lib/api.ts`
+  - `FE/src/pages/RoomPage.tsx`
+  - `FE/src/lib/livekit.ts`
+- Foundation from previous turns (already in place):
+  - `leaveRoomBestEffort()` keepalive DELETE in `api.ts`
+  - `disconnectForUnload()` in `ws.ts`
+  - `hasLeftRef`, `hasSentLeaveRef`, `manualShutdownRef` guards
+  - `beforeunload` / `pagehide` / `unload` lifecycle handlers
+  - Guarded event and fatal-close callbacks against manualShutdown races
+- Remaining gaps identified this turn:
+  - `isScreenSharing` captured as stale closure in unload effect — the effect deps include
+    `isScreenSharing`, which causes handler re-registration on every screen share toggle.
+    During the cleanup→re-register transition, an unload event is missed.
+    Fix: `isScreenSharingRef` (always-current ref), remove `isScreenSharing` from deps.
+  - `livekitRoomRef.current` not nulled after `disconnectRoom()` in both `tryCleanupUnload`
+    and `leaveRoom` finally block — stale room ref could be used after teardown.
+  - `gatewayRef.current` not nulled after `disconnectForUnload()` in `tryCleanupUnload`.
+- Strategy for this turn:
+  - Add `isScreenSharingRef` and sync it from `isScreenSharing` state.
+  - Use `isScreenSharingRef.current` in `tryCleanupUnload`, remove `isScreenSharing` from deps.
+  - Null both `livekitRoomRef.current` and `gatewayRef.current` after use in cleanup paths.
+  - No changes to `api.ts`, `ws.ts`, `RoomPage.tsx`, or backend.
+
+### Batch 1: Stale Closure Fix + Deterministic Ref Teardown
+
+- `FE/src/features/room/useMeetingRoom.ts`:
+  - Added `isScreenSharingRef = useRef(false)`.
+  - Added `useEffect` to keep `isScreenSharingRef.current` in sync with `isScreenSharing`.
+  - In `tryCleanupUnload`: replaced `isScreenSharing` closure capture with `isScreenSharingRef.current`.
+  - Removed `isScreenSharing` from unload effect deps `[roomId, session, isScreenSharing]`
+    → now `[roomId, session]`. Handlers are registered once per session and stay stable.
+  - In `tryCleanupUnload`: saved `livekitRoomRef.current` to a local before nulling the ref,
+    then called `clearLocalScreenTrack` and `disconnectRoom` on the saved local. Nulled
+    `gatewayRef.current` after `disconnectForUnload`.
+  - In `leaveRoom` finally: saved `livekitRoomRef.current` to a local before nulling, and
+    saved `gatewayRef.current` to a local before calling `disconnect()` and nulling.
+- Testing deferred by instruction.
+
+### Previous Turn Batch 0: Required Read + Plan Lock
+
+- Read required files before code changes:
+  - `docs/frontend/IMPLEMENTATION_STATE.md`
+  - `docs/backend/API_CONTRACT.md`
+  - `FE/src/features/room/useMeetingRoom.ts`
+  - `FE/src/lib/ws.ts`
+  - `FE/src/lib/api.ts`
+  - `FE/src/pages/RoomPage.tsx`
+  - `FE/src/state/session.tsx`
+  - `FE/src/lib/livekit.ts`
+- Gaps identified:
+  - FE currently relies on `pagehide + fetch keepalive`, but lacks robust duplicate-guarding across leave/unload paths.
+  - Gateway socket disconnect path exists but missing explicit unload/manual shutdown helper semantics in shared API.
+  - Session-aware guard for stale cleanup callbacks can be tightened in `useMeetingRoom` for unload + reconnect races.
+- Planned implementation for this turn:
+  - add centralized best-effort leave utility in FE API layer (`fetch keepalive` with auth header).
+  - add manual-shutdown/unload-safe disconnect API in websocket layer.
+  - unify leave/unload cleanup path in `useMeetingRoom` with idempotent guards and session checks.
+  - ensure local media/livekit and local room state cleanup happen on unmount/unload, not only button leave.
+
+### Previous Turn Batch 1: FE Lifecycle Cleanup Hardening
+
+- `FE/src/lib/api.ts`
+  - Added `leaveRoomBestEffort(roomId, token)` helper using authenticated keepalive `DELETE` request for unload-safe leave signaling.
+  - Reused shared auth header builder in `api.leaveRoom`.
+- `FE/src/lib/ws.ts`
+  - Added `disconnectForUnload(reason)` to mark intentional shutdown, clear timers, reject pending connect, and close websocket with unload-specific close code.
+- `FE/src/features/room/useMeetingRoom.ts`
+  - Added explicit refs for idempotent lifecycle cleanup: `hasSentLeaveRef`, `manualShutdownRef`.
+  - Guarded gateway event and fatal-close callbacks so manual shutdown/unload does not trigger stale invalidation/reconnect handling.
+  - On unload lifecycle (`beforeunload`, `pagehide`, `unload`): one-time cleanup now closes websocket (unload path), disconnects LiveKit/local media, sends best-effort leave, and invalidates local session.
+  - Manual leave path now uses duplicate guards before REST leave and always performs deterministic local teardown.
+  - Session init/reset now reinitializes cleanup guards to avoid stale state carry-over.
 
 ## Pending Next
 
 - [ ] Browser/runtime verification if a later turn explicitly allows non code-only validation
 - [ ] Runtime verification deferred by instruction
+- [ ] Verify BRSE AI virtual participant appears in snapshot and room list against running backend
+- [ ] Verify human audio and BRSE relay audio can play simultaneously without overlap issues
+- [ ] Verify relay transcript payloads hydrate/render correctly from real gateway events
 - [ ] Verify mic test WebSocket streams PCM16 correctly to backend and `mic_test.level` events render meter
 - [ ] Verify translation test partial/final flow matches backend event naming exactly
 - [ ] Verify `translation_test.final.audio_url` plays correctly when backend emits it
@@ -132,6 +514,24 @@
 ## Files Modified
 
 - `docs/frontend/IMPLEMENTATION_STATE.md`
+- `FE/src/types/api.ts` — added BRSE relay room/participant/transcript/audio descriptor types
+- `FE/src/types/ws.ts` — updated room, participant, transcript, and status WS payloads for BRSE mode
+- `FE/src/types/livekit.ts` — replaced listener-targeted interpreter feed types with human/brse room-wide media feed types
+- `FE/src/lib/livekit.ts` — restored human remote audio playback, added BRSE virtual participant audio parsing, and ensured BRSE tile rendering from gateway snapshots
+- `FE/src/features/room/transcripts.ts` — normalized `source` vs `relay` transcript entries with original-speaker and BRSE relay separation
+- `FE/src/features/room/interpreter.ts` — reshaped status entries for BRSE relay semantics
+- `FE/src/features/room/useMeetingRoom.ts` — replaced translated-audio-first state with `humanAudioFeeds` + `brseAudioFeeds`, room mode metadata, and participant-kind-aware room state
+- `FE/src/components/JoinRoomCard.tsx` — surfaced BRSE AI in pre-join participant preview
+- `FE/src/components/ParticipantList.tsx` — marked BRSE AI as a virtual relay participant
+- `FE/src/components/ParticipantTile.tsx` — added BRSE AI tile treatment and labels
+- `FE/src/components/TranscriptPanel.tsx` — split human source lines from BRSE relay lines in room transcript UI
+- `FE/src/components/InterpreterStatusPanel.tsx` — reframed status panel around BRSE AI room-wide relay activity
+- `FE/src/pages/RoomPage.tsx` — switched runtime audio sinks to human + BRSE feeds and updated room copy for BRSE participant mode
+- `FE/src/lib/api.ts` — added unload-safe `leaveRoomBestEffort` helper and shared auth-header path for leave API
+- `FE/src/lib/ws.ts` — added `disconnectForUnload` to prevent reconnect during lifecycle unload cleanup
+- `FE/src/features/room/useMeetingRoom.ts` — implemented idempotent unload/manual leave cleanup guards and deterministic media/socket teardown
+- `FE/src/features/room/useMeetingRoom.ts` — fixed isScreenSharingRef stale closure in unload effect, nulled gatewayRef/livekitRoomRef deterministically in tryCleanupUnload and leaveRoom finally
+- `FE/src/index.css` — added visual treatment for BRSE participant tags/tiles and relay transcript blocks
 - `FE/src/types/api.ts` — added `MicTestStatus`, `TranslationTestStatus`, `MicTestSessionResponse`, `TranslationTestSessionResponse`, `CreateTranslationTestRequest`
 - `FE/src/types/ws.ts` — added `MicTestServerEvent`, `TranslationTestServerEvent` and all payload variants
 - `FE/src/lib/api.ts` — added `createMicTest`, `deleteMicTest`, `createTranslationTest`, `deleteTranslationTest`
@@ -167,13 +567,15 @@
 - Primary key: `transcriptId` (`transcript_id` from backend).
 - Stored metadata:
   - `utteranceId`
-  - `speakerParticipantId`
-  - `speakerName`
-  - `speakerLanguage`
-  - `kind` (`source` | `translated`)
-  - `srcLang`
-  - `tgtLang`
+  - `kind` (`source` | `translated` | `relay`)
+  - actor row identity: `actorParticipantId`, `actorName`, `actorLanguage`, `actorKind`
+  - original speaker identity: `sourceSpeakerId`, `sourceSpeakerName`, `sourceSpeakerLanguage`
+  - relay identity: `relayParticipantId`, `relayParticipantName`, `relayTargetLanguage`
+  - `sourceText`
+  - `relayText`
   - `text`
+  - `audioTrackName`
+  - `canonicalAudioTrackName`
   - `isFinal`
   - `fallbackUsed`
   - `timestamp`
@@ -191,16 +593,16 @@
 
 ## Transcript UI (Current)
 - Reused `FE/src/components/TranscriptPanel.tsx` as the room transcript component.
-- Item layout shows:
-  - speaker display name
-  - speaker language
-  - transcript text
+- Item layout now separates:
+  - human source speech rows
+  - BRSE relay rows rendered as `BRSE AI (tgt_lang)` with original speaker/source text shown above
   - status badge (`Partial`/`Final`)
-  - kind badge (`Source` or `Translated src->tgt`)
+  - kind badge (`Human Source`, `Translated`, or `BRSE Relay src->tgt`)
 - UX behavior:
   - scrollable transcript list for history review
   - latest line visually highlighted
   - partial lines styled lighter/dashed
+  - BRSE relay copy visually grouped in a dedicated relay block
 
 ## Manual Verification Needed Later
 
@@ -214,18 +616,19 @@
 - verify language selector is locked while test is running and unlocks on stop
 - verify stop/cleanup: WS closes cleanly, mic stream released, backend session deleted
 - verify `/test` page accessible from home page link
-- verify transcript panel renders both `source` and `translated` kinds from websocket live stream
+- verify transcript panel renders `source` and `relay` kinds from websocket live stream
 - verify partial -> final replacement for the same `transcript_id` without extra duplicate lines
 - verify room snapshot transcripts hydrate once and dedupe with live events by `transcript_id`
 - verify room join in dev under React StrictMode no longer creates duplicate accepted WS connections
 - verify backend no longer logs immediate disconnect stack trace right after sending `room.snapshot`
-- verify cross-language listeners hear only interpreter translated audio
-- verify no human remote audio + interpreter audio overlap in cross-language rooms
-- verify same-language passthrough policy still matches backend declaration
+- verify remote human audio plays normally for all human participants
+- verify BRSE AI audio plays as supplemental room-wide relay audio
+- verify BRSE AI appears as a virtual participant tile and participant-list entry
+- verify source speech and BRSE relay lines stay visually separated in transcript UI
 - verify local mic/camera publish succeeds in browser with device permissions
 - verify create room and join flow against running gateway
 - verify WS reconnect behavior by restarting gateway while room is open
-- verify interpreter audio routing only plays matching listener track
+- verify BRSE relay status updates render with correct source/target language context
 - verify transcript partial/final replacement against live backend
 - verify `fallback_text_only` / degraded states show expected UX
 - verify leave cleanup on `pagehide` in a real browser tab close scenario
@@ -234,15 +637,15 @@
 - backend currently returns relative `share_url` and `websocket.url`; FE should resolve these safely
 - backend models still include `auto` and `disconnected`, while docs position FE around `vi/en/ja` and reconnect states
 - production bundle is large (`dist/assets/index-*.js` ~684 kB before gzip warning) because LiveKit client is bundled into one entry
-- no real browser E2E was run in this turn; build verification only
+- no real browser E2E, build, or typecheck was run in this turn; verification deferred by instruction
 - previously fixed WS root cause: `RoomPage` had passed a new `onSessionInvalidated` function every render, which recreated room runtime effects
 - previously fixed WS root cause: `GatewaySocket` had lived only inside component effect scope, so StrictMode dev cleanup could close a fresh socket immediately
-- audio model after this turn: authoritative cross-language playback path is `InterpreterAudioFeed` targeted to the current listener via `interp::{speaker_id}::{listener_id}::{src_lang}::{tgt_lang}`
-- audio model after this turn: human participants remain for video/presence/name/language/status; remote human audio is no longer the general playback path
-- same-language policy kept in FE: `human_passthrough`, isolated in `sameLanguagePassthroughAudioFeeds`
-- cleaned state path: removed `humanAudioFeeds` as the general remote playback model
-- cleaned state path: `useMeetingRoom` now exposes `interpreterAudioFeeds` and `sameLanguagePassthroughAudioFeeds` separately
-- cleaned state path: `RoomPage` no longer auto-attaches remote human audio by cross-language heuristic
+- audio model after this turn: human LiveKit audio is restored as the default room audio path for all human participants
+- audio model after this turn: BRSE AI relay audio is handled as supplemental room-wide audio from a virtual participant, not listener-private replacement audio
+- logic bypassed/removed from active room path: listener-targeted interpreter audio filtering by `listener_id`
+- logic bypassed/removed from active room path: cross-language suppression of human remote audio
+- logic bypassed/removed from active room path: `sameLanguagePassthroughAudioFeeds` / `interpreterAudioFeeds` mental model as the primary room audio abstraction
+- BRSE participant rendering: participant list + join preview show `BRSE AI` badge; video grid renders a dedicated BRSE tile with placeholder when no camera is present
 - testing deferred: no runtime/browser verification was performed in this turn by explicit instruction
 
 ## Resume Instructions

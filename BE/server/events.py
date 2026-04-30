@@ -19,6 +19,8 @@ class EventType:
 
     PARTICIPANT_MEDIA_CONNECTED = "participant.media_connected"
     PARTICIPANT_MEDIA_DISCONNECTED = "participant.media_disconnected"
+    SCREEN_SHARE_STARTED = "screen_share.started"
+    SCREEN_SHARE_STOPPED = "screen_share.stopped"
 
     # Mic test events (server -> client over test WS)
     MIC_TEST_STARTED = "mic_test.started"

@@ -1,6 +1,8 @@
 import type {
   ApiErrorEnvelope,
   CreateRoomResponse,
+  ScreenShareStartRequest,
+  ScreenShareStateResponse,
   CreateTranslationTestRequest,
   JoinRoomRequest,
   JoinRoomResponse,
@@ -50,6 +52,24 @@ export function buildApiUrl(pathOrUrl: string): string {
   }
 
   return new URL(pathOrUrl, ensureTrailingSlash(getApiBaseUrl())).toString();
+}
+
+function buildAuthHeaders(token: string): HeadersInit {
+  return {
+    Authorization: `Bearer ${token}`,
+    "Content-Type": "application/json",
+  };
+}
+
+export function leaveRoomBestEffort(roomId: string, token: string): boolean {
+  const url = buildApiUrl(`/api/rooms/${roomId}/leave`);
+  void fetch(url, {
+    method: "DELETE",
+    headers: buildAuthHeaders(token),
+    body: "{}",
+    keepalive: true,
+  }).catch(() => undefined);
+  return true;
 }
 
 function ensureTrailingSlash(input: string): string {
@@ -118,9 +138,23 @@ export const api = {
   leaveRoom(roomId: string, token: string) {
     return requestJson<void>(`/api/rooms/${roomId}/leave`, {
       method: "DELETE",
-      headers: {
-        Authorization: `Bearer ${token}`,
-      },
+      headers: buildAuthHeaders(token),
+    });
+  },
+
+  startScreenShare(roomId: string, token: string, body: ScreenShareStartRequest) {
+    return requestJson<ScreenShareStateResponse>(`/api/rooms/${roomId}/screen-share/start`, {
+      method: "POST",
+      headers: buildAuthHeaders(token),
+      body: JSON.stringify(body),
+    });
+  },
+
+  stopScreenShare(roomId: string, token: string) {
+    return requestJson<ScreenShareStateResponse>(`/api/rooms/${roomId}/screen-share/stop`, {
+      method: "POST",
+      headers: buildAuthHeaders(token),
+      body: JSON.stringify({}),
     });
   },
 

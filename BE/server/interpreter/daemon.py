@@ -8,10 +8,11 @@ from typing import Dict, Optional
 from redis.asyncio import Redis
 
 from server.config import Settings
-from server.events import EventType, GATEWAY_CONTROL_CHANNEL
+from server.events import EventType
 from server.gateway.room_store import RoomStore
 from server.interpreter.event_publisher import RedisEventPublisher
 from server.interpreter.room_manager import RoomInterpreterManager
+from server.meeting_modes import active_human_participant_count
 
 logger = logging.getLogger(__name__)
 
@@ -20,6 +21,8 @@ class InterpreterDaemon:
     def __init__(self, settings: Settings, redis: Redis):
         self.settings = settings
         self.redis = redis
+        self.gateway_control_channel = settings.redis_channel_gateway_control
+        self.interpreter_events_channel = settings.redis_channel_interpreter_events
         self.room_store = RoomStore(redis, ttl_seconds=settings.room_token_ttl_seconds)
         self.managers: Dict[str, RoomInterpreterManager] = {}
         self._pubsub = None
@@ -53,7 +56,7 @@ class InterpreterDaemon:
             if participant_id:
                 await manager.remove_participant(participant_id)
             snapshot = await self.room_store.get_room_snapshot(room_id)
-            if snapshot is None or snapshot.room.participant_count == 0:
+            if snapshot is None or active_human_participant_count(snapshot.participants) == 0:
                 await self._terminate_manager(room_id)
 
     async def _spawn_manager(self, room_id: str) -> Optional[RoomInterpreterManager]:
@@ -61,7 +64,7 @@ class InterpreterDaemon:
             return self.managers[room_id]
 
         logger.info("Spawning interpreter manager for room %s", room_id)
-        publisher = RedisEventPublisher(self.redis, room_id)
+        publisher = RedisEventPublisher(self.redis, room_id, self.interpreter_events_channel)
         manager = RoomInterpreterManager(room_id, self.settings, publisher)
         self.managers[room_id] = manager
 
@@ -95,8 +98,8 @@ class InterpreterDaemon:
 
     async def run(self) -> None:
         self._pubsub = self.redis.pubsub()
-        await self._pubsub.subscribe(GATEWAY_CONTROL_CHANNEL)
-        logger.info("Interpreter daemon listening on %s", GATEWAY_CONTROL_CHANNEL)
+        await self._pubsub.subscribe(self.gateway_control_channel)
+        logger.info("Interpreter daemon listening on %s", self.gateway_control_channel)
 
         try:
             async for message in self._pubsub.listen():

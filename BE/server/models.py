@@ -1,26 +1,50 @@
-from pydantic import BaseModel, Field
-from typing import List, Optional, Literal, Dict, Any
-from datetime import datetime
+from typing import Any, Dict, List, Literal, Optional
 
-# Enums (using Literal for simplicity as per contract)
+from pydantic import BaseModel, Field
+
+from server.meeting_modes import (
+    BRSE_PARTICIPANT_ID,
+    INTERPRETER_MODE_BRSE_PARTICIPANT,
+    MEETING_MODE_BRSE_RELAY,
+    PARTICIPANT_KIND_HUMAN,
+)
+
+
 RoomStatus = Literal["created", "active", "empty"]
 ParticipantStatus = Literal["joining", "connected", "reconnecting", "disconnected"]
 Language = Literal["vi", "en", "ja", "auto"]
-MeetingAudioModel = Literal["translated_audio_first"]
-CrossLanguageAudioPolicy = Literal["interpreter_track"]
+MeetingMode = Literal["direct_translation", "brse_relay"]
+InterpreterMode = Literal["per_listener", "brse_participant"]
+ParticipantKind = Literal["human", "virtual_brse"]
+MeetingAudioModel = Literal["translated_audio_first", "brse_participant_audio"]
+CrossLanguageAudioPolicy = Literal["interpreter_track", "human_original_plus_brse"]
+CanonicalRemoteAudioPolicy = Literal[
+    "interpreter_track_for_cross_language",
+    "human_original_track",
+]
 SameLanguageAudioPolicy = Literal["human_passthrough"]
-TranscriptKind = Literal["source", "translated"]
+AiRelayAudioPolicy = Literal["listener_private_track", "virtual_participant_track"]
+TranscriptKind = Literal["source", "translated", "relay"]
+ScreenShareSource = Literal["screen_share"]
 
 
 class RoomAudioRouting(BaseModel):
-    model: MeetingAudioModel = "translated_audio_first"
-    cross_language_remote_audio: CrossLanguageAudioPolicy = "interpreter_track"
-    canonical_remote_audio: Literal["interpreter_track_for_cross_language"] = (
-        "interpreter_track_for_cross_language"
-    )
+    model: MeetingAudioModel = "brse_participant_audio"
+    cross_language_remote_audio: CrossLanguageAudioPolicy = "human_original_plus_brse"
+    canonical_remote_audio: CanonicalRemoteAudioPolicy = "human_original_track"
     same_language_policy: SameLanguageAudioPolicy = "human_passthrough"
+    ai_relay_audio: AiRelayAudioPolicy = "virtual_participant_track"
+    interpreter_mode: InterpreterMode = INTERPRETER_MODE_BRSE_PARTICIPANT
+    bridge_strategy: Literal["speaker_language_map"] = "speaker_language_map"
+    relay_language_map: Dict[str, str] = Field(
+        default_factory=lambda: {
+            "vi": "ja",
+            "ja": "vi",
+        }
+    )
+    virtual_participant_id: str = BRSE_PARTICIPANT_ID
 
-# Redis Models
+
 class ParticipantState(BaseModel):
     participant_id: str
     session_id: str
@@ -28,8 +52,41 @@ class ParticipantState(BaseModel):
     language: Language
     status: ParticipantStatus
     joined_at: str
+    last_seen_at: Optional[str] = None
     left_at: Optional[str] = None
+    ws_connected: bool = False
     media_connected: bool = False
+    kind: ParticipantKind = PARTICIPANT_KIND_HUMAN
+    is_virtual: bool = False
+    livekit_identity: Optional[str] = None
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+    is_screen_sharing: bool = False
+    screen_share: Optional["ScreenShareTrackInfo"] = None
+
+
+class ParticipantSnapshot(BaseModel):
+    participant_id: str
+    display_name: str
+    language: Language
+    status: ParticipantStatus
+    joined_at: Optional[str] = None
+    last_seen_at: Optional[str] = None
+    ws_connected: bool = False
+    kind: ParticipantKind = PARTICIPANT_KIND_HUMAN
+    is_virtual: bool = False
+    livekit_identity: Optional[str] = None
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+    is_screen_sharing: bool = False
+    screen_share: Optional["ScreenShareTrackInfo"] = None
+
+
+class ScreenShareTrackInfo(BaseModel):
+    active: bool = True
+    source: ScreenShareSource = "screen_share"
+    track_sid: Optional[str] = None
+    track_name: Optional[str] = None
+    started_at: str
+
 
 class RoomState(BaseModel):
     room_id: str
@@ -38,25 +95,31 @@ class RoomState(BaseModel):
     expires_at: str
     participant_limit: int = 8
     supported_languages: List[str] = ["vi", "en", "ja"]
+    meeting_mode: MeetingMode = MEETING_MODE_BRSE_RELAY
+    interpreter_mode: InterpreterMode = INTERPRETER_MODE_BRSE_PARTICIPANT
     audio_routing: RoomAudioRouting = Field(default_factory=RoomAudioRouting)
+    virtual_participants: List[ParticipantSnapshot] = Field(default_factory=list)
 
 
-class TranscriptSpeakerRef(BaseModel):
+class TranscriptParticipantRef(BaseModel):
     participant_id: str
     display_name: str
     language: Language
     source_language: Language
+    kind: ParticipantKind = PARTICIPANT_KIND_HUMAN
+    is_virtual: bool = False
+    livekit_identity: Optional[str] = None
 
 
-class TranscriptListenerRef(BaseModel):
-    participant_id: str
+class TranscriptTargetRef(BaseModel):
     target_language: Language
+    participant_ids: List[str] = Field(default_factory=list)
 
 
 class TranscriptEvent(BaseModel):
     transcript_id: str
     utterance_id: Optional[str] = None
-    kind: TranscriptKind = "translated"
+    kind: TranscriptKind = "relay"
     speaker_id: str
     speaker_display_name: str
     speaker_language: Language = "auto"
@@ -69,13 +132,17 @@ class TranscriptEvent(BaseModel):
     listener_id: Optional[str] = None
     target_lang: Optional[Language] = None
     translated_text: Optional[str] = None
+    brse_text: Optional[str] = None
     audio_track_name: Optional[str] = None
     audio_output: Optional[Dict[str, Any]] = None
-    speaker: Optional[TranscriptSpeakerRef] = None
-    listener: Optional[TranscriptListenerRef] = None
-    # other fields might be specific to partial/final, but we store minimal in snapshot
+    relay_mode: Optional[InterpreterMode] = None
+    speaker: Optional[TranscriptParticipantRef] = None
+    original_speaker: Optional[TranscriptParticipantRef] = None
+    listener: Optional[Dict[str, Any]] = None
+    brse_participant: Optional[TranscriptParticipantRef] = None
+    relay_target: Optional[TranscriptTargetRef] = None
 
-# REST DTOs
+
 class CreateRoomResponseRoom(BaseModel):
     room_id: str
     state: RoomStatus
@@ -83,24 +150,46 @@ class CreateRoomResponseRoom(BaseModel):
     expires_at: str
     participant_limit: int
     supported_languages: List[str]
+    meeting_mode: MeetingMode
+    interpreter_mode: InterpreterMode
     audio_routing: RoomAudioRouting
+
 
 class CreateRoomResponseJoin(BaseModel):
     api_path: str
     share_url: str
 
+
 class CreateRoomResponse(BaseModel):
     room: CreateRoomResponseRoom
     join: CreateRoomResponseJoin
+
 
 class JoinRoomRequestClient(BaseModel):
     sdk: str
     version: str
 
+
 class JoinRoomRequest(BaseModel):
     display_name: str = Field(..., min_length=1, max_length=40)
     language: Language
     client: Optional[JoinRoomRequestClient] = None
+
+
+class ScreenShareStartRequest(BaseModel):
+    track_sid: Optional[str] = None
+    track_name: Optional[str] = None
+    source: ScreenShareSource = "screen_share"
+
+
+class ScreenShareStateResponse(BaseModel):
+    participant_id: str
+    display_name: str
+    active: bool
+    timestamp: str
+    track_sid: Optional[str] = None
+    track_name: Optional[str] = None
+
 
 class JoinRoomResponseParticipant(BaseModel):
     participant_id: str
@@ -108,12 +197,15 @@ class JoinRoomResponseParticipant(BaseModel):
     display_name: str
     language: Language
 
+
 class JoinRoomResponseRoomToken(BaseModel):
     token: str
     expires_at: str
 
+
 class JoinRoomResponseWebsocket(BaseModel):
     url: str
+
 
 class JoinRoomResponseLivekit(BaseModel):
     url: str
@@ -122,16 +214,11 @@ class JoinRoomResponseLivekit(BaseModel):
     participant_name: str
     token: str
 
-class ParticipantSnapshot(BaseModel):
-    participant_id: str
-    display_name: str
-    language: Language
-    status: ParticipantStatus
-    joined_at: Optional[str] = None
 
 class SnapshotData(BaseModel):
     participants: List[ParticipantSnapshot]
     recent_transcripts: List[TranscriptEvent]
+
 
 class JoinRoomResponse(BaseModel):
     room: CreateRoomResponseRoom
@@ -141,8 +228,10 @@ class JoinRoomResponse(BaseModel):
     livekit: JoinRoomResponseLivekit
     snapshot: SnapshotData
 
+
 class RoomSnapshotResponseRoom(CreateRoomResponseRoom):
     participant_count: int
+
 
 class RoomSnapshotResponse(BaseModel):
     room: RoomSnapshotResponseRoom
@@ -150,13 +239,14 @@ class RoomSnapshotResponse(BaseModel):
     recent_transcripts: List[TranscriptEvent]
 
 
-# ---------------------------------------------------------------------------
-# Test session models
-# ---------------------------------------------------------------------------
-
 TestSessionStatus = Literal[
-    "created", "active", "stopped", "expired",          # mic test
-    "listening", "translating", "completed",             # translation test
+    "created",
+    "active",
+    "stopped",
+    "expired",
+    "listening",
+    "translating",
+    "completed",
 ]
 
 
@@ -175,8 +265,6 @@ class TranslationTestSession(BaseModel):
     created_at: str
     expires_at: str
 
-
-# REST DTOs for test session creation
 
 class CreateMicTestSessionResponse(BaseModel):
     session_id: str

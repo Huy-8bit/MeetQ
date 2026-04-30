@@ -1,5 +1,7 @@
 # Gateway Service Design
 
+> Update note (2026-04-30): Gateway runtime now exposes BRSE relay mode by default. Snapshot and websocket payloads may include room-level BRSE mode fields, a virtual participant `brse_ai`, and room-wide relay transcript events. Legacy per-listener routing details below remain as historical design context only.
+
 Gateway là service FastAPI chịu trách nhiệm:
 
 1. Tạo và quản lý room state trong Redis.
@@ -7,6 +9,25 @@ Gateway là service FastAPI chịu trách nhiệm:
 3. Cấp LiveKit access token cho browser participants.
 4. Fan-out participant events, transcript events, interpreter status tới FE qua WebSocket.
 5. Publish control events sang Interpreter Service qua Redis pub/sub.
+
+## Screen Share Runtime Notes
+
+Gateway support screen share như capability chính thức ở room layer.
+
+1. Participant state có field explicit:
+  - `is_screen_sharing: bool`
+  - `screen_share: { active, source, track_sid, track_name, started_at } | null`
+2. Snapshot luôn trả về screen-share state hiện tại để FE render ngay sau load/reconnect.
+3. Screen share signaling được sync qua cả:
+  - WS client messages: `screen_share.start`, `screen_share.stop`
+  - REST endpoints: `POST /api/rooms/{room_id}/screen-share/start|stop`
+4. Gateway broadcast dedicated events:
+  - `screen_share.started`
+  - `screen_share.stopped`
+  song song với `participant.updated` để tương thích flow participant state hiện có.
+5. Cleanup chống stale:
+  - participant leave/disconnect/stale-timeout sẽ clear screen-share state trước khi participant lifecycle hoàn tất.
+  - media disconnect event path cũng ép stop screen share để tránh trạng thái share treo.
 
 Ràng buộc thiết kế:
 

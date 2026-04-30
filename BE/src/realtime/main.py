@@ -24,13 +24,18 @@ from src.realtime.client import DEFAULT_MODEL, RealtimeClient
 logger = get_logger("realtime.main")
 
 VALID_INPUT_RATES = [8000, 16000, 24000, 44100, 48000]
+DEFAULT_MODEL_ARG = os.environ.get("OPENAI_REALTIME_MODEL", DEFAULT_MODEL)
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(
         description="Realtime interpreter: audio input -> OpenAI Realtime API -> text + voice"
     )
-    p.add_argument("--model", default=DEFAULT_MODEL, help="Realtime model ID")
+    p.add_argument(
+        "--model",
+        default=DEFAULT_MODEL_ARG,
+        help=f"Realtime model ID (default: {DEFAULT_MODEL_ARG})",
+    )
 
     # ---- Audio input source ----
     p.add_argument(

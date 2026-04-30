@@ -1,33 +1,14 @@
 import type {
+  AudioOutputDescriptor,
   AudioRouting,
+  InterpreterMode,
   Language,
   ParticipantSnapshot,
-  SameLanguagePolicy,
+  ParticipantReference,
+  RelayTargetReference,
+  ScreenShareSource,
+  ScreenShareTrackInfo,
 } from "./api";
-
-export interface AudioOutputDescriptor {
-  model: "translated_audio_first";
-  mode: "interpreter_track";
-  canonical: boolean;
-  track_available?: boolean;
-  track_name: string | null;
-  speaker_id: string;
-  listener_id?: string;
-  listener_ids?: string[];
-  source_language: Language;
-  target_language: Language;
-  same_language_policy?: SameLanguagePolicy;
-  tracks?: Array<{
-    listener_id: string;
-    track_name: string;
-    track_sid?: string;
-    source_language: Language;
-    target_language: Language;
-    track_available: boolean;
-    authoritative: boolean;
-    mode: "interpreter_track";
-  }>;
-}
 
 export interface WsEnvelope<TType extends string, TPayload> {
   type: TType;
@@ -50,13 +31,15 @@ export type RoomSnapshotEvent = WsEnvelope<
       state: "created" | "active" | "empty";
       participant_limit: number;
       supported_languages: Language[];
+      meeting_mode?: "direct_translation" | "brse_relay";
+      interpreter_mode?: "per_listener" | "brse_participant";
       audio_routing?: AudioRouting;
     };
     participants: ParticipantSnapshot[];
     recent_transcripts: Array<{
       transcript_id: string;
       utterance_id?: string | null;
-      kind?: "source" | "translated";
+      kind?: "source" | "translated" | "relay";
       speaker_id: string;
       speaker_display_name: string;
       speaker_language?: Language;
@@ -64,20 +47,21 @@ export type RoomSnapshotEvent = WsEnvelope<
       text?: string;
       source_text: string;
       translated_text?: string | null;
+      brse_text?: string | null;
       target_lang?: Language | null;
       is_final?: boolean;
       fallback_used?: boolean;
       audio_track_name?: string | null;
-      speaker?: {
-        participant_id: string;
-        display_name: string;
-        language?: Language;
-        source_language?: Language;
-      };
+      audio_output?: AudioOutputDescriptor | null;
+      relay_mode?: InterpreterMode | null;
+      speaker?: ParticipantReference;
+      original_speaker?: ParticipantReference | null;
       listener?: {
         participant_id: string;
         target_language: Language;
-      };
+      } | null;
+      brse_participant?: ParticipantReference | null;
+      relay_target?: RelayTargetReference | null;
       created_at: string;
     }>;
   }
@@ -87,10 +71,18 @@ export type ParticipantJoinedEvent = WsEnvelope<
   "participant.joined",
   {
     participant_id: string;
+    session_id?: string;
     display_name: string;
     language: Language;
     status: ParticipantSnapshot["status"];
     joined_at: string;
+    left_at?: string | null;
+    kind?: ParticipantSnapshot["kind"];
+    is_virtual?: boolean;
+    livekit_identity?: string | null;
+    metadata?: Record<string, unknown>;
+    is_screen_sharing?: boolean;
+    screen_share?: ScreenShareTrackInfo | null;
   }
 >;
 
@@ -98,9 +90,18 @@ export type ParticipantUpdatedEvent = WsEnvelope<
   "participant.updated",
   {
     participant_id: string;
+    session_id?: string;
     display_name: string;
     language: Language;
     status: ParticipantSnapshot["status"];
+    joined_at?: string;
+    left_at?: string | null;
+    kind?: ParticipantSnapshot["kind"];
+    is_virtual?: boolean;
+    livekit_identity?: string | null;
+    metadata?: Record<string, unknown>;
+    is_screen_sharing?: boolean;
+    screen_share?: ScreenShareTrackInfo | null;
   }
 >;
 
@@ -115,25 +116,25 @@ export type ParticipantLeftEvent = WsEnvelope<
 export interface TranscriptPayload {
   transcript_id: string;
   utterance_id?: string | null;
-  kind?: "source" | "translated";
+  kind?: "source" | "translated" | "relay";
   text?: string;
   src_lang?: Language;
   tgt_lang?: Language | null;
   created_at?: string;
-  speaker: {
-    participant_id: string;
-    display_name: string;
-    language?: Language;
-    source_language?: Language;
-  };
+  speaker: ParticipantReference;
   listener?: {
     participant_id: string;
     target_language: Language;
-  };
+  } | null;
+  original_speaker?: ParticipantReference | null;
+  brse_participant?: ParticipantReference | null;
+  relay_target?: RelayTargetReference | null;
   source_text?: string;
   translated_text?: string;
+  brse_text?: string;
   audio_track_name: string | null;
-  audio_output?: AudioOutputDescriptor;
+  audio_output?: AudioOutputDescriptor | null;
+  relay_mode?: InterpreterMode | null;
   fallback_used: boolean;
   is_final: boolean;
   latency_ms?: number;
@@ -165,7 +166,10 @@ export type InterpreterStatusEvent = WsEnvelope<
     message: string | null;
     audio_track_name?: string | null;
     listener_ids?: string[];
-    audio_output?: AudioOutputDescriptor;
+    audience_participant_ids?: string[];
+    relay_mode?: InterpreterMode | null;
+    brse_participant?: ParticipantReference | null;
+    audio_output?: AudioOutputDescriptor | null;
   }
 >;
 
@@ -185,6 +189,33 @@ export type ErrorEvent = WsEnvelope<
   }
 >;
 
+export type ScreenShareStartedEvent = WsEnvelope<
+  "screen_share.started",
+  {
+    participant_id: string;
+    display_name: string;
+    track_sid?: string | null;
+    track_name?: string | null;
+    active: true;
+    timestamp: string;
+    source: ScreenShareSource;
+  }
+>;
+
+export type ScreenShareStoppedEvent = WsEnvelope<
+  "screen_share.stopped",
+  {
+    participant_id: string;
+    display_name: string;
+    track_sid?: string | null;
+    track_name?: string | null;
+    active: false;
+    timestamp: string;
+    reason?: string;
+    source: ScreenShareSource;
+  }
+>;
+
 export type ServerEvent =
   | RoomSnapshotEvent
   | ParticipantJoinedEvent
@@ -193,6 +224,8 @@ export type ServerEvent =
   | TranscriptPartialEvent
   | TranscriptFinalEvent
   | InterpreterStatusEvent
+  | ScreenShareStartedEvent
+  | ScreenShareStoppedEvent
   | PongEvent
   | ErrorEvent;
 
@@ -210,7 +243,25 @@ export type SetLanguageMessage = WsEnvelope<
   }
 >;
 
-export type ClientMessage = PingMessage | SetLanguageMessage;
+export type ScreenShareStartMessage = WsEnvelope<
+  "screen_share.start",
+  {
+    track_sid?: string;
+    track_name?: string;
+    source?: ScreenShareSource;
+  }
+>;
+
+export type ScreenShareStopMessage = WsEnvelope<
+  "screen_share.stop",
+  Record<string, never>
+>;
+
+export type ClientMessage =
+  | PingMessage
+  | SetLanguageMessage
+  | ScreenShareStartMessage
+  | ScreenShareStopMessage;
 
 // ─── Test WebSocket event types ───────────────────────────────────────────────
 

@@ -1,5 +1,7 @@
 # Backend <-> Frontend API Contract
 
+> Update note (2026-04-30): new rooms now default to BRSE relay semantics. FE should expect `meeting_mode=brse_relay`, `interpreter_mode=brse_participant`, a virtual participant `brse_ai`, room-wide relay transcripts with `kind=relay`, and BRSE audio as virtual participant track metadata. Older per-listener translated-audio sections below are legacy reference and are no longer the authoritative output model for BRSE rooms.
+
 Tài liệu này là contract duy nhất FE cần biết để code độc lập với BE.
 
 Mục tiêu của contract:
@@ -15,6 +17,147 @@ Base assumptions:
 - Gateway WS base URL local dev: `ws://localhost:8000`
 - LiveKit WS URL local dev: `ws://localhost:7880`
 - Supported languages: `vi`, `en`, `ja`
+
+## Screen Share Contract Addendum
+
+Screen share được support như capability chính thức của room runtime.
+
+### Participant snapshot / state fields
+
+Mọi participant object trong snapshot và participant events có thể chứa:
+
+```json
+{
+  "is_screen_sharing": true,
+  "screen_share": {
+    "active": true,
+    "source": "screen_share",
+    "track_sid": "TR_xxx",
+    "track_name": "screen:user-pt_abc",
+    "started_at": "2026-05-01T03:01:14.000Z"
+  }
+}
+```
+
+Nếu participant không share màn hình:
+
+```json
+{
+  "is_screen_sharing": false,
+  "screen_share": null
+}
+```
+
+### REST sync endpoints (idempotent)
+
+`POST /api/rooms/{room_id}/screen-share/start`
+
+Request (Bearer room token required):
+
+```json
+{
+  "track_sid": "TR_xxx",
+  "track_name": "screen:user-pt_abc",
+  "source": "screen_share"
+}
+```
+
+Response:
+
+```json
+{
+  "participant_id": "pt_...",
+  "display_name": "Huy",
+  "active": true,
+  "timestamp": "2026-05-01T03:01:14.000Z",
+  "track_sid": "TR_xxx",
+  "track_name": "screen:user-pt_abc"
+}
+```
+
+`POST /api/rooms/{room_id}/screen-share/stop`
+
+Response:
+
+```json
+{
+  "participant_id": "pt_...",
+  "display_name": "Huy",
+  "active": false,
+  "timestamp": "2026-05-01T03:03:10.000Z",
+  "track_sid": null,
+  "track_name": null
+}
+```
+
+### WebSocket client messages
+
+Client có thể sync screen share qua room websocket:
+
+```json
+{
+  "type": "screen_share.start",
+  "event_id": "evt_...",
+  "room_id": "rm_...",
+  "sent_at": "2026-05-01T03:01:14.000Z",
+  "payload": {
+    "track_sid": "TR_xxx",
+    "track_name": "screen:user-pt_abc",
+    "source": "screen_share"
+  }
+}
+```
+
+```json
+{
+  "type": "screen_share.stop",
+  "event_id": "evt_...",
+  "room_id": "rm_...",
+  "sent_at": "2026-05-01T03:03:10.000Z",
+  "payload": {}
+}
+```
+
+### WebSocket server events
+
+Gateway broadcast:
+
+```json
+{
+  "type": "screen_share.started",
+  "event_id": "evt_...",
+  "room_id": "rm_...",
+  "sent_at": "2026-05-01T03:01:14.000Z",
+  "payload": {
+    "participant_id": "pt_...",
+    "display_name": "Huy",
+    "track_sid": "TR_xxx",
+    "track_name": "screen:user-pt_abc",
+    "active": true,
+    "timestamp": "2026-05-01T03:01:14.000Z",
+    "source": "screen_share"
+  }
+}
+```
+
+```json
+{
+  "type": "screen_share.stopped",
+  "event_id": "evt_...",
+  "room_id": "rm_...",
+  "sent_at": "2026-05-01T03:03:10.000Z",
+  "payload": {
+    "participant_id": "pt_...",
+    "display_name": "Huy",
+    "track_sid": "TR_xxx",
+    "track_name": "screen:user-pt_abc",
+    "active": false,
+    "timestamp": "2026-05-01T03:03:10.000Z",
+    "reason": "ws_stop",
+    "source": "screen_share"
+  }
+}
+```
 
 ## Conventions
 

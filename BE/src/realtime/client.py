@@ -38,7 +38,7 @@ from src.common.logging_utils import get_logger, print_translation
 # ---------------------------------------------------------------------------
 
 REALTIME_URL_TEMPLATE = "wss://api.openai.com/v1/realtime?model={model}"
-DEFAULT_MODEL = "gpt-4o-realtime-preview-2024-12-17"
+DEFAULT_MODEL = "gpt-realtime-1.5"
 SAMPLE_RATE = 16000
 SPEAKER_SAMPLE_RATE = 24000   # Realtime API outputs PCM16 at 24kHz
 MAX_RECONNECT_ATTEMPTS = 5

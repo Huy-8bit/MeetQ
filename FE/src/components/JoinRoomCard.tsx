@@ -26,7 +26,7 @@ export function JoinRoomCard({
       <div className="panel-header">
         <div>
           <h2>Join Room</h2>
-          <p>Enter a display name, choose your listening language, and connect.</p>
+          <p>Enter a display name, choose your language, and let BRSE AI relay across the room.</p>
         </div>
       </div>
 
@@ -99,11 +99,20 @@ export function JoinRoomCard({
               <div className="participant-preview" key={participant.participant_id}>
                 <div>
                   <strong>{participant.display_name}</strong>
-                  <p>{participant.status}</p>
+                  <p>
+                    {participant.kind === "virtual_brse" || participant.is_virtual
+                      ? "AI relay participant"
+                      : participant.status}
+                  </p>
                 </div>
-                <span className="language-pill">
-                  {participant.language.toUpperCase()}
-                </span>
+                <div className="participant-row-tags">
+                  {participant.kind === "virtual_brse" || participant.is_virtual ? (
+                    <span className="badge kind">BRSE AI</span>
+                  ) : null}
+                  <span className="language-pill">
+                    {participant.language.toUpperCase()}
+                  </span>
+                </div>
               </div>
             ))
           )}
