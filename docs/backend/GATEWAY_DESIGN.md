@@ -91,7 +91,7 @@ LIVEKIT_API_SECRET=secret
 LIVEKIT_WS_URL_PUBLIC=ws://localhost:7880
 LIVEKIT_WS_URL_INTERNAL=ws://livekit:7880
 PUBLIC_BASE_URL=http://localhost:8000
-SUPPORTED_LANGUAGES=vi,en,ja
+SUPPORTED_LANGUAGES=vi,en,ja,zh,ko,fr,es
 RECENT_TRANSCRIPT_LIMIT=200
 REDIS_CHANNEL_GATEWAY_CONTROL=brseai:v1:gateway:control
 REDIS_CHANNEL_INTERPRETER_EVENTS=brseai:v1:interpreter:events
@@ -182,7 +182,7 @@ class ParticipantState(TypedDict):
     participant_id: str
     session_id: str
     display_name: str
-    language: Literal["vi", "en", "ja"]
+    language: Literal["vi", "en", "ja", "zh", "ko", "fr", "es"]
     livekit_identity: str
     ws_connected: bool
     media_connected: bool
@@ -201,6 +201,7 @@ class RoomState(TypedDict):
     expires_at: str
     participant_limit: int
     supported_languages: list[str]
+    meeting_languages: list[str]  # exact 2, distinct, subset of supported_languages
     audio_routing: dict[str, str]
     participant_count: int
     transcript_count: int
@@ -214,10 +215,10 @@ class TranscriptState(TypedDict):
     room_id: str
     speaker_id: str
     speaker_display_name: str
-    speaker_language: Literal["vi", "en", "ja"]
+    speaker_language: Literal["vi", "en", "ja", "zh", "ko", "fr", "es"]
     listener_id: str | None
-    src_lang: Literal["vi", "en", "ja"]
-    tgt_lang: Literal["vi", "en", "ja"] | None
+    src_lang: Literal["vi", "en", "ja", "zh", "ko", "fr", "es"]
+    tgt_lang: Literal["vi", "en", "ja", "zh", "ko", "fr", "es"] | None
     text: str
     source_text: str
     translated_text: str | None
@@ -240,7 +241,7 @@ class TranscriptState(TypedDict):
     "emptied_at": null,
     "expires_at": "2026-04-30T13:12:54Z",
     "participant_limit": 8,
-    "supported_languages": ["vi", "en", "ja"],
+    "supported_languages": ["vi", "en", "ja", "zh", "ko", "fr", "es"],
     "participant_count": 2,
     "transcript_count": 14,
     "last_event_at": "2026-04-29T13:12:54Z"
@@ -344,8 +345,17 @@ Tạo room trống. Không auto-join host.
 #### Request Body
 
 ```json
-{}
+{
+  "meeting_languages": ["vi", "ja"]
+}
 ```
+
+Validation:
+
+1. `meeting_languages` bắt buộc có đúng 2 phần tử.
+2. 2 ngôn ngữ trong pair phải khác nhau.
+3. Mỗi ngôn ngữ phải thuộc `supported_languages` (`vi|en|ja|zh|ko|fr|es`).
+4. Nếu omitted, backend hiện default `meeting_languages=["vi", "ja"]` để giữ tương thích create-room flow cũ.
 
 #### Success Response `201 Created`
 
@@ -357,7 +367,8 @@ Tạo room trống. Không auto-join host.
     "created_at": "2026-04-29T13:00:00Z",
     "expires_at": "2026-04-30T13:00:00Z",
     "participant_limit": 8,
-    "supported_languages": ["vi", "en", "ja"]
+    "supported_languages": ["vi", "en", "ja", "zh", "ko", "fr", "es"],
+    "meeting_languages": ["vi", "ja"]
   },
   "join": {
     "api_path": "/api/rooms/rm_8f3k2v1m/join",
@@ -391,7 +402,8 @@ Không cần auth cho MVP. Room id đủ khó đoán và không có room listing
     "created_at": "2026-04-29T13:00:00Z",
     "expires_at": "2026-04-30T13:12:54Z",
     "participant_limit": 8,
-    "supported_languages": ["vi", "en", "ja"],
+    "supported_languages": ["vi", "en", "ja", "zh", "ko", "fr", "es"],
+    "meeting_languages": ["vi", "ja"],
     "participant_count": 2
   },
   "participants": [
@@ -455,7 +467,7 @@ Sinh participant session, room JWT, LiveKit token, và snapshot ban đầu.
 #### Validation
 
 1. `display_name` trimmed length `1..40`
-2. `language` thuộc `vi|en|ja`
+2. `language` phải thuộc đúng `room.meeting_languages` của room
 3. room phải tồn tại và chưa `deleted`
 4. `participant_count < ROOM_MAX_PARTICIPANTS`
 
@@ -467,7 +479,8 @@ Sinh participant session, room JWT, LiveKit token, và snapshot ban đầu.
     "room_id": "rm_8f3k2v1m",
     "state": "active",
     "participant_limit": 8,
-    "supported_languages": ["vi", "en", "ja"]
+    "supported_languages": ["vi", "en", "ja", "zh", "ko", "fr", "es"],
+    "meeting_languages": ["vi", "ja"]
   },
   "participant": {
     "participant_id": "pt_01hs8x4e3m",
@@ -510,7 +523,7 @@ Sinh participant session, room JWT, LiveKit token, và snapshot ban đầu.
 | `404` | `room_not_found` | Room không tồn tại. |
 | `409` | `room_full` | Room đã đủ 8 participants active/reconnecting. |
 | `422` | `invalid_display_name` | Tên rỗng hoặc quá dài. |
-| `422` | `invalid_language` | Language không thuộc `vi|en|ja`. |
+| `422` | `invalid_language` | Language không thuộc room `meeting_languages`. |
 | `503` | `redis_unavailable` | Không lưu được participant state. |
 | `503` | `livekit_unavailable` | Không generate được LiveKit token. |
 
@@ -657,7 +670,7 @@ Cho phép participant đổi ngôn ngữ nghe/nói trong room. Đây là tín hi
 
 #### Validation
 
-- `language` phải thuộc `vi|en|ja`
+- `language` phải thuộc `room.meeting_languages` và mọi room pair hợp lệ phải là subset của `vi|en|ja|zh|ko|fr|es`
 - participant phải chưa `left`
 
 #### Side Effects
@@ -699,7 +712,7 @@ Gửi ngay sau connect thành công.
     "room": {
       "state": "active",
       "participant_limit": 8,
-      "supported_languages": ["vi", "en", "ja"]
+      "supported_languages": ["vi", "en", "ja", "zh", "ko", "fr", "es"]
     },
     "participants": [
       {
@@ -929,7 +942,7 @@ Runtime validation error hoặc downstream failure không đủ nghiêm trọng 
   "sent_at": "2026-04-29T13:14:10.020Z",
   "payload": {
     "code": "invalid_language",
-    "message": "language must be one of vi, en, ja"
+    "message": "language must be one of vi, en, ja, zh, ko, fr, es"
   }
 }
 ```

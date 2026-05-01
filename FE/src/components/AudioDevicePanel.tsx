@@ -4,6 +4,7 @@ interface AudioDevicePanelProps {
   isMicMuted: boolean;
   isTogglingMic: boolean;
   micToggleError: string | null;
+  isMutedByHost?: boolean;
   onToggleMic: () => void;
   audioInputDevices: AudioDeviceOption[];
   selectedAudioInputDeviceId: string;
@@ -22,6 +23,7 @@ export function AudioDevicePanel({
   isMicMuted,
   isTogglingMic,
   micToggleError,
+  isMutedByHost = false,
   onToggleMic,
   audioInputDevices,
   selectedAudioInputDeviceId,
@@ -50,13 +52,15 @@ export function AudioDevicePanel({
           <button
             className={isMicMuted ? "button-secondary" : "button-primary"}
             onClick={onToggleMic}
-            disabled={isTogglingMic}
+            disabled={isTogglingMic || (isMutedByHost && isMicMuted)}
           >
             {isTogglingMic
               ? "Updating..."
-              : isMicMuted
-                ? "Unmute mic"
-                : "Mute mic"}
+              : isMutedByHost && isMicMuted
+                ? "Muted by host"
+                : isMicMuted
+                  ? "Unmute mic"
+                  : "Mute mic"}
           </button>
         </div>
 

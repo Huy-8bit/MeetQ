@@ -1,9 +1,18 @@
 import { useCallback, useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { api, ApiError } from "../lib/api";
+import {
+  formatMeetingLanguagePair,
+  getLanguageLabel,
+} from "../lib/languages";
 import { useSessionStore } from "../state/session";
-import type { Language, RoomSnapshotResponse } from "../types/api";
+import type {
+  Language,
+  MeetingLanguage,
+  RoomSnapshotResponse,
+} from "../types/api";
 import { AudioTrackSink, VideoTrackView } from "../components/MediaElements";
+import { ChatPanel } from "../components/ChatPanel";
 import { JoinRoomCard } from "../components/JoinRoomCard";
 import { ConnectionBadge } from "../components/ConnectionBadge";
 import { AudioDevicePanel } from "../components/AudioDevicePanel";
@@ -88,12 +97,32 @@ export function RoomPage() {
         (feed) => feed.participantId === selectedScreenSharer.participant_id,
       ) || null
     : null;
+  const roomMeetingLanguages = meeting.meetingLanguages;
 
   async function handleJoin(payload: {
     displayName: string;
-    language: Language;
+    language: MeetingLanguage;
   }) {
     if (!roomId) {
+      return;
+    }
+
+    if (!payload.displayName.trim()) {
+      setJoinError("Please enter your display name.");
+      return;
+    }
+
+    if (roomMeetingLanguages.length !== 2) {
+      setJoinError(
+        "Room meeting language pair is unavailable. Reload room snapshot or ask the host to recreate the room.",
+      );
+      return;
+    }
+
+    if (!roomMeetingLanguages.includes(payload.language)) {
+      setJoinError(
+        `Choose one of the room meeting languages: ${formatMeetingLanguagePair(roomMeetingLanguages)}.`,
+      );
       return;
     }
 
@@ -113,7 +142,7 @@ export function RoomPage() {
     } catch (error) {
       setJoinError(
         error instanceof ApiError
-          ? mapJoinError(error)
+          ? mapJoinError(error, roomMeetingLanguages)
           : "Could not join room. Check backend availability.",
       );
     } finally {
@@ -156,6 +185,7 @@ export function RoomPage() {
         <JoinRoomCard
           room={roomSnapshot.room}
           participants={roomSnapshot.participants}
+          meetingLanguages={roomMeetingLanguages}
           onJoin={handleJoin}
           isSubmitting={joining}
           error={joinError}
@@ -175,6 +205,10 @@ export function RoomPage() {
               ? "Everyone hears original human audio. BRSE AI joins as a virtual participant and relays across languages."
               : "Language still controls meeting interpretation behavior for this room."}
           </p>
+          <p>
+            Meeting languages: {formatMeetingLanguagePair(roomMeetingLanguages)}
+          </p>
+          <p>Your language: {getLanguageLabel(meeting.selfState?.language || session.participant.language)}</p>
         </div>
 
         <div className="room-header-actions">
@@ -184,13 +218,19 @@ export function RoomPage() {
             <span>Your Language</span>
             <select
               value={meeting.selfState?.language || session.participant.language}
+              disabled={roomMeetingLanguages.length !== 2}
               onChange={(event) =>
                 meeting.changeLanguage(event.target.value as Language)
               }
             >
-              <option value="vi">VI</option>
-              <option value="en">EN</option>
-              <option value="ja">JA</option>
+              {(roomMeetingLanguages.length === 2
+                ? roomMeetingLanguages
+                : [session.participant.language]
+              ).map((item) => (
+                <option key={item} value={item}>
+                  {getLanguageLabel(item)}
+                </option>
+              ))}
             </select>
           </label>
 
@@ -240,6 +280,14 @@ export function RoomPage() {
       {meeting.screenShareError ? (
         <div className="banner banner-warning">{meeting.screenShareError}</div>
       ) : null}
+      {meeting.moderationError ? (
+        <div className="banner banner-warning">{meeting.moderationError}</div>
+      ) : null}
+      {meeting.isMutedByHost ? (
+        <div className="banner banner-danger banner-force-muted">
+          Your microphone has been muted by the host.
+        </div>
+      ) : null}
 
       <div className="room-layout">
         <section className="video-stage">
@@ -285,6 +333,16 @@ export function RoomPage() {
                     (participant) => participant.participant_id === feed.participantId,
                   )?.is_screen_sharing,
                 )}
+                isHost={Boolean(
+                  meeting.participants.find(
+                    (participant) => participant.participant_id === feed.participantId,
+                  )?.is_host,
+                )}
+                isMutedByHost={Boolean(
+                  meeting.participants.find(
+                    (participant) => participant.participant_id === feed.participantId,
+                  )?.muted_by_host,
+                )}
                 label={
                   feed.isLocal
                     ? "You"
@@ -301,6 +359,11 @@ export function RoomPage() {
           <ParticipantList
             participants={meeting.participants}
             selfParticipantId={meeting.selfState?.participant_id}
+            isCurrentUserHost={meeting.isCurrentUserHost}
+            onMuteParticipant={(participantId) => {
+              void meeting.muteParticipant(participantId);
+            }}
+            isMutingParticipant={meeting.isMutingParticipant}
           />
 
           <div className="audio-sinks" aria-hidden="true">
@@ -327,6 +390,7 @@ export function RoomPage() {
             isMicMuted={meeting.isMicMuted}
             isTogglingMic={meeting.isTogglingMic}
             micToggleError={meeting.micToggleError}
+            isMutedByHost={meeting.isMutedByHost}
             onToggleMic={() => {
               void meeting.toggleMicrophoneMuted();
             }}
@@ -346,6 +410,14 @@ export function RoomPage() {
               void meeting.switchAudioOutput(deviceId);
             }}
           />
+          <ChatPanel
+            messages={meeting.chatMessages}
+            selfParticipantId={meeting.selfState?.participant_id}
+            onSend={meeting.sendChatMessage}
+            disabled={!meeting.canSendChat}
+            error={meeting.chatError}
+            isSending={meeting.isSendingChat}
+          />
           <InterpreterStatusPanel statuses={meeting.interpreterStatuses} />
           <TranscriptPanel entries={meeting.transcripts} />
         </aside>
@@ -361,7 +433,7 @@ function mapRoomSnapshotError(error: ApiError): string {
   return error.message;
 }
 
-function mapJoinError(error: ApiError): string {
+function mapJoinError(error: ApiError, meetingLanguages: MeetingLanguage[]): string {
   if (error.code === "room_full") {
     return "Room is full.";
   }
@@ -373,6 +445,11 @@ function mapJoinError(error: ApiError): string {
   }
   if (error.code === "invalid_display_name") {
     return "Display name must be 1 to 40 characters.";
+  }
+  if (error.code === "invalid_language") {
+    return meetingLanguages.length === 2
+      ? `Your language must match the room meeting languages: ${formatMeetingLanguagePair(meetingLanguages)}.`
+      : "Your language must match one of the room meeting languages.";
   }
   return error.message;
 }

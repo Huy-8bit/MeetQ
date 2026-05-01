@@ -2,7 +2,7 @@
 src/common/lang.py
 Language constants, heuristic detection, and instruction building.
 
-Supported language codes: "auto", "vi", "en", "ja"
+Supported language codes: "auto", "vi", "en", "ja", "zh", "ko", "fr", "es"
 """
 from __future__ import annotations
 
@@ -13,12 +13,18 @@ from typing import Optional
 # Supported languages
 # ---------------------------------------------------------------------------
 
-SUPPORTED_LANGS = {"auto", "vi", "en", "ja"}
+PLATFORM_SUPPORTED_LANGS = ("vi", "en", "ja", "zh", "ko", "fr", "es")
+SUPPORTED_LANGUAGE_CODES = ("auto",) + PLATFORM_SUPPORTED_LANGS
+SUPPORTED_LANGS = set(SUPPORTED_LANGUAGE_CODES)
 
 LANG_NAMES = {
     "vi": "Vietnamese",
     "en": "English",
     "ja": "Japanese",
+    "zh": "Chinese",
+    "ko": "Korean",
+    "fr": "French",
+    "es": "Spanish",
     "auto": "auto",
 }
 
@@ -27,14 +33,24 @@ DEFAULT_TGT: dict[str, str] = {
     "vi": "en",
     "en": "vi",
     "ja": "en",
+    "zh": "en",
+    "ko": "en",
+    "fr": "en",
+    "es": "en",
 }
 
 # ---------------------------------------------------------------------------
 # Heuristic language detector
 # ---------------------------------------------------------------------------
 
-# Japanese: Hiragana U+3040–U+309F, Katakana U+30A0–U+30FF, CJK U+4E00–U+9FFF
-_RE_JAPANESE = re.compile(r"[\u3040-\u309f\u30a0-\u30ff\u4e00-\u9fff]")
+# Japanese kana: Hiragana U+3040–U+309F, Katakana U+30A0–U+30FF
+_RE_JAPANESE_KANA = re.compile(r"[\u3040-\u309f\u30a0-\u30ff]")
+
+# Chinese Han ideographs (also used in Japanese Kanji; kana detection runs first)
+_RE_CJK_HAN = re.compile(r"[\u4e00-\u9fff]")
+
+# Korean Hangul syllables + Jamo
+_RE_KOREAN = re.compile(r"[\u1100-\u11ff\u3130-\u318f\uac00-\ud7af]")
 
 # Vietnamese: letters with specific diacritics not present in standard Latin
 # Key markers: ắ ặ ầ ề ộ ử ỳ ơ ư đ and their case variants
@@ -43,25 +59,82 @@ _RE_VIETNAMESE = re.compile(
     r"ÀÁẢÃẠĂẮẰẲẴẶÂẤẦẨẪẬĐÈÉẺẼẸÊẾỀỂỄỆÌÍỈĨỊÒÓỎÕỌÔỐỒỔỖỘƠỚỜỞỠỢÙÚỦŨỤƯỨỪỬỮỰỲÝỶỸỴ]"
 )
 
+_RE_FRENCH_MARKERS = re.compile(r"[àâæçéèêëîïôœùûüÿÀÂÆÇÉÈÊËÎÏÔŒÙÛÜŸ]")
+_RE_SPANISH_MARKERS = re.compile(r"[áéíñóúü¡¿ÁÉÍÑÓÚÜ]")
+_RE_LATIN_WORD = re.compile(r"[A-Za-zÀ-ÿ']+")
+
+_FRENCH_COMMON_WORDS = {
+    "bonjour",
+    "merci",
+    "avec",
+    "pour",
+    "dans",
+    "mais",
+    "pas",
+    "est",
+    "une",
+    "des",
+    "nous",
+    "vous",
+    "je",
+    "les",
+    "que",
+}
+_SPANISH_COMMON_WORDS = {
+    "hola",
+    "gracias",
+    "con",
+    "para",
+    "pero",
+    "que",
+    "una",
+    "uno",
+    "los",
+    "las",
+    "estoy",
+    "estamos",
+    "porque",
+    "como",
+}
+
+
+def _common_word_hits(text: str, markers: set[str]) -> int:
+    return sum(1 for token in _RE_LATIN_WORD.findall(text.lower()) if token in markers)
+
 
 def detect_lang(text: str) -> Optional[str]:
     """
     Lightweight heuristic language detector.
-    Returns "ja", "vi", "en", or None if the text is too short / ambiguous.
+    Returns a supported non-auto language code or None if the text is too short / ambiguous.
 
-    Confidence threshold: at least 2 marker characters for ja/vi,
-    or at least 5 plain-ASCII words for en fallback.
+    Confidence threshold:
+    - Japanese: at least 1 kana character
+    - Korean / Chinese / Vietnamese: at least 2 marker characters
+    - French / Spanish: at least 1 accented marker or 3 common word hits
+    - English fallback: at least 5 plain-ASCII letters
     """
     if not text or len(text.strip()) < 3:
         return None
 
-    ja_hits = len(_RE_JAPANESE.findall(text))
+    ja_hits = len(_RE_JAPANESE_KANA.findall(text))
+    zh_hits = len(_RE_CJK_HAN.findall(text))
+    ko_hits = len(_RE_KOREAN.findall(text))
     vi_hits = len(_RE_VIETNAMESE.findall(text))
+    fr_hits = len(_RE_FRENCH_MARKERS.findall(text))
+    es_hits = len(_RE_SPANISH_MARKERS.findall(text))
 
-    if ja_hits >= 2:
+    if ja_hits >= 1:
         return "ja"
+    if ko_hits >= 2:
+        return "ko"
     if vi_hits >= 2:
         return "vi"
+    if zh_hits >= 2:
+        return "zh"
+    if fr_hits >= 1 or _common_word_hits(text, _FRENCH_COMMON_WORDS) >= 3:
+        return "fr"
+    if es_hits >= 1 or _common_word_hits(text, _SPANISH_COMMON_WORDS) >= 3:
+        return "es"
 
     # English fallback: mostly ASCII alpha characters
     ascii_alpha = sum(1 for c in text if c.isascii() and c.isalpha())
@@ -93,6 +166,14 @@ def resolve_tgt(detected_src: str, requested_tgt: str) -> str:
 # Tone note for Japanese output
 _JA_TONE = "丁寧すぎないが失礼でもない自然な日本語で翻訳してください。"
 
+
+def _auto_detect_routing_policy() -> str:
+    return " ".join(
+        f"If the speaker uses {LANG_NAMES[src]}, output ONLY the {LANG_NAMES[DEFAULT_TGT[src]]} translation."
+        for src in PLATFORM_SUPPORTED_LANGS
+    )
+
+
 def build_instructions(src: str, tgt: str) -> str:
     """
     Build the session instruction string for the given src/tgt pair.
@@ -100,17 +181,16 @@ def build_instructions(src: str, tgt: str) -> str:
     """
     if src == "auto" and tgt == "auto":
         return (
-            "You are a live interpreter between Vietnamese, English, and Japanese. "
+            "You are a live interpreter across Vietnamese, English, Japanese, Chinese, Korean, French, and Spanish. "
             "Detect the language the user spoke. "
-            "If Vietnamese, output ONLY the English translation. "
-            "If English, output ONLY the Vietnamese translation. "
-            "If Japanese, output ONLY the English translation. "
+            + _auto_detect_routing_policy()
+            + " "
             "Output the translation text only. No explanations, no labels, no commentary."
         )
 
     if src == "auto":
         # tgt is fixed
-        tgt_name = LANG_NAMES[tgt]
+        tgt_name = LANG_NAMES.get(tgt, tgt)
         return (
             f"You are a live interpreter. Detect the language the user spoke "
             f"and translate it to {tgt_name}. "
@@ -118,14 +198,14 @@ def build_instructions(src: str, tgt: str) -> str:
             + "Output the translation text only. No explanations, no labels, no commentary."
         )
 
-    src_name = LANG_NAMES[src]
+    src_name = LANG_NAMES.get(src, src)
 
     if tgt == "auto":
         # Derive default tgt from src
         effective_tgt = DEFAULT_TGT.get(src, "en")
-        tgt_name = LANG_NAMES[effective_tgt]
+        tgt_name = LANG_NAMES.get(effective_tgt, effective_tgt)
     else:
-        tgt_name = LANG_NAMES[tgt]
+        tgt_name = LANG_NAMES.get(tgt, tgt)
 
     tone = _JA_TONE if (tgt == "ja" or (tgt == "auto" and DEFAULT_TGT.get(src) == "ja")) else ""
 
@@ -143,7 +223,7 @@ def build_instructions(src: str, tgt: str) -> str:
 
 def parse_pairs(pairs_str: str) -> set[frozenset[str]]:
     """
-    Parse a pairs string like "vi<->en,ja<->en,vi<->ja"
+    Parse a pairs string like "vi<->en,zh<->ko,fr<->es"
     into a set of frozensets for O(1) lookup.
     Returns empty set if pairs_str is empty (means "allow all").
     """

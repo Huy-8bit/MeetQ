@@ -1,5 +1,14 @@
-export type Language = "vi" | "en" | "ja" | "auto";
+export type Language =
+  | "vi"
+  | "en"
+  | "ja"
+  | "zh"
+  | "ko"
+  | "fr"
+  | "es"
+  | "auto";
 export type SelectableLanguage = Exclude<Language, "auto">;
+export type MeetingLanguage = SelectableLanguage;
 
 export type RoomState = "created" | "active" | "empty";
 export type SameLanguagePolicy = "human_passthrough" | "muted";
@@ -103,9 +112,14 @@ export interface RoomSummary {
   expires_at: string;
   participant_limit: number;
   supported_languages: Language[];
+  meeting_languages?: MeetingLanguage[];
   meeting_mode?: MeetingMode;
   interpreter_mode?: InterpreterMode;
   audio_routing?: AudioRouting;
+}
+
+export interface CreateRoomRequest {
+  meeting_languages: [MeetingLanguage, MeetingLanguage];
 }
 
 export interface CreateRoomResponse {
@@ -128,6 +142,8 @@ export interface ParticipantSnapshot {
   metadata?: Record<string, unknown>;
   is_screen_sharing?: boolean;
   screen_share?: ScreenShareTrackInfo | null;
+  is_host?: boolean;
+  muted_by_host?: boolean;
 }
 
 export interface ScreenShareTrackInfo {
@@ -170,14 +186,16 @@ export interface RecentTranscriptSnapshot {
 export interface RoomSnapshotResponse {
   room: RoomSummary & {
     participant_count: number;
+    host_participant_id?: string | null;
   };
   participants: ParticipantSnapshot[];
   recent_transcripts: RecentTranscriptSnapshot[];
+  recent_messages?: ChatMessage[];
 }
 
 export interface JoinRoomRequest {
   display_name: string;
-  language: Language;
+  language: MeetingLanguage;
   client: {
     sdk: "web";
     version: string;
@@ -229,7 +247,7 @@ export interface JoinRoomResponse {
     participant_id: string;
     session_id: string;
     display_name: string;
-    language: Language;
+    language: MeetingLanguage;
   };
   room_token: {
     token: string;
@@ -248,6 +266,7 @@ export interface JoinRoomResponse {
   snapshot: {
     participants: ParticipantSnapshot[];
     recent_transcripts: RecentTranscriptSnapshot[];
+    recent_messages?: ChatMessage[];
   };
 }
 
@@ -264,4 +283,45 @@ export interface ScreenShareStateResponse {
   timestamp: string;
   track_sid?: string | null;
   track_name?: string | null;
+}
+
+// ─── Chat types ───────────────────────────────────────────────────────────────
+
+export interface ChatMessage {
+  message_id: string;
+  client_event_id?: string | null;
+  sender_id?: string;
+  sender_display_name?: string;
+  sender_language?: Language | null;
+  participant_id?: string;
+  display_name?: string;
+  language?: Language | null;
+  text: string;
+  sent_at?: string;
+  created_at?: string;
+}
+
+export type ChatDeliveryStatus = "sending" | "sent" | "failed";
+
+export interface RoomChatMessage {
+  message_id: string;
+  client_event_id?: string | null;
+  participant_id: string;
+  display_name: string;
+  text: string;
+  created_at: string;
+  sender_language?: Language | null;
+  delivery_status?: ChatDeliveryStatus;
+}
+
+// ─── Moderation types ─────────────────────────────────────────────────────────
+
+export interface MuteParticipantRequest {
+  target_participant_id: string;
+}
+
+export interface MuteParticipantResponse {
+  participant_id: string;
+  muted_by_host: boolean;
+  timestamp: string;
 }

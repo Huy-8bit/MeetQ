@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import logging
 from dataclasses import dataclass, field
@@ -13,10 +14,12 @@ logger = logging.getLogger(__name__)
 _FRAME_MS = 20
 _CHANNELS = 1
 _BYTES_PER_SAMPLE = 2
+_SOURCE_QUEUE_MS = 6000
 
 
 @dataclass
 class _RelayTrackState:
+    generation: int
     source: rtc.AudioSource
     track_name: str
     track_sid: Optional[str] = None
@@ -48,6 +51,9 @@ class OutputRouter:
         self._closed = False
         self._on_track_failure = on_track_failure
         self._state: Optional[_RelayTrackState] = None
+        self._generation = 0
+        self._op_lock = asyncio.Lock()
+        self._pending_clear = False
 
     def audio_track_name(self) -> Optional[str]:
         state = self._state
@@ -73,6 +79,10 @@ class OutputRouter:
         }
 
     async def ensure_track(self) -> None:
+        async with self._op_lock:
+            await self._ensure_track_locked()
+
+    async def _ensure_track_locked(self) -> None:
         if self._closed:
             return
 
@@ -85,10 +95,21 @@ class OutputRouter:
             await self._release_state(current)
 
         state = _RelayTrackState(
-            source=rtc.AudioSource(self.output_sample_rate, _CHANNELS, queue_size_ms=1500),
+            generation=self._next_generation(),
+            source=rtc.AudioSource(self.output_sample_rate, _CHANNELS, queue_size_ms=_SOURCE_QUEUE_MS),
             track_name=self._build_track_name(),
         )
         self._state = state
+        self._pending_clear = False
+
+        logger.info(
+            "BRSE relay source created speaker=%s route=%s->%s generation=%d queue_ms=%d",
+            self.speaker_id,
+            self.src_lang,
+            self.target_lang,
+            state.generation,
+            _SOURCE_QUEUE_MS,
+        )
 
         if not self._room_is_connected():
             self._notify_track_failure(
@@ -120,50 +141,77 @@ class OutputRouter:
 
         state.track_sid = publication.sid
         logger.info(
-            "BRSE relay track ready speaker=%s route=%s->%s sid=%s",
+            "BRSE relay track ready speaker=%s route=%s->%s sid=%s generation=%d",
             self.speaker_id,
             self.src_lang,
             self.target_lang,
             publication.sid,
+            state.generation,
         )
 
     async def capture_base64_audio(self, encoded_chunk: str) -> bool:
         return await self.capture_pcm(base64.b64decode(encoded_chunk))
 
     async def capture_pcm(self, pcm_bytes: bytes) -> bool:
-        state = self._state
-        if state is None:
-            await self.ensure_track()
+        async with self._op_lock:
             state = self._state
-        if state is None or not state.active:
-            return False
+            if state is None:
+                await self._ensure_track_locked()
+                state = self._state
+            if state is None or not state.active:
+                return False
 
-        state.buffer.extend(pcm_bytes)
-        return await self._publish_buffered_frames(flush=False)
+            state.buffer.extend(pcm_bytes)
+            return await self._publish_buffered_frames(flush=False)
 
     async def flush(self) -> bool:
-        return await self._publish_buffered_frames(flush=True)
+        async with self._op_lock:
+            return await self._publish_buffered_frames(flush=True)
 
     def clear_queue(self) -> None:
         state = self._state
         if state is None:
             return
         state.buffer.clear()
+        self._pending_clear = True
         try:
-            state.source.clear_queue()
-        except Exception:
-            logger.exception(
-                "Failed to clear BRSE relay audio queue for speaker=%s",
-                self.speaker_id,
-            )
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            try:
+                state.source.clear_queue()
+                self._pending_clear = False
+            except Exception:
+                logger.exception(
+                    "Failed to clear BRSE relay audio queue for speaker=%s",
+                    self.speaker_id,
+                )
+            return
+
+        loop.create_task(self._apply_pending_clear())
+
+    async def _apply_pending_clear(self) -> None:
+        async with self._op_lock:
+            state = self._state
+            if state is None or not self._pending_clear:
+                return
+            try:
+                state.source.clear_queue()
+                self._pending_clear = False
+            except Exception:
+                logger.exception(
+                    "Failed to clear BRSE relay audio queue for speaker=%s",
+                    self.speaker_id,
+                )
 
     async def shutdown(self) -> None:
-        self._closed = True
-        state = self._state
-        self._state = None
-        if state is None:
-            return
-        await self._release_state(state)
+        async with self._op_lock:
+            self._closed = True
+            state = self._state
+            self._state = None
+            self._pending_clear = False
+            if state is None:
+                return
+            await self._release_state(state)
 
     async def _publish_buffered_frames(self, *, flush: bool) -> bool:
         state = self._state
@@ -175,23 +223,37 @@ class OutputRouter:
         ):
             return False if flush else True
 
+        if self._pending_clear:
+            try:
+                state.source.clear_queue()
+                self._pending_clear = False
+            except Exception:
+                logger.exception(
+                    "Failed to clear BRSE relay audio queue for speaker=%s",
+                    self.speaker_id,
+                )
+
         while len(state.buffer) >= self._frame_bytes:
             frame_bytes = bytes(state.buffer[: self._frame_bytes])
             del state.buffer[: self._frame_bytes]
-            if not await self._capture_frame(state, frame_bytes):
+            ok, reset_message = await self._capture_frame(state, frame_bytes)
+            if not ok:
+                await self._reset_track_locked(reset_message)
                 return False
 
         if flush and state.buffer:
             padded = bytes(state.buffer) + (b"\x00" * (self._frame_bytes - len(state.buffer)))
             state.buffer.clear()
-            if not await self._capture_frame(state, padded):
+            ok, reset_message = await self._capture_frame(state, padded)
+            if not ok:
+                await self._reset_track_locked(reset_message)
                 return False
 
         return True
 
-    async def _capture_frame(self, state: _RelayTrackState, frame_bytes: bytes) -> bool:
+    async def _capture_frame(self, state: _RelayTrackState, frame_bytes: bytes) -> tuple[bool, str]:
         if self._state is not state or not state.active or not state.track_sid or not self._room_is_connected():
-            return False
+            return False, "relay output state is stale or disconnected"
 
         frame = rtc.AudioFrame(
             data=frame_bytes,
@@ -201,31 +263,34 @@ class OutputRouter:
         )
         try:
             await state.source.capture_frame(frame)
-            return True
+            return True, ""
         except Exception as exc:
             logger.exception(
-                "Failed to capture BRSE relay frame for speaker=%s route=%s->%s",
+                "Failed to capture BRSE relay frame for speaker=%s route=%s->%s generation=%d",
                 self.speaker_id,
                 self.src_lang,
                 self.target_lang,
+                state.generation,
             )
-            await self._reset_track(f"BRSE relay audio track became unusable: {exc}")
-            return False
+            state.active = False
+            return False, f"BRSE relay audio track became unusable: {exc}"
 
-    async def _reset_track(self, message: str) -> None:
+    async def _reset_track_locked(self, message: str) -> None:
         logger.warning(
-            "Resetting BRSE relay track speaker=%s route=%s->%s",
+            "Resetting BRSE relay track speaker=%s route=%s->%s reason=%s",
             self.speaker_id,
             self.src_lang,
             self.target_lang,
+            message,
         )
         state = self._state
         self._state = None
+        self._pending_clear = False
         if state is not None:
             await self._release_state(state)
         if self._closed:
             return
-        await self.ensure_track()
+        await self._ensure_track_locked()
         self._notify_track_failure(message)
 
     async def _release_state(self, state: _RelayTrackState) -> None:
@@ -257,6 +322,10 @@ class OutputRouter:
 
     def _build_track_name(self) -> str:
         return f"brse::{self.speaker_id}::{self.src_lang}::{self.target_lang}"
+
+    def _next_generation(self) -> int:
+        self._generation += 1
+        return self._generation
 
     def _room_is_connected(self) -> bool:
         return self.room.connection_state == rtc.ConnectionState.CONN_CONNECTED

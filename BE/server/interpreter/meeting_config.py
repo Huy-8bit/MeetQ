@@ -1,16 +1,9 @@
 from __future__ import annotations
 
-from typing import Dict
+from typing import Dict, Iterable, Optional
 
+from src.common.lang import LANG_NAMES
 from server.meeting_modes import DEFAULT_RELAY_LANGUAGE_MAP
-
-
-LANG_NAMES: Dict[str, str] = {
-    "vi": "Vietnamese",
-    "en": "English",
-    "ja": "Japanese",
-    "auto": "auto",
-}
 
 BRSE_RELAY_LANGUAGE_MAP: Dict[str, str] = dict(DEFAULT_RELAY_LANGUAGE_MAP)
 
@@ -30,7 +23,7 @@ INTERPRETER_SEND_QUEUE_MAXSIZE = 240
 
 _JA_TONE = "Use natural spoken Japanese suitable for business meetings."
 _ROLE_POLICY = (
-    "You are BRSE AI, a bilingual bridge engineer participating in a live meeting. "
+    "You are BRSE AI, a multilingual bridge engineer participating in a live meeting. "
     "You listen to one human speaker and restate their meaning to the other language group. "
 )
 _BOUNDARY_POLICY = (
@@ -54,10 +47,23 @@ _LONG_UTTERANCE_POLICY = (
 )
 
 
-def build_interpreter_instructions(src: str, tgt: str) -> str:
+def build_interpreter_instructions(
+    src: str,
+    tgt: str,
+    meeting_languages: Optional[Iterable[str]] = None,
+) -> str:
+    pair = [lang for lang in (meeting_languages or []) if isinstance(lang, str)]
+    pair_context = ""
+    if len(pair) == 2 and pair[0] != pair[1]:
+        pair_context = (
+            f"Room meeting language pair is fixed to {LANG_NAMES.get(pair[0], pair[0])} "
+            f"and {LANG_NAMES.get(pair[1], pair[1])}. "
+        )
+
     if src == "auto" or tgt == "auto":
         return (
             _ROLE_POLICY
+            + pair_context
             + _BOUNDARY_POLICY
             + _FIDELITY_POLICY
             + _RELAY_POLICY
@@ -66,11 +72,12 @@ def build_interpreter_instructions(src: str, tgt: str) -> str:
             "Do not add speaker labels or side comments."
         )
 
-    src_name = LANG_NAMES[src]
-    tgt_name = LANG_NAMES[tgt]
+    src_name = LANG_NAMES.get(src, src)
+    tgt_name = LANG_NAMES.get(tgt, tgt)
     tone = f" { _JA_TONE }" if tgt == "ja" else ""
     return (
         _ROLE_POLICY
+        + pair_context
         + f"The current speaker is speaking primarily in {src_name}. "
         + f"Relay their meaning in natural spoken {tgt_name} for the listeners who use {tgt_name}. "
         + _BOUNDARY_POLICY

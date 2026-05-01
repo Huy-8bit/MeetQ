@@ -22,6 +22,8 @@ class EventType:
     SCREEN_SHARE_STARTED = "screen_share.started"
     SCREEN_SHARE_STOPPED = "screen_share.stopped"
 
+    CHAT_MESSAGE = "chat.message"
+
     # Mic test events (server -> client over test WS)
     MIC_TEST_STARTED = "mic_test.started"
     MIC_TEST_LEVEL = "mic_test.level"

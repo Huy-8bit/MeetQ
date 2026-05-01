@@ -384,8 +384,8 @@ from typing import Literal
 class PoolKey:
     room_id: str
     speaker_id: str
-    src_lang: Literal["vi", "en", "ja"]
-    tgt_lang: Literal["vi", "en", "ja"]
+    src_lang: Literal["vi", "en", "ja", "zh", "ko", "fr", "es"]
+    tgt_lang: Literal["vi", "en", "ja", "zh", "ko", "fr", "es"]
 ```
 
 ### Why Listener Is Not In The Key
@@ -879,5 +879,6 @@ If reconnect fails:
 
 1. `meeting_mode` của `RealtimeClient` trong platform luôn là `locked`, vì participant đã chọn language trước khi join.
 2. `src_lang` của session lấy từ participant language hiện tại, không dùng heuristic detect trong platform path.
-3. `allowed_pairs` để trống; room policy chỉ dựa trên set `{vi,en,ja}` của participant states.
-4. `OutputRouter` phải tolerate multiple listeners cùng target language mà không duplicate OpenAI sessions.
+3. Room-level `meeting_languages` (exact pair) là context chính cho routing. `tgt_lang` được tính theo "ngôn ngữ còn lại" trong pair.
+4. Nếu speaker language không thuộc room pair thì không tạo relay route và publish lỗi runtime rõ ràng.
+5. `OutputRouter` phải tolerate multiple listeners cùng target language mà không duplicate OpenAI sessions.

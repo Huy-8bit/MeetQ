@@ -2,7 +2,8 @@
 src/realtime/client.py
 OpenAI Realtime API WebSocket client for live voice-to-voice interpretation.
 
-Supports Vietnamese, English, and Japanese with configurable src/tgt routing.
+Supports Vietnamese, English, Japanese, Chinese, Korean, French, and Spanish
+with configurable src/tgt routing.
 - Auto-detection via lightweight heuristic on input transcript (sticky per session).
 - Barge-in: new user speech cancels in-progress assistant response immediately.
 - Text streams to stdout; audio plays through speaker in real time.
@@ -80,7 +81,7 @@ class RealtimeClient:
     """
     Manages the WebSocket session to OpenAI Realtime API.
     Streams mic audio in, receives translated text + audio out.
-    Supports vi/en/ja with auto-detection and sticky language.
+    Supports vi/en/ja/zh/ko/fr/es with auto-detection and sticky language.
     """
 
     def __init__(

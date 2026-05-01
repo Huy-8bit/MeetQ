@@ -156,6 +156,16 @@ export class GatewaySocket {
     this.sendEnvelope("screen_share.stop", {});
   }
 
+  sendChatMessage(text: string): string {
+    return this.sendEnvelope("chat.send", { text });
+  }
+
+  sendMuteParticipant(targetParticipantId: string): void {
+    this.sendEnvelope("moderation.mute_participant", {
+      target_participant_id: targetParticipantId,
+    });
+  }
+
   private openSocket(isReconnect: boolean): void {
     this.clearReconnectTimer();
     this.setState(isReconnect ? "reconnecting" : "connecting");
@@ -237,7 +247,7 @@ export class GatewaySocket {
   private sendEnvelope<TType extends ClientMessage["type"], TPayload>(
     type: TType,
     payload: TPayload,
-  ): void {
+  ): string {
     if (!this.socket || this.socket.readyState !== WebSocket.OPEN) {
       throw new Error("Gateway socket is not connected");
     }
@@ -251,6 +261,7 @@ export class GatewaySocket {
     };
 
     this.socket.send(JSON.stringify(message));
+    return message.event_id;
   }
 
   private scheduleReconnect(): void {

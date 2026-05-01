@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef } from "react";
 import type { TranscriptEntry } from "../features/room/transcripts";
+import { formatLanguageFlow, getLanguageLabel } from "../lib/languages";
 
 interface TranscriptPanelProps {
   entries: TranscriptEntry[];
@@ -51,7 +52,7 @@ export function TranscriptPanel({ entries }: TranscriptPanelProps) {
             <header className="transcript-item-header">
               <div>
                 <strong>{entry.actorName}</strong>
-                <span>{entry.actorLanguage.toUpperCase()}</span>
+                <span>{getLanguageLabel(entry.actorLanguage)}</span>
               </div>
               <div className="transcript-badges">
                 <span className={`badge ${entry.isFinal ? "" : "live"}`}>
@@ -59,10 +60,10 @@ export function TranscriptPanel({ entries }: TranscriptPanelProps) {
                 </span>
                 <span className="badge kind">
                   {entry.kind === "relay"
-                    ? `BRSE Relay ${entry.sourceSpeakerLanguage.toUpperCase()}->${(entry.relayTargetLanguage ?? "AUTO").toUpperCase()}`
+                    ? `BRSE Relay ${formatLanguageFlow(entry.sourceSpeakerLanguage, entry.relayTargetLanguage ?? "auto")}`
                     : entry.kind === "translated"
-                      ? `Translated ${entry.sourceSpeakerLanguage.toUpperCase()}->${(entry.relayTargetLanguage ?? "AUTO").toUpperCase()}`
-                      : `Human Source ${entry.sourceSpeakerLanguage.toUpperCase()}`}
+                      ? `Translated ${formatLanguageFlow(entry.sourceSpeakerLanguage, entry.relayTargetLanguage ?? "auto")}`
+                      : `Human Source ${getLanguageLabel(entry.sourceSpeakerLanguage)}`}
                 </span>
                 {entry.fallbackUsed ? (
                   <span className="badge warning">Degraded</span>
@@ -74,12 +75,12 @@ export function TranscriptPanel({ entries }: TranscriptPanelProps) {
                 <>
                   <p className="transcript-source">
                     <strong>{entry.sourceSpeakerName}</strong>
-                    {` (${entry.sourceSpeakerLanguage.toUpperCase()}): `}
+                    {` (${getLanguageLabel(entry.sourceSpeakerLanguage)}): `}
                     {entry.sourceText}
                   </p>
                   <p className="transcript-relay">
                     <strong>{entry.actorName}</strong>
-                    {` (${(entry.relayTargetLanguage ?? entry.actorLanguage).toUpperCase()}): `}
+                    {` (${getLanguageLabel(entry.relayTargetLanguage ?? entry.actorLanguage)}): `}
                     {entry.relayText ?? entry.text}
                   </p>
                 </>

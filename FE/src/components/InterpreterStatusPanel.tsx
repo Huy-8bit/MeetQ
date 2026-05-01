@@ -1,4 +1,5 @@
 import type { InterpreterStatusEntry } from "../features/room/interpreter";
+import { formatLanguageFlow, getLanguageLabel } from "../lib/languages";
 
 interface InterpreterStatusPanelProps {
   statuses: InterpreterStatusEntry[];
@@ -30,8 +31,9 @@ export function InterpreterStatusPanel({
               <strong>{item.brseParticipantName}</strong>
               <p>
                 Relaying {item.speakerName}
-                {item.sourceLanguage ? ` ${item.sourceLanguage.toUpperCase()}` : ""}
-                {` -> ${item.targetLanguage.toUpperCase()}`}
+                {item.sourceLanguage
+                  ? ` ${formatLanguageFlow(item.sourceLanguage, item.targetLanguage)}`
+                  : ` to ${getLanguageLabel(item.targetLanguage)}`}
                 {item.message ? ` · ${item.message}` : ""}
               </p>
             </div>

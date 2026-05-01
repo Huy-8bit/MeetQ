@@ -3,13 +3,8 @@ import { Link } from "react-router-dom";
 import { MicLevelMeter } from "../components/MicLevelMeter";
 import { useMicTest } from "../features/test/useMicTest";
 import { useTranslationTest } from "../features/test/useTranslationTest";
+import { getLanguageLabel, SUPPORTED_MEETING_LANGUAGES } from "../lib/languages";
 import type { Language } from "../types/api";
-
-const LANGUAGES: { value: Language; label: string }[] = [
-  { value: "vi", label: "Tiếng Việt (VI)" },
-  { value: "en", label: "English (EN)" },
-  { value: "ja", label: "日本語 (JA)" },
-];
 
 export function TestPage() {
   return (
@@ -171,9 +166,9 @@ function TranslationTestSection() {
             disabled={!canChangeLang}
             onChange={(e) => setSrcLang(e.target.value as Language)}
           >
-            {LANGUAGES.map((l) => (
-              <option key={l.value} value={l.value}>
-                {l.label}
+            {SUPPORTED_MEETING_LANGUAGES.map((language) => (
+              <option key={language} value={language}>
+                {getLanguageLabel(language)}
               </option>
             ))}
           </select>
@@ -188,9 +183,9 @@ function TranslationTestSection() {
             disabled={!canChangeLang}
             onChange={(e) => setTgtLang(e.target.value as Language)}
           >
-            {LANGUAGES.map((l) => (
-              <option key={l.value} value={l.value}>
-                {l.label}
+            {SUPPORTED_MEETING_LANGUAGES.map((language) => (
+              <option key={language} value={language}>
+                {getLanguageLabel(language)}
               </option>
             ))}
           </select>
@@ -204,7 +199,7 @@ function TranslationTestSection() {
       <div className="translation-panels">
         <div className="translation-text-box">
           <span className="translation-box-label">
-            Lời gốc ({state.srcLang.toUpperCase()})
+            Lời gốc ({getLanguageLabel(state.srcLang)})
           </span>
           <div className="translation-text-content">
             {state.items.length === 0 ? (
@@ -229,7 +224,7 @@ function TranslationTestSection() {
 
         <div className="translation-text-box translation-text-box-right">
           <span className="translation-box-label">
-            Bản dịch ({state.tgtLang.toUpperCase()})
+            Bản dịch ({getLanguageLabel(state.tgtLang)})
             {state.status === "translating" ? (
               <span className="badge live translation-live-badge">Đang dịch</span>
             ) : null}

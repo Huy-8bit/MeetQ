@@ -4,6 +4,7 @@ from typing import Any, Dict, List, Optional
 import redis.asyncio as redis
 
 from server.models import (
+    ChatMessage,
     ParticipantSnapshot,
     ParticipantState,
     RoomSnapshotResponse,
@@ -14,10 +15,17 @@ from server.models import (
 
 
 class RoomStore:
-    def __init__(self, client: redis.Redis, ttl_seconds: int = 86400, transcript_limit: int = 50):
+    def __init__(
+        self,
+        client: redis.Redis,
+        ttl_seconds: int = 86400,
+        transcript_limit: int = 50,
+        chat_limit: int = 100,
+    ):
         self.client = client
         self.ttl = ttl_seconds
         self.limit = transcript_limit
+        self.chat_limit = chat_limit
 
     def _meta_key(self, room_id: str) -> str:
         return f"room:{room_id}:meta"
@@ -28,11 +36,15 @@ class RoomStore:
     def _trans_key(self, room_id: str) -> str:
         return f"room:{room_id}:transcripts"
 
+    def _chat_key(self, room_id: str) -> str:
+        return f"room:{room_id}:chat"
+
     async def _refresh_ttl(self, room_id: str):
         pipe = self.client.pipeline()
         pipe.expire(self._meta_key(room_id), self.ttl)
         pipe.expire(self._parts_key(room_id), self.ttl)
         pipe.expire(self._trans_key(room_id), self.ttl)
+        pipe.expire(self._chat_key(room_id), self.ttl)
         await pipe.execute()
 
     async def create_room(self, room: RoomState):
@@ -62,6 +74,8 @@ class RoomStore:
 
         trans_data = await self.client.lrange(self._trans_key(room_id), 0, -1)
         transcripts = [TranscriptEvent.model_validate_json(t) for t in trans_data]
+        chat_data = await self.client.lrange(self._chat_key(room_id), 0, -1)
+        messages = [ChatMessage.model_validate_json(t) for t in chat_data]
 
         room_res = RoomSnapshotResponseRoom(
             room_id=room_state.room_id,
@@ -70,6 +84,7 @@ class RoomStore:
             expires_at=room_state.expires_at,
             participant_limit=room_state.participant_limit,
             supported_languages=room_state.supported_languages,
+            meeting_languages=room_state.meeting_languages,
             meeting_mode=room_state.meeting_mode,
             interpreter_mode=room_state.interpreter_mode,
             audio_routing=room_state.audio_routing,
@@ -80,6 +95,7 @@ class RoomStore:
             room=room_res,
             participants=participants,
             recent_transcripts=transcripts,
+            recent_messages=messages,
         )
 
     async def add_participant(self, room_id: str, participant: ParticipantState):
@@ -125,6 +141,14 @@ class RoomStore:
         await pipe.execute()
         await self._refresh_ttl(room_id)
 
+    async def append_chat_message(self, room_id: str, message: ChatMessage):
+        key = self._chat_key(room_id)
+        pipe = self.client.pipeline()
+        pipe.rpush(key, message.model_dump_json())
+        pipe.ltrim(key, -self.chat_limit, -1)
+        await pipe.execute()
+        await self._refresh_ttl(room_id)
+
     async def mark_room_empty(self, room_id: str):
         meta_json = await self.client.get(self._meta_key(room_id))
         if meta_json:
@@ -138,6 +162,7 @@ class RoomStore:
             self._meta_key(room_id),
             self._parts_key(room_id),
             self._trans_key(room_id),
+            self._chat_key(room_id),
         )
 
     def _participant_state_to_snapshot(self, participant: ParticipantState) -> ParticipantSnapshot:

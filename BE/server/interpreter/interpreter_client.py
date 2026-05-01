@@ -31,6 +31,7 @@ class InterpreterRealtimeClient(RealtimeClient):
 
     def __init__(self, *args, **kwargs):
         self.request_audio_output = kwargs.pop("request_audio_output", True)
+        self.meeting_languages = kwargs.pop("meeting_languages", None)
         kwargs["enable_speaker"] = False
         super().__init__(*args, **kwargs)
         self._deterministic_routing = self.src_lang != "auto" and self.tgt_lang != "auto"
@@ -57,7 +58,11 @@ class InterpreterRealtimeClient(RealtimeClient):
         effective_src = self.src_lang
         if effective_src == "auto" and self._last_detected_src:
             effective_src = self._last_detected_src
-        return build_interpreter_instructions(effective_src, self.tgt_lang)
+        return build_interpreter_instructions(
+            effective_src,
+            self.tgt_lang,
+            meeting_languages=self.meeting_languages,
+        )
 
     async def _run_session(self) -> None:
         url = REALTIME_URL_TEMPLATE.format(model=self.model)

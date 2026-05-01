@@ -1,8 +1,10 @@
 import type {
   AudioOutputDescriptor,
   AudioRouting,
+  ChatMessage,
   InterpreterMode,
   Language,
+  MeetingLanguage,
   ParticipantSnapshot,
   ParticipantReference,
   RelayTargetReference,
@@ -31,6 +33,7 @@ export type RoomSnapshotEvent = WsEnvelope<
       state: "created" | "active" | "empty";
       participant_limit: number;
       supported_languages: Language[];
+      meeting_languages?: MeetingLanguage[];
       meeting_mode?: "direct_translation" | "brse_relay";
       interpreter_mode?: "per_listener" | "brse_participant";
       audio_routing?: AudioRouting;
@@ -55,7 +58,7 @@ export type RoomSnapshotEvent = WsEnvelope<
       audio_output?: AudioOutputDescriptor | null;
       relay_mode?: InterpreterMode | null;
       speaker?: ParticipantReference;
-      original_speaker?: ParticipantReference | null;
+      original_speaker?: ParticipantReference;
       listener?: {
         participant_id: string;
         target_language: Language;
@@ -64,6 +67,8 @@ export type RoomSnapshotEvent = WsEnvelope<
       relay_target?: RelayTargetReference | null;
       created_at: string;
     }>;
+    host_participant_id?: string | null;
+    recent_messages?: ChatMessage[];
   }
 >;
 
@@ -83,6 +88,8 @@ export type ParticipantJoinedEvent = WsEnvelope<
     metadata?: Record<string, unknown>;
     is_screen_sharing?: boolean;
     screen_share?: ScreenShareTrackInfo | null;
+    is_host?: boolean;
+    muted_by_host?: boolean;
   }
 >;
 
@@ -102,6 +109,8 @@ export type ParticipantUpdatedEvent = WsEnvelope<
     metadata?: Record<string, unknown>;
     is_screen_sharing?: boolean;
     screen_share?: ScreenShareTrackInfo | null;
+    is_host?: boolean;
+    muted_by_host?: boolean;
   }
 >;
 
@@ -226,8 +235,51 @@ export type ServerEvent =
   | InterpreterStatusEvent
   | ScreenShareStartedEvent
   | ScreenShareStoppedEvent
+  | ChatMessageEvent
+  | RoomHostChangedEvent
+  | ModerationForceMutedEvent
+  | ModerationParticipantMutedEvent
   | PongEvent
   | ErrorEvent;
+
+// ─── Chat events ──────────────────────────────────────────────────────────────
+
+export type ChatMessageEvent = WsEnvelope<
+  "chat.message",
+  ChatMessage
+>;
+
+// ─── Host events ──────────────────────────────────────────────────────────────
+
+export type RoomHostChangedEvent = WsEnvelope<
+  "room.host_changed",
+  {
+    previous_host_id: string | null;
+    new_host_id: string;
+    new_host_display_name: string;
+    reason: string;
+  }
+>;
+
+// ─── Moderation events ────────────────────────────────────────────────────────
+
+export type ModerationForceMutedEvent = WsEnvelope<
+  "moderation.force_muted",
+  {
+    participant_id: string;
+    muted_by: string;
+    reason?: string;
+  }
+>;
+
+export type ModerationParticipantMutedEvent = WsEnvelope<
+  "moderation.participant_muted",
+  {
+    participant_id: string;
+    muted_by_host: boolean;
+    muted_by: string;
+  }
+>;
 
 export type PingMessage = WsEnvelope<
   "ping",
@@ -261,7 +313,27 @@ export type ClientMessage =
   | PingMessage
   | SetLanguageMessage
   | ScreenShareStartMessage
-  | ScreenShareStopMessage;
+  | ScreenShareStopMessage
+  | ChatSendMessage
+  | ModerationMuteMessage;
+
+// ─── Chat client messages ─────────────────────────────────────────────────────
+
+export type ChatSendMessage = WsEnvelope<
+  "chat.send",
+  {
+    text: string;
+  }
+>;
+
+// ─── Moderation client messages ───────────────────────────────────────────────
+
+export type ModerationMuteMessage = WsEnvelope<
+  "moderation.mute_participant",
+  {
+    target_participant_id: string;
+  }
+>;
 
 // ─── Test WebSocket event types ───────────────────────────────────────────────
 

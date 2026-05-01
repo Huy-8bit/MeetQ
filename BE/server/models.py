@@ -4,15 +4,19 @@ from pydantic import BaseModel, Field
 
 from server.meeting_modes import (
     BRSE_PARTICIPANT_ID,
+    DEFAULT_RELAY_LANGUAGE_MAP,
+    DEFAULT_ROOM_MEETING_LANGUAGES,
     INTERPRETER_MODE_BRSE_PARTICIPANT,
     MEETING_MODE_BRSE_RELAY,
     PARTICIPANT_KIND_HUMAN,
+    SUPPORTED_MEETING_LANGUAGES,
 )
 
 
 RoomStatus = Literal["created", "active", "empty"]
 ParticipantStatus = Literal["joining", "connected", "reconnecting", "disconnected"]
-Language = Literal["vi", "en", "ja", "auto"]
+Language = Literal["vi", "en", "ja", "zh", "ko", "fr", "es", "auto"]
+MeetingLanguage = Literal["vi", "en", "ja", "zh", "ko", "fr", "es"]
 MeetingMode = Literal["direct_translation", "brse_relay"]
 InterpreterMode = Literal["per_listener", "brse_participant"]
 ParticipantKind = Literal["human", "virtual_brse"]
@@ -37,10 +41,7 @@ class RoomAudioRouting(BaseModel):
     interpreter_mode: InterpreterMode = INTERPRETER_MODE_BRSE_PARTICIPANT
     bridge_strategy: Literal["speaker_language_map"] = "speaker_language_map"
     relay_language_map: Dict[str, str] = Field(
-        default_factory=lambda: {
-            "vi": "ja",
-            "ja": "vi",
-        }
+        default_factory=lambda: dict(DEFAULT_RELAY_LANGUAGE_MAP)
     )
     virtual_participant_id: str = BRSE_PARTICIPANT_ID
 
@@ -94,7 +95,12 @@ class RoomState(BaseModel):
     created_at: str
     expires_at: str
     participant_limit: int = 8
-    supported_languages: List[str] = ["vi", "en", "ja"]
+    supported_languages: List[MeetingLanguage] = Field(
+        default_factory=lambda: list(SUPPORTED_MEETING_LANGUAGES)
+    )
+    meeting_languages: List[MeetingLanguage] = Field(
+        default_factory=lambda: list(DEFAULT_ROOM_MEETING_LANGUAGES)
+    )
     meeting_mode: MeetingMode = MEETING_MODE_BRSE_RELAY
     interpreter_mode: InterpreterMode = INTERPRETER_MODE_BRSE_PARTICIPANT
     audio_routing: RoomAudioRouting = Field(default_factory=RoomAudioRouting)
@@ -143,13 +149,29 @@ class TranscriptEvent(BaseModel):
     relay_target: Optional[TranscriptTargetRef] = None
 
 
+class ChatMessage(BaseModel):
+    message_id: str
+    room_id: str
+    participant_id: str
+    display_name: str
+    language: Language
+    text: str
+    created_at: str
+    client_event_id: Optional[str] = None
+    sender_id: Optional[str] = None
+    sender_display_name: Optional[str] = None
+    sender_language: Optional[Language] = None
+    sent_at: Optional[str] = None
+
+
 class CreateRoomResponseRoom(BaseModel):
     room_id: str
     state: RoomStatus
     created_at: str
     expires_at: str
     participant_limit: int
-    supported_languages: List[str]
+    supported_languages: List[MeetingLanguage]
+    meeting_languages: List[MeetingLanguage]
     meeting_mode: MeetingMode
     interpreter_mode: InterpreterMode
     audio_routing: RoomAudioRouting
@@ -163,6 +185,12 @@ class CreateRoomResponseJoin(BaseModel):
 class CreateRoomResponse(BaseModel):
     room: CreateRoomResponseRoom
     join: CreateRoomResponseJoin
+
+
+class CreateRoomRequest(BaseModel):
+    meeting_languages: List[str] = Field(
+        default_factory=lambda: list(DEFAULT_ROOM_MEETING_LANGUAGES)
+    )
 
 
 class JoinRoomRequestClient(BaseModel):
@@ -218,6 +246,7 @@ class JoinRoomResponseLivekit(BaseModel):
 class SnapshotData(BaseModel):
     participants: List[ParticipantSnapshot]
     recent_transcripts: List[TranscriptEvent]
+    recent_messages: List[ChatMessage] = Field(default_factory=list)
 
 
 class JoinRoomResponse(BaseModel):
@@ -237,6 +266,7 @@ class RoomSnapshotResponse(BaseModel):
     room: RoomSnapshotResponseRoom
     participants: List[ParticipantSnapshot]
     recent_transcripts: List[TranscriptEvent]
+    recent_messages: List[ChatMessage] = Field(default_factory=list)
 
 
 TestSessionStatus = Literal[
@@ -275,8 +305,8 @@ class CreateMicTestSessionResponse(BaseModel):
 
 
 class CreateTranslationTestRequest(BaseModel):
-    src_lang: Language
-    tgt_lang: Language
+    src_lang: str
+    tgt_lang: str
 
 
 class CreateTranslationTestSessionResponse(BaseModel):

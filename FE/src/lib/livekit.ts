@@ -18,6 +18,7 @@ import type {
   ParticipantSnapshot,
   ParticipantKind,
 } from "../types/api";
+import { isMeetingLanguage } from "./languages";
 import type {
   AudioDeviceOption,
   BrseAudioFeed,
@@ -271,7 +272,7 @@ export function parseBrseTrackName(trackName: string): BrseTrackInfo | null {
   }
 
   const [, speakerId, srcLang, tgtLang] = parts;
-  if (!isLanguage(srcLang) || !isLanguage(tgtLang)) {
+  if (!isMeetingLanguage(srcLang) || !isMeetingLanguage(tgtLang)) {
     return null;
   }
 
@@ -597,10 +598,6 @@ function collectParticipantScreenShares(
       participant,
     });
   });
-}
-
-function isLanguage(input: string): input is "vi" | "en" | "ja" {
-  return input === "vi" || input === "en" || input === "ja";
 }
 
 function compareVideoFeeds(left: VideoFeed, right: VideoFeed): number {

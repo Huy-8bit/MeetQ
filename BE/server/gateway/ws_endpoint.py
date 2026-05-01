@@ -3,7 +3,12 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query
 from server.gateway.app_state import app_state
 from server.gateway.auth import verify_room_token, ExpiredTokenError, InvalidTokenError, TokenRoomMismatchError
-from server.gateway.room_service import InvalidLanguageError, RoomNotFoundError, ParticipantNotFoundError
+from server.gateway.room_service import (
+    InvalidChatMessageError,
+    InvalidLanguageError,
+    RoomNotFoundError,
+    ParticipantNotFoundError,
+)
 from server.events import EventType, build_envelope
 
 router = APIRouter()
@@ -77,7 +82,8 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str, token: str = Qu
         },
         "room": snapshot.room.model_dump(),
         "participants": [p.model_dump() for p in personalized_snapshot.participants],
-        "recent_transcripts": [t.model_dump() for t in personalized_snapshot.recent_transcripts]
+        "recent_transcripts": [t.model_dump() for t in personalized_snapshot.recent_transcripts],
+        "recent_messages": [m.model_dump() for m in personalized_snapshot.recent_messages],
     }
     
     await websocket.send_json(build_envelope("room.snapshot", room_id, snap_payload))
@@ -116,7 +122,7 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str, token: str = Qu
                     try:
                         await app_state.room_service.set_language(room_id, participant_id, new_lang)
                         # `set_language` publishes event, Gateway consumer will fanout.
-                    except InvalidLanguageError:
+                    except InvalidLanguageError as exc:
                         await websocket.send_json({
                             "type": "error",
                             "event_id": event_id,
@@ -124,11 +130,54 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str, token: str = Qu
                             "sent_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
                             "payload": {
                                 "code": "invalid_language",
-                                "message": "language must be one of vi, en, ja"
+                                "message": str(exc) or "language is not allowed for this room"
                             }
                         })
                     except (RoomNotFoundError, ParticipantNotFoundError):
                         pass
+
+                elif msg_type == "chat.send":
+                    try:
+                        await app_state.room_service.send_chat_message(
+                            room_id=room_id,
+                            participant_id=participant_id,
+                            session_id=state_participant.session_id,
+                            text=payload.get("text") if isinstance(payload, dict) else None,
+                            client_event_id=event_id,
+                        )
+                    except InvalidChatMessageError as exc:
+                        await websocket.send_json({
+                            "type": "error",
+                            "event_id": event_id,
+                            "room_id": room_id,
+                            "sent_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                            "payload": {
+                                "code": exc.code,
+                                "message": str(exc) or "invalid chat message",
+                            },
+                        })
+                    except RoomNotFoundError:
+                        await websocket.send_json({
+                            "type": "error",
+                            "event_id": event_id,
+                            "room_id": room_id,
+                            "sent_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                            "payload": {
+                                "code": "room_not_found",
+                                "message": "room no longer exists",
+                            },
+                        })
+                    except ParticipantNotFoundError:
+                        await websocket.send_json({
+                            "type": "error",
+                            "event_id": event_id,
+                            "room_id": room_id,
+                            "sent_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                            "payload": {
+                                "code": "participant_not_found",
+                                "message": "participant no longer active",
+                            },
+                        })
 
                 elif msg_type == "screen_share.start":
                     try:

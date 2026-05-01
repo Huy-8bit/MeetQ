@@ -1,10 +1,16 @@
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi import APIRouter, Body, Depends, Response
 from fastapi.responses import JSONResponse
 from server.gateway.room_service import (
-    RoomService, RoomFullError, InvalidLanguageError, RoomNotFoundError, ParticipantNotFoundError
+    InvalidLanguageError,
+    InvalidMeetingLanguagesError,
+    ParticipantNotFoundError,
+    RoomFullError,
+    RoomNotFoundError,
+    RoomService,
 )
 from server.gateway.dependencies import get_room_service, verify_token_dependency
 from server.models import (
+    CreateRoomRequest,
     CreateRoomResponse,
     RoomSnapshotResponse,
     JoinRoomRequest,
@@ -13,6 +19,7 @@ from server.models import (
     ScreenShareStateResponse,
 )
 from typing import Dict, Any
+from typing import Optional
 
 router = APIRouter()
 
@@ -28,8 +35,15 @@ def _error_response(code: str, message: str, status_code: int = 400, details: di
     return JSONResponse(status_code=status_code, content=err)
 
 @router.post("/api/rooms", response_model=CreateRoomResponse)
-async def create_room(service: RoomService = Depends(get_room_service)):
-    return await service.create_room()
+async def create_room(
+    req: Optional[CreateRoomRequest] = Body(default=None),
+    service: RoomService = Depends(get_room_service),
+):
+    try:
+        payload = req or CreateRoomRequest()
+        return await service.create_room(payload.meeting_languages)
+    except InvalidMeetingLanguagesError as exc:
+        return _error_response("invalid_meeting_languages", str(exc), 422, exc.details)
 
 @router.get("/api/rooms/{room_id}", response_model=RoomSnapshotResponse)
 async def get_room(room_id: str, service: RoomService = Depends(get_room_service)):
@@ -46,8 +60,13 @@ async def join_room(room_id: str, req: JoinRoomRequest, service: RoomService = D
         return _error_response("room_not_found", "Room not found", 404)
     except RoomFullError:
         return _error_response("room_full", "Room is full", 409)
-    except InvalidLanguageError:
-        return _error_response("invalid_language", "Invalid language", 422, {"field": "language"})
+    except InvalidLanguageError as exc:
+        return _error_response(
+            "invalid_language",
+            str(exc) or "Invalid language",
+            422,
+            exc.details or {"field": "language"},
+        )
 
 @router.delete("/api/rooms/{room_id}/leave", status_code=204)
 async def leave_room(

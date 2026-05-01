@@ -40,6 +40,9 @@ class InterpreterDaemon:
         if event_type == EventType.PARTICIPANT_JOINED:
             manager = await self._spawn_manager(room_id)
             if manager is not None:
+                snapshot = await self.room_store.get_room_snapshot(room_id)
+                if snapshot is not None:
+                    await manager.sync_room_context(snapshot.room.meeting_languages)
                 await manager.sync_participant(payload)
             return
 
@@ -48,6 +51,9 @@ class InterpreterDaemon:
             return
 
         if event_type == EventType.PARTICIPANT_UPDATED:
+            snapshot = await self.room_store.get_room_snapshot(room_id)
+            if snapshot is not None:
+                await manager.sync_room_context(snapshot.room.meeting_languages)
             await manager.sync_participant(payload)
             return
 
@@ -72,7 +78,10 @@ class InterpreterDaemon:
             await manager.start()
             snapshot = await self.room_store.get_room_snapshot(room_id)
             if snapshot is not None:
-                manager.bootstrap_participants(snapshot.participants)
+                manager.bootstrap_participants(
+                    snapshot.participants,
+                    meeting_languages=snapshot.room.meeting_languages,
+                )
             return manager
         except Exception:
             logger.exception("Failed to start interpreter manager for room %s", room_id)

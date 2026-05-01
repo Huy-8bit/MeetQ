@@ -16,7 +16,7 @@ Base assumptions:
 - REST base URL local dev: `http://localhost:8000`
 - Gateway WS base URL local dev: `ws://localhost:8000`
 - LiveKit WS URL local dev: `ws://localhost:7880`
-- Supported languages: `vi`, `en`, `ja`
+- Supported languages: `vi`, `en`, `ja`, `zh`, `ko`, `fr`, `es`
 
 ## Screen Share Contract Addendum
 
@@ -189,7 +189,7 @@ Mọi REST error response dùng format này:
 {
   "error": {
     "code": "invalid_language",
-    "message": "language must be one of vi, en, ja",
+    "message": "language must be one of vi, en, ja, zh, ko, fr, es",
     "request_id": "req_01hs8z1b2p",
     "details": {
       "field": "language"
@@ -221,8 +221,17 @@ Tạo room trống.
 ### Request JSON Schema
 
 ```json
-{}
+{
+  "meeting_languages": ["vi", "ja"]
+}
 ```
+
+Rules:
+
+1. `meeting_languages` bắt buộc có đúng 2 phần tử.
+2. 2 ngôn ngữ phải khác nhau.
+3. Chỉ nhận `vi | en | ja | zh | ko | fr | es`.
+4. Nếu omitted, backend mặc định `meeting_languages=["vi", "ja"]` để giữ tương thích flow cũ.
 
 ### Response JSON Schema
 
@@ -234,7 +243,8 @@ Tạo room trống.
     "created_at": "ISO-8601 UTC string",
     "expires_at": "ISO-8601 UTC string",
     "participant_limit": 8,
-    "supported_languages": ["vi", "en", "ja"]
+    "supported_languages": ["vi", "en", "ja", "zh", "ko", "fr", "es"],
+    "meeting_languages": ["vi", "ja"]
   },
   "join": {
     "api_path": "string",
@@ -253,7 +263,8 @@ Tạo room trống.
     "created_at": "2026-04-29T13:00:00.000Z",
     "expires_at": "2026-04-30T13:00:00.000Z",
     "participant_limit": 8,
-    "supported_languages": ["vi", "en", "ja"]
+    "supported_languages": ["vi", "en", "ja", "zh", "ko", "fr", "es"],
+    "meeting_languages": ["vi", "ja"]
   },
   "join": {
     "api_path": "/api/rooms/rm_8f3k2v1m/join",
@@ -282,7 +293,8 @@ Lấy snapshot room khi FE load room page hoặc reconnect.
     "created_at": "ISO-8601 UTC string",
     "expires_at": "ISO-8601 UTC string",
     "participant_limit": 8,
-    "supported_languages": ["vi", "en", "ja"],
+    "supported_languages": ["vi", "en", "ja", "zh", "ko", "fr", "es"],
+    "meeting_languages": ["vi", "ja"],
     "audio_routing": {
       "model": "translated_audio_first",
       "cross_language_remote_audio": "interpreter_track",
@@ -295,7 +307,7 @@ Lấy snapshot room khi FE load room page hoặc reconnect.
     {
       "participant_id": "string",
       "display_name": "string",
-      "language": "vi | en | ja",
+      "language": "vi | en | ja | zh | ko | fr | es",
       "status": "joining | connected | reconnecting",
       "joined_at": "ISO-8601 UTC string"
     }
@@ -307,24 +319,24 @@ Lấy snapshot room khi FE load room page hoặc reconnect.
       "kind": "source | translated",
       "speaker_id": "string",
       "speaker_display_name": "string",
-      "speaker_language": "vi | en | ja",
-      "src_lang": "vi | en | ja",
+      "speaker_language": "vi | en | ja | zh | ko | fr | es",
+      "src_lang": "vi | en | ja | zh | ko | fr | es",
       "text": "string",
       "source_text": "string",
       "translated_text": "string | null",
-      "target_lang": "vi | en | ja | null",
+      "target_lang": "vi | en | ja | zh | ko | fr | es | null",
       "is_final": true,
       "fallback_used": false,
       "audio_track_name": "string | null",
       "speaker": {
         "participant_id": "string",
         "display_name": "string",
-        "language": "vi | en | ja",
-        "source_language": "vi | en | ja"
+        "language": "vi | en | ja | zh | ko | fr | es",
+        "source_language": "vi | en | ja | zh | ko | fr | es"
       },
       "listener": {
         "participant_id": "string",
-        "target_language": "vi | en | ja"
+        "target_language": "vi | en | ja | zh | ko | fr | es"
       },
       "created_at": "ISO-8601 UTC string"
     }
@@ -342,7 +354,8 @@ Lấy snapshot room khi FE load room page hoặc reconnect.
     "created_at": "2026-04-29T13:00:00.000Z",
     "expires_at": "2026-04-30T13:12:54.000Z",
     "participant_limit": 8,
-    "supported_languages": ["vi", "en", "ja"],
+    "supported_languages": ["vi", "en", "ja", "zh", "ko", "fr", "es"],
+    "meeting_languages": ["vi", "ja"],
     "audio_routing": {
       "model": "translated_audio_first",
       "cross_language_remote_audio": "interpreter_track",
@@ -380,7 +393,7 @@ Join room và nhận đủ credentials cho Gateway WS + LiveKit.
 ```json
 {
   "display_name": "string, required, 1..40 chars",
-  "language": "vi | en | ja",
+  "language": "vi | en | ja | zh | ko | fr | es",
   "client": {
     "sdk": "web",
     "version": "string"
@@ -409,7 +422,8 @@ Join room và nhận đủ credentials cho Gateway WS + LiveKit.
     "room_id": "string",
     "state": "active",
     "participant_limit": 8,
-    "supported_languages": ["vi", "en", "ja"],
+    "supported_languages": ["vi", "en", "ja", "zh", "ko", "fr", "es"],
+    "meeting_languages": ["vi", "ja"],
     "audio_routing": {
       "model": "translated_audio_first",
       "cross_language_remote_audio": "interpreter_track",
@@ -421,7 +435,7 @@ Join room và nhận đủ credentials cho Gateway WS + LiveKit.
     "participant_id": "string",
     "session_id": "string",
     "display_name": "string",
-    "language": "vi | en | ja"
+    "language": "vi | en | ja | zh | ko | fr | es"
   },
   "room_token": {
     "token": "JWT string",
@@ -452,7 +466,8 @@ Join room và nhận đủ credentials cho Gateway WS + LiveKit.
     "room_id": "rm_8f3k2v1m",
     "state": "active",
     "participant_limit": 8,
-    "supported_languages": ["vi", "en", "ja"],
+    "supported_languages": ["vi", "en", "ja", "zh", "ko", "fr", "es"],
+    "meeting_languages": ["vi", "ja"],
     "audio_routing": {
       "model": "translated_audio_first",
       "cross_language_remote_audio": "interpreter_track",
@@ -601,7 +616,7 @@ ws://localhost:8000/ws/rooms/rm_8f3k2v1m?token=<gateway-room-jwt>
   "room_id": "string",
   "sent_at": "ISO-8601 UTC string",
   "payload": {
-    "language": "vi | en | ja"
+    "language": "vi | en | ja | zh | ko | fr | es"
   }
 }
 ```
@@ -623,6 +638,10 @@ ws://localhost:8000/ws/rooms/rm_8f3k2v1m?token=<gateway-room-jwt>
 ### FE Usage
 
 Gửi message này khi user đổi language selector trong room. FE phải update local UI ngay optimistic, nhưng nếu server trả `error`, FE phải rollback local state.
+
+Validation:
+
+- `payload.language` phải thuộc `room.meeting_languages` của room hiện tại (không dùng global supported set).
 
 ## Server -> Client Messages
 
@@ -648,12 +667,13 @@ Gửi message này khi user đổi language selector trong room. FE phải updat
       "participant_id": "string",
       "session_id": "string",
       "display_name": "string",
-      "language": "vi | en | ja"
+      "language": "vi | en | ja | zh | ko | fr | es"
     },
     "room": {
       "state": "created | active | empty",
       "participant_limit": 8,
-      "supported_languages": ["vi", "en", "ja"],
+      "supported_languages": ["vi", "en", "ja", "zh", "ko", "fr", "es"],
+      "meeting_languages": ["vi", "ja"],
       "audio_routing": {
         "model": "translated_audio_first",
         "cross_language_remote_audio": "interpreter_track",
@@ -685,7 +705,8 @@ Gửi message này khi user đổi language selector trong room. FE phải updat
     "room": {
       "state": "active",
       "participant_limit": 8,
-      "supported_languages": ["vi", "en", "ja"],
+      "supported_languages": ["vi", "en", "ja", "zh", "ko", "fr", "es"],
+      "meeting_languages": ["vi", "ja"],
       "audio_routing": {
         "model": "translated_audio_first",
         "cross_language_remote_audio": "interpreter_track",
@@ -795,16 +816,16 @@ FE có thể render trực tiếp speaker panel từ các field:
     "speaker": {
       "participant_id": "string",
       "display_name": "string",
-      "language": "vi | en | ja",
-      "source_language": "vi | en | ja"
+      "language": "vi | en | ja | zh | ko | fr | es",
+      "source_language": "vi | en | ja | zh | ko | fr | es"
     },
     "listener": {
       "participant_id": "string",
-      "target_language": "vi | en | ja"
+      "target_language": "vi | en | ja | zh | ko | fr | es"
     },
     "text": "string",
-    "src_lang": "vi | en | ja",
-    "tgt_lang": "vi | en | ja | null",
+    "src_lang": "vi | en | ja | zh | ko | fr | es",
+    "tgt_lang": "vi | en | ja | zh | ko | fr | es | null",
     "source_text": "string",
     "translated_text": "string | null",
     "audio_track_name": "string | null",
@@ -816,8 +837,8 @@ FE có thể render trực tiếp speaker panel từ các field:
       "track_name": "string | null",
       "speaker_id": "string",
       "listener_id": "string",
-      "source_language": "vi | en | ja",
-      "target_language": "vi | en | ja",
+      "source_language": "vi | en | ja | zh | ko | fr | es",
+      "target_language": "vi | en | ja | zh | ko | fr | es",
       "same_language_policy": "human_passthrough"
     },
     "fallback_used": false,
@@ -1029,7 +1050,7 @@ Valid `status`:
   "sent_at": "2026-04-29T13:14:10.020Z",
   "payload": {
     "code": "invalid_language",
-    "message": "language must be one of vi, en, ja"
+    "message": "language must be one of vi, en, ja, zh, ko, fr, es"
   }
 }
 ```

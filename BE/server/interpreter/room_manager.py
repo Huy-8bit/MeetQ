@@ -16,13 +16,15 @@ from server.interpreter.event_publisher import RedisEventPublisher
 from server.interpreter.interpreter_client import InterpreterRealtimeClient
 from server.interpreter.livekit_runtime import LiveKitRuntime
 from server.interpreter.meeting_config import (
-    BRSE_RELAY_LANGUAGE_MAP,
     INTERPRETER_INPUT_QUEUE_MAXSIZE,
     INTERPRETER_INPUT_WARMUP_CHUNKS,
 )
 from server.interpreter.output_router import OutputRouter
 from server.meeting_modes import (
     BRSE_PARTICIPANT_ID,
+    DEFAULT_ROOM_MEETING_LANGUAGES,
+    SUPPORTED_MEETING_LANGUAGES,
+    build_relay_language_map,
     is_active_human_participant,
     relay_target_language,
 )
@@ -30,7 +32,8 @@ from server.meeting_modes import (
 logger = logging.getLogger(__name__)
 
 
-_SUPPORTED_LANGS = {"vi", "en", "ja"}
+_SUPPORTED_LANGS = set(SUPPORTED_MEETING_LANGUAGES)
+_SUPPORTED_LANGS_MESSAGE = ", ".join(SUPPORTED_MEETING_LANGUAGES)
 _INPUT_QUEUE_MAXSIZE = INTERPRETER_INPUT_QUEUE_MAXSIZE
 _INPUT_WARMUP_CHUNKS = INTERPRETER_INPUT_WARMUP_CHUNKS
 
@@ -73,6 +76,7 @@ class RoomInterpreterManager:
         self.speaker_audiences: Dict[str, frozenset[str]] = {}
         self.transcript_state: Dict[str, Dict[str, Any]] = {}
         self.route_failures: Dict[str, tuple[Any, ...]] = {}
+        self.meeting_languages: tuple[str, str] = DEFAULT_ROOM_MEETING_LANGUAGES
         self._closed = False
 
     async def start(self) -> None:
@@ -84,7 +88,12 @@ class RoomInterpreterManager:
             await self._teardown_speaker(speaker_id, keep_participant=True, drop_stream=True)
         await self.runtime.disconnect()
 
-    def bootstrap_participants(self, participants: Iterable[Any]) -> None:
+    def bootstrap_participants(
+        self,
+        participants: Iterable[Any],
+        meeting_languages: Optional[Iterable[str]] = None,
+    ) -> None:
+        self._set_meeting_languages(meeting_languages)
         for participant in participants:
             payload = self._normalize_participant(participant)
             participant_id = payload.get("participant_id")
@@ -93,6 +102,12 @@ class RoomInterpreterManager:
 
         if self.active_streams:
             asyncio.create_task(self._refresh_all_routes())
+
+    async def sync_room_context(self, meeting_languages: Optional[Iterable[str]]) -> None:
+        if not self._set_meeting_languages(meeting_languages):
+            return
+        if self.active_streams:
+            await self._refresh_all_routes()
 
     async def sync_participant(self, participant: Any) -> None:
         payload = self._normalize_participant(participant)
@@ -189,11 +204,22 @@ class RoomInterpreterManager:
                 error_code="invalid_language",
                 error_message=(
                     f"Speaker {speaker_id} does not have a concrete meeting language. "
-                    "BRSE relay requires explicit vi/en/ja selection."
+                    f"BRSE relay requires an explicit platform-supported language: {_SUPPORTED_LANGS_MESSAGE}."
                 ),
             )
 
-        target_lang = relay_target_language(speaker_lang, BRSE_RELAY_LANGUAGE_MAP)
+        if speaker_lang not in self.meeting_languages:
+            return _RoutingResolution(
+                plan=None,
+                error_code="invalid_language",
+                error_message=(
+                    f"Speaker {speaker_id} uses language {speaker_lang}, but room meeting_languages "
+                    f"is {self.meeting_languages[0]}-{self.meeting_languages[1]}."
+                ),
+            )
+
+        relay_map = build_relay_language_map(self.meeting_languages)
+        target_lang = relay_target_language(speaker_lang, relay_map)
         if target_lang is None:
             return _RoutingResolution(
                 plan=None,
@@ -267,6 +293,7 @@ class RoomInterpreterManager:
             model=self.settings.openai_realtime_model,
             src_lang=plan.src_lang,
             tgt_lang=plan.tgt_lang,
+            meeting_languages=list(self.meeting_languages),
             audio_input=audio_input,
         )
         self._bind_client_callbacks(
@@ -349,6 +376,7 @@ class RoomInterpreterManager:
         self.speaker_sources[speaker_id] = plan.src_lang
         self.speaker_targets[speaker_id] = plan.tgt_lang
         self.speaker_audiences[speaker_id] = plan.audience_ids
+        client.meeting_languages = list(self.meeting_languages)
         await client.update_routing(plan.src_lang, plan.tgt_lang)
 
     async def _publish_route_failure(
@@ -700,3 +728,20 @@ class RoomInterpreterManager:
 
     def _is_active_human_participant(self, payload: Dict[str, Any]) -> bool:
         return is_active_human_participant(payload)
+
+    def _set_meeting_languages(self, meeting_languages: Optional[Iterable[str]]) -> bool:
+        if meeting_languages is None:
+            return False
+
+        pair = [lang for lang in meeting_languages if isinstance(lang, str)]
+        if len(pair) != 2 or pair[0] == pair[1]:
+            return False
+        if any(lang not in _SUPPORTED_LANGS for lang in pair):
+            return False
+
+        normalized = (pair[0], pair[1])
+        if normalized == self.meeting_languages:
+            return False
+
+        self.meeting_languages = normalized
+        return True

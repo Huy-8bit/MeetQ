@@ -1,5 +1,405 @@
 # Backend Implementation State
 
+## Turn Update: 2026-05-01 Chat End-to-End Debug Reopen (Kickoff)
+
+- Time: 2026-05-01T15:23:33+07:00
+- Mode: CODE-ONLY
+- Testing scope: minimal targeted verification only; no full test suite; no new tests
+
+### Objective Locked
+
+- Re-debug room chat end-to-end because chat still does not work.
+- Trace FE `chat.send` envelope, gateway websocket/session handling, room-state persistence, `chat.message` broadcast, and FE snapshot/realtime hydration.
+- Fix only chat-path regressions or mismatches without redesigning gateway, room lifecycle, transcript, BRSE/audio, screen-share, host, or moderation flows.
+
+### Mandatory Read Status
+
+- Read backend contract/state/runtime files: `docs/backend/API_CONTRACT.md`, `docs/backend/IMPLEMENTATION_STATE.md`, `BE/server/models.py`, `BE/server/gateway/ws_endpoint.py`, `BE/server/gateway/ws_hub.py`, `BE/server/gateway/room_service.py`, `BE/server/gateway/event_consumer.py`, `BE/server/gateway/room_store.py`.
+- Read FE chat/runtime reference files: `FE/src/lib/ws.ts`, `FE/src/lib/api.ts`, `FE/src/features/room/useMeetingRoom.ts`, `FE/src/pages/RoomPage.tsx`, `FE/src/types/ws.ts`, `FE/src/types/api.ts`, `FE/src/components/ChatPanel.tsx`.
+
+### Current Trace Hypothesis
+
+- Backend currently exposes the expected gateway path: `chat.send` -> `RoomService.send_chat_message(...)` -> Redis `room:{room_id}:chat` -> gateway-control `chat.message` -> room websocket broadcast.
+- Suspected live mismatch is FE send transport, because current FE code sends chat via LiveKit data topic `brse.chat` instead of the backend gateway `chat.send` path.
+- Root cause will be finalized after targeted trace and minimal verification.
+
+## Turn Update: 2026-05-01 Chat End-to-End Debug Reopen (Final Sync)
+
+- Time: 2026-05-01T15:27:25+07:00
+- Status: backend chat path verified; no backend source change required this turn
+
+### Root Cause Confirmed
+
+- Real current root cause was on FE send transport/lifecycle, not the current backend chat handler.
+- FE was sending room chat through LiveKit data topic `brse.chat`, so backend gateway never received `chat.send`.
+- As a result, backend room state could not persist the message, gateway control did not emit canonical `chat.message`, and later snapshots could not hydrate those chat messages.
+
+### Backend Trace Result
+
+- Inbound websocket:
+  - `BE/server/gateway/ws_endpoint.py` has `elif msg_type == "chat.send"`.
+  - It extracts `payload.text`, uses authenticated `participant_id`, and uses the current websocket participant `session_id`.
+- Validation/session guard:
+  - `BE/server/gateway/room_service.py::send_chat_message(...)` trims text, rejects non-string/empty/too-long text, rejects stale session mismatch, disconnected/missing participants, and virtual participants.
+- Persist:
+  - `BE/server/gateway/room_store.py::append_chat_message(...)` appends to Redis key `room:{room_id}:chat`, trims to `chat_limit`, and refreshes TTL.
+- Broadcast:
+  - `RoomService.send_chat_message(...)` publishes `EventType.CHAT_MESSAGE`.
+  - `BE/server/events.py` defines `CHAT_MESSAGE = "chat.message"`.
+  - `BE/server/gateway/event_consumer.py` broadcasts gateway-control messages to all active room sockets.
+- Snapshot hydrate:
+  - `BE/server/models.py` includes `recent_messages` in `SnapshotData` and `RoomSnapshotResponse`.
+  - REST room snapshot, join response, and initial WS `room.snapshot` can project `recent_messages`.
+
+### Backend Files
+
+- Backend source files inspected/verified: `BE/server/models.py`, `BE/server/events.py`, `BE/server/gateway/ws_endpoint.py`, `BE/server/gateway/ws_hub.py`, `BE/server/gateway/room_service.py`, `BE/server/gateway/event_consumer.py`, `BE/server/gateway/room_store.py`.
+- Backend source files changed this turn: none.
+- Backend state doc updated: `docs/backend/IMPLEMENTATION_STATE.md`.
+
+### Frontend Compatibility Fix Summary
+
+- FE now sends gateway websocket `chat.send` instead of LiveKit data for room chat.
+- FE pending message reconciliation uses backend `client_event_id` so canonical `chat.message` replaces the optimistic row.
+- FE chat availability now follows gateway websocket connected state.
+
+### Minimal Verification
+
+- `python -m py_compile BE/server/models.py BE/server/events.py BE/server/gateway/ws_endpoint.py BE/server/gateway/ws_hub.py BE/server/gateway/room_service.py BE/server/gateway/event_consumer.py BE/server/gateway/room_store.py` passed.
+- FE type check was run with `npx tsc -b --pretty false`; chat-related type issue was fixed, but the command still fails on existing non-chat `FE/src/lib/livekit.ts` `track.name` type errors.
+
+### Deferred
+
+- No full test suite and no new tests, per instruction.
+- No runtime browser/manual room smoke was run in this turn.
+- Existing non-chat LiveKit type errors remain deferred.
+
+## Turn Update: 2026-05-01 Platform Language Expansion (Kickoff)
+
+- Time: 2026-05-01T13:49:00+07:00
+- Mode: CODE-ONLY
+- Testing deferred: yes
+
+### Objective Locked
+
+- Expand officially supported backend/platform languages from `vi,en,ja` to `vi,en,ja,zh,ko,fr,es`.
+- Update room contract, join/set-language validation, room snapshot/event serialization, interpreter/BRSE runtime language metadata, and translation-test validation/runtime paths.
+- Preserve existing room flow compatibility for `vi`, `en`, and `ja`.
+
+### Locked Scope
+
+- Source-of-truth language constants and validation across `BE/server/*` and `BE/src/common/lang.py`
+- Room create/join/ws language acceptance and room `supported_languages` / `meeting_languages`
+- Interpreter/BRSE routing metadata, language-name rendering, and prompt/instruction builders
+- Translation-test/fallback/realtime guards that still assume only `vi/en/ja`
+- Runtime-facing docs sync, especially this state file
+
+### Initial Findings
+
+- Gateway room models and `meeting_modes.py` still hardcode supported meeting languages to `vi/en/ja`.
+- `BE/src/common/lang.py` still limits supported codes, language names, and default routing/instruction text to `vi/en/ja`.
+- Interpreter room manager still rejects speaker languages outside `vi/en/ja`.
+- Translation-test REST validation still hardcodes `vi/en/ja`.
+
+### Planned Batch Order
+
+- Batch 1: introduce shared 7-language source-of-truth and widen room/test-session validation and schemas.
+- Batch 2: widen interpreter/BRSE metadata, routing guards, and prompt/instruction rendering for new codes.
+- Batch 3: sync backend docs/contracts/state to reflect official 7-language support and note remaining runtime limitations if any.
+
+## Turn Update: 2026-05-01 Platform Language Expansion (Post-Batch 1)
+
+- Time: 2026-05-01T13:54:22+07:00
+- Status: source-of-truth language set and primary gateway validation/state expansion completed
+
+### Language Set Added
+
+- Newly added platform-supported codes: `zh`, `ko`, `fr`, `es`
+- Effective non-auto room/platform set is now `vi,en,ja,zh,ko,fr,es`
+
+### Backend Areas Expanded
+
+- `BE/src/common/lang.py`
+  - widened supported code constants and language-name metadata
+  - added default target mapping entries for `zh/ko/fr/es`
+  - widened heuristic language detection path so new codes do not fall through unknown metadata handling
+- `BE/server/meeting_modes.py`
+  - widened room-level supported meeting language source-of-truth to 7 languages
+  - preserved default fallback room pair as `vi` + `ja` for compatibility
+- `BE/server/models.py`
+  - widened `Language` / `MeetingLanguage` literals
+  - room state and response models now serialize 7-language `supported_languages`
+  - room create input now defaults to the legacy room pair when omitted instead of forcing empty invalid state
+- `BE/server/gateway/room_service.py`
+  - room create validation now accepts meeting-language pairs from the 7-language set
+  - empty/omitted meeting-language input falls back to the legacy default pair for backward-compatible room creation
+- `BE/server/gateway/api_test_sessions.py`
+  - translation-test validation now accepts explicit `zh/ko/fr/es` source/target codes
+
+### Validation / Routing Notes
+
+- Room create/join/set-language state path is now ready to accept the expanded language set at the model and meeting-language validation layer.
+- Translation-test REST validation no longer hardcodes `vi/en/ja`.
+
+### Testing
+
+- Deferred by instruction; no tests executed.
+
+## Turn Update: 2026-05-01 Backend Chat Runtime Fix (Final Tail Sync)
+
+- Time: 2026-05-01T15:18:06+07:00
+- Final state file sync before turn end.
+- Backend chat root cause fixed: `chat.send` was missing in WS dispatch, chat state/model were missing, `chat.message` was never published, and snapshots had no `recent_messages`.
+- Files updated this turn: `BE/server/models.py`, `BE/server/events.py`, `BE/server/gateway/room_store.py`, `BE/server/gateway/room_service.py`, `BE/server/gateway/ws_endpoint.py`, `docs/backend/IMPLEMENTATION_STATE.md`.
+- Recent chat strategy: Redis room list `room:{room_id}:chat`, trimmed to 100 messages, TTL refreshed with room state and deleted with room cleanup.
+- Event path: WS `chat.send` -> `RoomService.send_chat_message(...)` -> Redis append -> gateway control publish `chat.message` -> existing consumer room broadcast.
+- Session safety: Redis participant state is re-read and current `session_id` must match; disconnected/missing/virtual participants cannot send chat.
+- Duplicate handling: inbound envelope `event_id` is stored as `client_event_id`; repeated event ids in recent history do not append/publish a second message.
+- Testing deferred by instruction; no tests, smoke runs, or verification commands executed.
+
+## Turn Update: 2026-05-01 Backend Chat Runtime Fix (Final Sync)
+
+- Time: 2026-05-01T15:18:06+07:00
+- Scope confirmation: backend chat runtime path now supports `chat.send` -> validate -> persist recent room chat -> broadcast canonical `chat.message` -> hydrate snapshots with `recent_messages`.
+
+### Files Updated
+
+- `BE/server/models.py`
+- `BE/server/events.py`
+- `BE/server/gateway/room_store.py`
+- `BE/server/gateway/room_service.py`
+- `BE/server/gateway/ws_endpoint.py`
+- `docs/backend/IMPLEMENTATION_STATE.md`
+
+### Root Cause / Fix Summary
+
+- Root cause was missing backend chat runtime wiring:
+  - no `chat.send` WS handler
+  - no chat message model
+  - no Redis recent chat state
+  - no `chat.message` publication/broadcast path
+  - no `recent_messages` snapshot projection
+- Fixed with a dedicated `ChatMessage` model and `RoomService.send_chat_message(...)` runtime handler.
+
+### Validation / Session Safety
+
+- `chat.send` payload must contain string `payload.text`.
+- Text is trimmed; empty messages are rejected with `empty_chat_message`.
+- Text length is capped at 2000 characters with `chat_message_too_long`.
+- Handler re-reads Redis participant state and requires matching current `session_id`.
+- Missing/disconnected participants are rejected and cannot append/broadcast chat.
+- Virtual participants are rejected from human chat send path.
+
+### Broadcast / Snapshot / State Strategy
+
+- Successful sends append to Redis list `room:{room_id}:chat`.
+- List is trimmed to the recent 100 messages and shares room TTL refresh/delete cleanup.
+- Service publishes `chat.message` on the existing gateway control channel.
+- Existing `event_consumer.py` gateway-control fanout broadcasts to every active socket in the room, including sender.
+- REST room snapshot, join response snapshot, and initial WS `room.snapshot` include `recent_messages`.
+
+### Duplicate Handling
+
+- The inbound envelope `event_id` is stored as `client_event_id` on the recent message.
+- If the same event id is seen again while still in recent room history, the service returns the existing message and does not append or publish another `chat.message`.
+
+### Testing
+
+- Deferred by instruction; no tests, smoke runs, or verification commands executed.
+
+## Turn Update: 2026-05-01 Platform Language Expansion (Post-Batch 2)
+
+- Time: 2026-05-01T13:57:41+07:00
+- Status: interpreter/BRSE runtime metadata and routing guards widened for the 7-language platform set
+
+### Runtime / Routing Areas Expanded
+
+- `BE/server/interpreter/meeting_config.py`
+  - BRSE prompt context now resolves human-readable names for `zh`, `ko`, `fr`, `es`
+  - instruction text no longer assumes only a bilingual `vi/en/ja` world
+- `BE/server/interpreter/room_manager.py`
+  - speaker-language routing guard now accepts the full supported room language set
+  - deterministic relay mapping continues to derive target language from room `meeting_languages` instead of a hardcoded 3-language branch
+  - room-context sync rejects invalid meeting-language pairs outside the supported 7-language set
+- `BE/src/realtime/client.py`
+  - runtime-facing descriptions now reflect the expanded language support set
+
+### Remaining Runtime Limitation
+
+- Non-room auto-detection paths in `BE/src/common/lang.py` are still heuristic/best-effort for `zh/ko/fr/es`; this turn expands code-path support and metadata, but does not add pair-specific quality tuning.
+
+### Testing
+
+- Deferred by instruction; no tests executed.
+
+## Turn Update: 2026-05-01 Platform Language Expansion (Final Sync)
+
+- Time: 2026-05-01T13:57:41+07:00
+- Scope confirmation: backend/runtime contract now officially recognizes `vi,en,ja,zh,ko,fr,es` across room validation, room snapshots/events, BRSE/interpreter prompt metadata, and translation-test validation.
+
+### Files Updated
+
+- `BE/src/common/lang.py`
+- `BE/src/realtime/client.py`
+- `BE/server/meeting_modes.py`
+- `BE/server/models.py`
+- `BE/server/gateway/room_service.py`
+- `BE/server/gateway/api_test_sessions.py`
+- `BE/server/interpreter/meeting_config.py`
+- `BE/server/interpreter/room_manager.py`
+- `docs/backend/API_CONTRACT.md`
+- `docs/backend/GATEWAY_DESIGN.md`
+- `docs/backend/INTERPRETER_DESIGN.md`
+- `docs/backend/IMPLEMENTATION_STATE.md`
+
+### Validation / Contract / State Coverage
+
+- Room create validation now accepts meeting-language pairs drawn from `vi,en,ja,zh,ko,fr,es`, with omitted pair defaulting to legacy `["vi", "ja"]` for compatibility.
+- Join-room language validation and participant language update validation continue to enforce membership in room `meeting_languages`, which can now be any valid pair from the 7-language platform set.
+- Room state, participant state, transcript event models, and room snapshot serialization now accept the new language codes without schema rejection.
+- `supported_languages` contract examples/docs now reflect `["vi", "en", "ja", "zh", "ko", "fr", "es"]`.
+
+### Runtime Limitations Still Explicit
+
+- This turn does not tune language-pair-specific model quality or bespoke prompt styles for `zh/ko/fr/es`; it focuses on end-to-end backend/runtime support, validation, serialization, and routing compatibility.
+
+### Testing
+
+- Deferred by instruction; no tests executed.
+
+## Turn Update: 2026-05-01 BRSE Relay Audio InvalidState Stabilization (Kickoff)
+
+- Time: 2026-05-01T18:05:00+07:00
+- Mode: CODE-ONLY
+- Testing deferred: yes
+
+### Objective Locked
+
+- Fix BRSE relay audio output instability for long utterances causing LiveKit `InvalidState - failed to capture frame`.
+- Harden `OutputRouter` lifecycle so `capture_frame` never races with reset/clear/unpublish/cleanup on stale source state.
+- Keep transcript path unchanged while improving audio output robustness.
+
+### Root Cause Hypothesis (Current)
+
+- `OutputRouter` capture path currently lacks strict per-route serialization.
+- `capture_pcm`/`flush`/`clear_queue`/`_reset_track` can interleave via concurrent tasks (`response.audio.delta`, `response.audio.done`, status transitions), allowing `capture_frame` on source state that is already resetting or released.
+- Long utterances increase chunk count and amplify this race window.
+
+### Planned Fix Scope
+
+- Primary: `BE/server/interpreter/output_router.py`
+- Minimal touch outside router only if required by type/lifecycle plumbing.
+
+## Turn Update: 2026-05-01 BRSE Relay Audio InvalidState Stabilization (Post-Major)
+
+- Time: 2026-05-01T18:20:00+07:00
+- Status: core router lifecycle hardening completed
+
+### Root Cause Confirmation (This Turn)
+
+- Confirmed `OutputRouter` had no strict per-route serialization for concurrent operations coming from runtime callbacks:
+  - `response.audio.delta` -> `capture_pcm`
+  - `response.audio.done` -> `flush`
+  - status transition/cancel path -> `clear_queue`
+  - failure path -> track reset/recreate
+- Under longer utterances (more chunks), these operations can overlap and hit stale/invalid `rtc.AudioSource` state, producing repeated `InvalidState - failed to capture frame`.
+
+### Fix Strategy Applied
+
+- Added per-router async operation lock (`_op_lock`) to serialize critical output lifecycle operations.
+- Introduced explicit source generation tracking for observability and stale-state safety.
+- Moved track/source ensure path to locked internal method (`_ensure_track_locked`) and increased source queue budget (`queue_size_ms=6000`) for longer responses.
+- Reworked capture failure handling:
+  - mark current state inactive immediately on capture failure
+  - execute reset/recreate in serialized locked path (`_reset_track_locked`)
+  - block continued capture on stale state
+- Hardened clear-queue behavior:
+  - buffer clear + deferred source queue clear guarded by lock
+  - avoids direct unsynchronized `source.clear_queue()` racing capture path
+- Hardened shutdown path to serialize release with in-flight operations.
+
+### Output Lifecycle / Guards Added
+
+- Serialized operations: ensure, capture, flush, reset, clear-queue apply, shutdown.
+- Stale-state guard in capture path now checks active/current state before frame push.
+- Reset path now guarantees release of old state before creating a new state and prevents chunks from writing into released source.
+
+### Files Updated (This Turn)
+
+- `BE/server/interpreter/output_router.py`
+- `docs/backend/IMPLEMENTATION_STATE.md`
+
+## Turn Update: 2026-05-01 BRSE Relay Audio InvalidState Stabilization (Final Sync)
+
+- Time: 2026-05-01T18:24:00+07:00
+- Scope confirmation: BRSE relay audio output lifecycle hardened primarily in `OutputRouter` without changing transcript path behavior.
+- Reset/recreate strategy is now serialized and state-safe, reducing repeated `InvalidState` loops under long utterance chunk streams.
+- Added observability for source generation and reset reasons to ease next-round runtime diagnosis.
+- Testing status: deferred by instruction (no tests executed).
+
+## Turn Update: 2026-05-01 Meeting Language Pair Semantics (Kickoff)
+
+- Time: 2026-05-01T16:05:00+07:00
+- Mode: CODE-ONLY
+- Testing deferred: yes
+
+### Objective Locked
+
+- Add explicit room-level meeting language pair (exactly 2 languages) into create/get/join/ws contracts and runtime state.
+- Enforce participant language validation against room meeting pair on join and language updates.
+- Drive BRSE/interpreter target-language routing context from room-level pair instead of generic supported-language set.
+
+### Planned Change Scope
+
+- `BE/server/models.py`
+- `BE/server/gateway/api_rooms.py`
+- `BE/server/gateway/room_service.py`
+- `BE/server/gateway/ws_endpoint.py`
+- `BE/server/gateway/event_consumer.py` (only if contract fan-out adjustments needed)
+- `BE/server/gateway/room_store.py` (if snapshot/state compatibility updates needed)
+- `BE/server/interpreter/room_manager.py`
+- `BE/server/interpreter/interpreter_client.py`
+- `BE/server/interpreter/meeting_config.py`
+- docs contract/design sync files
+
+## Turn Update: 2026-05-01 Meeting Language Pair Semantics (Post-Major)
+
+- Time: 2026-05-01T16:30:00+07:00
+- Status: core implementation completed
+
+### Backend Contract + State Changes
+
+- Added explicit `meeting_languages` (room-level pair) to backend room models and room responses/snapshots.
+- Added create-room payload contract with `meeting_languages` input and strict validation (exactly 2, distinct, subset of `vi|en|ja`).
+- Kept `supported_languages` as capability set for compatibility.
+
+### Gateway Behavior Changes
+
+- `POST /api/rooms` now accepts body `{ "meeting_languages": [...] }` and returns `invalid_meeting_languages` on invalid pair.
+- Join flow now validates participant `language` against room `meeting_languages` (rejects `auto` and non-pair language).
+- WebSocket `set_language` now validates against room `meeting_languages` and returns pair-aware error message.
+- Room snapshot projection now includes `meeting_languages` from persisted `RoomState`.
+
+### Interpreter Runtime Changes
+
+- Interpreter manager now receives and stores room-level `meeting_languages` context from room snapshot.
+- Routing resolution now computes relay target from room pair mapping ("language còn lại trong pair") instead of static global map.
+- If speaker language is outside room pair, runtime publishes deterministic routing error and does not build invalid route.
+- Realtime interpreter instructions now include explicit room pair context text for BRSE relay behavior.
+
+### Docs Synced
+
+- `docs/backend/API_CONTRACT.md`
+- `docs/backend/GATEWAY_DESIGN.md`
+- `docs/backend/INTERPRETER_DESIGN.md`
+
+## Turn Update: 2026-05-01 Meeting Language Pair Semantics (Final Sync)
+
+- Time: 2026-05-01T16:36:00+07:00
+- Scope confirmation: explicit room-level meeting pair semantics implemented across models, create/join/ws validation, and interpreter routing context.
+- `supported_languages` preserved; `meeting_languages` is authoritative for participant language acceptance and BRSE route direction.
+- Testing status: deferred by instruction (no test execution).
+
 ## Turn Update: 2026-05-01 Room Create 500 Hotfix (JSON Serialization)
 
 - Time: 2026-05-01T15:26:00+07:00
@@ -551,3 +951,98 @@
 ## Deferred Testing
 
 - Per instruction, no tests, smoke runs, or runtime verification will be executed in this turn.
+
+## Turn Update: 2026-05-01 Backend Chat Runtime Fix (Kickoff)
+
+- Time: 2026-05-01T15:15:12+07:00
+- Mode: CODE-ONLY
+- Testing deferred: yes
+
+### Objective Locked
+
+- Fix room chat end-to-end on backend runtime path only.
+- Support `chat.send` inbound WS messages, persist recent chat in room Redis state, broadcast canonical `chat.message`, and hydrate snapshots with `recent_messages`.
+- Preserve existing create/join/leave, websocket lifecycle, transcript/BRSE, and screen-share flows.
+
+### Mandatory Read Status
+
+- Read backend contract/design/state and primary runtime files:
+  - `docs/backend/API_CONTRACT.md`
+  - `docs/backend/GATEWAY_DESIGN.md`
+  - `docs/backend/IMPLEMENTATION_STATE.md`
+  - `BE/server/models.py`
+  - `BE/server/gateway/ws_endpoint.py`
+  - `BE/server/gateway/ws_hub.py`
+  - `BE/server/gateway/room_service.py`
+  - `BE/server/gateway/event_consumer.py`
+  - `BE/server/gateway/room_store.py`
+- Read FE contract reference only:
+  - `FE/src/lib/ws.ts`
+  - `FE/src/features/room/useMeetingRoom.ts`
+  - `FE/src/types/ws.ts`
+  - `FE/src/types/api.ts`
+
+### Root Cause Confirmed
+
+- Backend has no `chat.send` handler in `BE/server/gateway/ws_endpoint.py`.
+- Backend has no stable chat message model in `BE/server/models.py`.
+- Room Redis state has no recent chat list/key and snapshots only include `recent_transcripts`.
+- No runtime path publishes/broadcasts `chat.message`, so FE optimistic chat is never reconciled by a canonical backend event.
+
+### Planned Runtime Fix
+
+- Add `ChatMessage` model and include `recent_messages` in REST/join/WS snapshot models.
+- Add Redis room-state chat list in `RoomStore`, trimmed to a bounded recent window and covered by the existing room TTL refresh/delete lifecycle.
+- Add `RoomService.send_chat_message(...)` with trim, empty/length validation, active participant/session validation, persist, and publish `chat.message`.
+- Wire `chat.send` in WS endpoint and return usable `error` envelopes for invalid payload/session/participant failures.
+
+## Turn Update: 2026-05-01 Backend Chat Runtime Fix (Post-Batch 1)
+
+- Time: 2026-05-01T15:16:47+07:00
+- Status: core backend chat runtime path implemented
+
+### Root Cause Fixed
+
+- Added missing inbound WS `chat.send` dispatch in `BE/server/gateway/ws_endpoint.py`.
+- Added missing stable `ChatMessage` backend model in `BE/server/models.py`.
+- Added missing room-scoped recent chat persistence in `BE/server/gateway/room_store.py`.
+- Added missing chat service handler and canonical `chat.message` publication in `BE/server/gateway/room_service.py`.
+
+### Inbound / Outbound Event Path
+
+- Inbound:
+  - browser sends WS envelope `type = chat.send`
+  - `ws_endpoint.py` extracts `payload.text`
+  - `RoomService.send_chat_message(...)` validates text and session-owned participant state
+- Outbound:
+  - service appends the canonical message to room Redis state
+  - service publishes `chat.message` to the existing gateway control channel
+  - `event_consumer.py` existing gateway-control broadcast path fans it out to all sockets in the room, including sender
+
+### State Strategy
+
+- Recent chat is stored as Redis list key `room:{room_id}:chat`.
+- Messages are appended oldest-to-newest with `RPUSH` and trimmed with `LTRIM` to a bounded recent window.
+- Existing room TTL refresh now also refreshes the chat key.
+- Existing room delete now removes the chat key.
+
+### Snapshot Hydration
+
+- `SnapshotData` and `RoomSnapshotResponse` now include `recent_messages`.
+- REST room snapshot, join response snapshot, and initial WS `room.snapshot` can hydrate the FE chat panel from Redis recent chat history.
+
+### Testing
+
+- Deferred by instruction; no tests executed.
+
+## Turn Update: 2026-05-01 Backend Chat Runtime Fix (Final End Sync)
+
+- Time: 2026-05-01T15:18:06+07:00
+- Final state file sync before turn end.
+- Backend chat root cause fixed: `chat.send` was missing in WS dispatch, chat state/model were missing, `chat.message` was never published, and snapshots had no `recent_messages`.
+- Files updated this turn: `BE/server/models.py`, `BE/server/events.py`, `BE/server/gateway/room_store.py`, `BE/server/gateway/room_service.py`, `BE/server/gateway/ws_endpoint.py`, `docs/backend/IMPLEMENTATION_STATE.md`.
+- Recent chat strategy: Redis room list `room:{room_id}:chat`, trimmed to 100 messages, TTL refreshed with room state and deleted with room cleanup.
+- Event path: WS `chat.send` -> `RoomService.send_chat_message(...)` -> Redis append -> gateway control publish `chat.message` -> existing consumer room broadcast.
+- Session safety: Redis participant state is re-read and current `session_id` must match; disconnected/missing/virtual participants cannot send chat.
+- Duplicate handling: inbound envelope `event_id` is stored as `client_event_id`; repeated event ids in recent history do not append/publish a second message.
+- Testing deferred by instruction; no tests, smoke runs, or verification commands executed.

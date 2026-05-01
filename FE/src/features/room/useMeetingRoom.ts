@@ -2,6 +2,10 @@ import { startTransition, useEffect, useRef, useState } from "react";
 import { api, leaveRoomBestEffort, ApiError } from "../../lib/api";
 import { setRoomAudioOutputDevice } from "../../lib/audioOutput";
 import {
+  formatMeetingLanguagePair,
+  resolveMeetingLanguages,
+} from "../../lib/languages";
+import {
   bindRoomRefresh,
   buildMediaSnapshot,
   connectLiveKit,
@@ -24,7 +28,10 @@ import {
   retainGatewaySocket,
 } from "../../lib/ws";
 import type {
+  ChatMessage,
+  RoomChatMessage,
   Language,
+  MeetingLanguage,
   ParticipantSnapshot,
   RoomSnapshotResponse,
   ScreenShareTrackInfo,
@@ -38,10 +45,14 @@ import type {
   VideoFeed,
 } from "../../types/livekit";
 import type {
+  ChatMessageEvent,
   ErrorEvent,
+  ModerationForceMutedEvent,
+  ModerationParticipantMutedEvent,
   ParticipantJoinedEvent,
   ParticipantLeftEvent,
   ParticipantUpdatedEvent,
+  RoomHostChangedEvent,
   RoomSnapshotEvent,
   ScreenShareStartedEvent,
   ScreenShareStoppedEvent,
@@ -50,7 +61,7 @@ import type {
   TranscriptPartialEvent,
 } from "../../types/ws";
 import type { RoomSession } from "../../state/session";
-import type { LocalTrack, LocalVideoTrack } from "livekit-client";
+import { type LocalTrack, type LocalVideoTrack } from "livekit-client";
 import {
   hydrateTranscriptEntries,
   mergeTranscriptCollections,
@@ -137,6 +148,28 @@ export function useMeetingRoom({
   const [audioOutputError, setAudioOutputError] = useState<string | null>(null);
   const [isLeaving, setIsLeaving] = useState(false);
 
+  // ─── Chat state ──────────────────────────────────────────────────────────────
+  const [chatMessages, setChatMessages] = useState<RoomChatMessage[]>(() =>
+    normalizeChatMessages(session?.snapshot.recent_messages ?? initialRoom?.recent_messages ?? []),
+  );
+  const [chatError, setChatError] = useState<string | null>(null);
+  const [isSendingChat, setIsSendingChat] = useState(false);
+
+  // ─── Host state ─────────────────────────────────────────────────────────────
+  const [hostParticipantId, setHostParticipantId] = useState<string | null>(() => {
+    const snapshotHost = (initialRoom?.room as { host_participant_id?: string | null })?.host_participant_id ?? null;
+    if (snapshotHost) return snapshotHost;
+    const hostFromParticipants = (initialRoom?.participants ?? session?.snapshot.participants ?? []).find(
+      (p) => p.is_host,
+    );
+    return hostFromParticipants?.participant_id ?? null;
+  });
+
+  // ─── Moderation state ───────────────────────────────────────────────────────
+  const [isMutedByHost, setIsMutedByHost] = useState(false);
+  const [isMutingParticipant, setIsMutingParticipant] = useState<string | null>(null);
+  const [moderationError, setModerationError] = useState<string | null>(null);
+
   const gatewayRef = useRef<GatewaySocket | null>(null);
   const livekitRoomRef = useRef<ReturnType<typeof createMeetingRoom> | null>(
     null,
@@ -153,6 +186,7 @@ export function useMeetingRoom({
   const sessionInvalidatedRef = useRef(onSessionInvalidated);
   const refreshMediaRef = useRef<(() => void) | null>(null);
   const audioRoutingRef = useRef(session?.room.audio_routing ?? roomMeta?.audio_routing);
+  const roomMetaRef = useRef(roomMeta);
   const localAudioTrackRef = useRef<LocalTrack | null>(null);
   const localScreenTrackRef = useRef<LocalVideoTrack | null>(null);
   const localScreenTrackCleanupRef = useRef<(() => void) | null>(null);
@@ -161,6 +195,8 @@ export function useMeetingRoom({
   const selectedAudioInputDeviceIdRef = useRef(selectedAudioInputDeviceId);
   const selectedAudioOutputDeviceIdRef = useRef(selectedAudioOutputDeviceId);
   const isSwitchingAudioInputRef = useRef(isSwitchingAudioInput);
+  const isMutedByHostRef = useRef(false);
+  const pendingChatEventIdsRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     sessionInvalidatedRef.current = onSessionInvalidated;
@@ -179,6 +215,10 @@ export function useMeetingRoom({
   }, [roomMeta?.audio_routing, session?.room.audio_routing]);
 
   useEffect(() => {
+    roomMetaRef.current = roomMeta;
+  }, [roomMeta]);
+
+  useEffect(() => {
     isScreenSharingRef.current = isScreenSharing;
   }, [isScreenSharing]);
 
@@ -195,12 +235,19 @@ export function useMeetingRoom({
   }, [isSwitchingAudioInput]);
 
   useEffect(() => {
+    isMutedByHostRef.current = isMutedByHost;
+  }, [isMutedByHost]);
+
+  useEffect(() => {
     if (!initialRoom || session) {
       return;
     }
 
     setRoomMeta(initialRoom.room);
     setParticipantsById(mapParticipants(initialRoom.participants));
+    setChatMessages(normalizeChatMessages(initialRoom.recent_messages ?? []));
+    setChatError(null);
+    setIsSendingChat(false);
     startTransition(() => {
       setTranscripts(
         hydrateTranscriptEntries(initialRoom.recent_transcripts, null),
@@ -244,6 +291,14 @@ export function useMeetingRoom({
       setAudioOutputSupported(false);
       setAudioOutputError(null);
       setIsLeaving(false);
+      setChatMessages([]);
+      setChatError(null);
+      setIsSendingChat(false);
+      pendingChatEventIdsRef.current.clear();
+      setHostParticipantId(null);
+      setIsMutedByHost(false);
+      setIsMutingParticipant(null);
+      setModerationError(null);
       void setRoomAudioOutputDevice("").catch(() => undefined);
       refreshMediaRef.current = null;
       return;
@@ -254,6 +309,9 @@ export function useMeetingRoom({
     manualShutdownRef.current = false;
     setConnectionError(null);
     setMediaError(null);
+    setChatError(null);
+    setIsSendingChat(false);
+    pendingChatEventIdsRef.current.clear();
     setAudioOutputSupported(supportsAudioOutputSelection());
     setGatewayState("connecting");
     setLivekitState("connecting");
@@ -264,6 +322,8 @@ export function useMeetingRoom({
       expires_at: current?.expires_at || session.room.expires_at,
       participant_limit: session.room.participant_limit,
       supported_languages: session.room.supported_languages,
+      meeting_languages:
+        resolveMeetingLanguages(session.room.meeting_languages, session.room.supported_languages),
       meeting_mode: session.room.meeting_mode ?? current?.meeting_mode,
       interpreter_mode: session.room.interpreter_mode ?? current?.interpreter_mode,
       audio_routing: session.room.audio_routing ?? current?.audio_routing,
@@ -276,6 +336,9 @@ export function useMeetingRoom({
       language: session.participant.language,
     });
     setParticipantsById(mapParticipants(session.snapshot.participants));
+    setChatMessages(
+      normalizeChatMessages(session.snapshot.recent_messages ?? initialRoom?.recent_messages ?? []),
+    );
     startTransition(() => {
       setTranscripts(
         hydrateTranscriptEntries(
@@ -357,7 +420,6 @@ export function useMeetingRoom({
         setLivekitState(state);
       }
     });
-
     void (async () => {
       try {
         await gateway.connect();
@@ -826,6 +888,19 @@ export function useMeetingRoom({
       return;
     }
 
+    const meetingLanguages = resolveMeetingLanguages(
+      roomMeta?.meeting_languages,
+      roomMeta?.supported_languages,
+    );
+    if (!meetingLanguages.includes(nextLanguage as MeetingLanguage)) {
+      setConnectionError(
+        meetingLanguages.length === 2
+          ? `Language must match the room meeting languages: ${formatMeetingLanguagePair(meetingLanguages)}.`
+          : "Room meeting language pair is unavailable. Reload room snapshot or ask the host to recreate the room.",
+      );
+      return;
+    }
+
     pendingLanguageRef.current = {
       previous: currentSelf.language,
       requested: nextLanguage,
@@ -886,6 +961,18 @@ export function useMeetingRoom({
       case "interpreter.status":
         applyInterpreterStatus(event);
         return;
+      case "chat.message":
+        applyChatMessage(event);
+        return;
+      case "room.host_changed":
+        applyHostChanged(event);
+        return;
+      case "moderation.force_muted":
+        applyForceMuted(event);
+        return;
+      case "moderation.participant_muted":
+        applyParticipantMuted(event);
+        return;
       case "error":
         applyGatewayError(event);
         return;
@@ -906,6 +993,10 @@ export function useMeetingRoom({
       expires_at: current?.expires_at || new Date().toISOString(),
       participant_limit: event.payload.room.participant_limit,
       supported_languages: event.payload.room.supported_languages,
+      meeting_languages: resolveMeetingLanguages(
+        event.payload.room.meeting_languages,
+        event.payload.room.supported_languages,
+      ),
       meeting_mode: event.payload.room.meeting_mode ?? current?.meeting_mode,
       interpreter_mode:
         event.payload.room.interpreter_mode ?? current?.interpreter_mode,
@@ -925,6 +1016,27 @@ export function useMeetingRoom({
         ),
       );
     });
+
+    // Host state from snapshot
+    const snapshotHostId = event.payload.host_participant_id ?? null;
+    const hostFromParticipant = event.payload.participants.find((p) => p.is_host);
+    setHostParticipantId(snapshotHostId || hostFromParticipant?.participant_id || null);
+
+    // Chat messages from snapshot
+    const snapshotMessages = event.payload.recent_messages ?? [];
+    if (snapshotMessages.length > 0) {
+      setChatMessages((current) =>
+        mergeRoomChatMessages(current, normalizeChatMessages(snapshotMessages)),
+      );
+    }
+
+    // Self muted-by-host state from snapshot
+    const selfFromSnapshot = event.payload.participants.find(
+      (p) => p.participant_id === event.payload.self.participant_id,
+    );
+    if (selfFromSnapshot?.muted_by_host) {
+      handleForceMuteLocal();
+    }
   }
 
   function applyParticipantJoined(event: ParticipantJoinedEvent): void {
@@ -955,6 +1067,11 @@ export function useMeetingRoom({
           }
         : current,
     );
+
+    // Track host from joined event
+    if (event.payload.is_host) {
+      setHostParticipantId(event.payload.participant_id);
+    }
   }
 
   function applyParticipantUpdated(event: ParticipantUpdatedEvent): void {
@@ -976,6 +1093,8 @@ export function useMeetingRoom({
           is_screen_sharing:
             event.payload.is_screen_sharing ?? existing?.is_screen_sharing ?? false,
           screen_share: event.payload.screen_share ?? existing?.screen_share ?? null,
+          is_host: event.payload.is_host ?? existing?.is_host,
+          muted_by_host: event.payload.muted_by_host ?? existing?.muted_by_host,
         },
       };
     });
@@ -1106,11 +1225,185 @@ export function useMeetingRoom({
   }
 
   function applyGatewayError(event: ErrorEvent): void {
+    if (event.event_id && pendingChatEventIdsRef.current.has(event.event_id)) {
+      pendingChatEventIdsRef.current.delete(event.event_id);
+      setChatMessages((current) =>
+        markRoomChatDeliveryStatus(current, event.event_id, "failed"),
+      );
+      setChatError(event.payload.message || "Failed to send chat message.");
+      setIsSendingChat(false);
+      return;
+    }
+
     if (pendingLanguageRef.current) {
       rollbackLanguage();
     }
 
+    if (event.payload.code === "invalid_language") {
+      const meetingLanguages = resolveMeetingLanguages(
+        roomMetaRef.current?.meeting_languages,
+        roomMetaRef.current?.supported_languages,
+      );
+      setConnectionError(
+        meetingLanguages.length === 2
+          ? `Language must match the room meeting languages: ${formatMeetingLanguagePair(meetingLanguages)}.`
+          : "Language must match the room meeting languages for this room.",
+      );
+      return;
+    }
+
     setConnectionError(event.payload.message);
+  }
+
+  // ─── Chat handlers ────────────────────────────────────────────────────────
+
+  function applyChatMessage(event: ChatMessageEvent): void {
+    const messages = normalizeChatMessages([event.payload]);
+    for (const message of messages) {
+      if (message.client_event_id) {
+        pendingChatEventIdsRef.current.delete(message.client_event_id);
+      }
+    }
+
+    setChatMessages((current) =>
+      mergeRoomChatMessages(current, messages),
+    );
+    setChatError(null);
+  }
+
+  async function sendChatMessage(text: string): Promise<boolean> {
+    const trimmed = text.trim();
+    if (!trimmed || isSendingChat) {
+      return false;
+    }
+
+    const currentSelf = selfRef.current;
+    const gateway = gatewayRef.current;
+    if (!currentSelf || !gateway || gateway.getState() !== "connected") {
+      setChatError("Chat is unavailable until the room websocket is connected.");
+      return false;
+    }
+
+    setIsSendingChat(true);
+    setChatError(null);
+
+    try {
+      const clientEventId = gateway.sendChatMessage(trimmed);
+      pendingChatEventIdsRef.current.add(clientEventId);
+      const optimisticMessage = createOptimisticChatMessage(
+        currentSelf,
+        trimmed,
+        clientEventId,
+      );
+      setChatMessages((current) => mergeRoomChatMessages(current, [optimisticMessage]));
+      return true;
+    } catch (error) {
+      setChatError(
+        error instanceof Error ? error.message : "Failed to send chat message.",
+      );
+      return false;
+    } finally {
+      setIsSendingChat(false);
+    }
+  }
+
+  // ─── Host handlers ────────────────────────────────────────────────────────
+
+  function applyHostChanged(event: RoomHostChangedEvent): void {
+    setHostParticipantId(event.payload.new_host_id);
+
+    // Update is_host flags on all participants
+    setParticipantsById((current) => {
+      const next: Record<string, ParticipantSnapshot> = {};
+      for (const [id, p] of Object.entries(current)) {
+        next[id] = {
+          ...p,
+          is_host: id === event.payload.new_host_id,
+        };
+      }
+      return next;
+    });
+  }
+
+  // ─── Moderation handlers ──────────────────────────────────────────────────
+
+  function applyForceMuted(event: ModerationForceMutedEvent): void {
+    if (event.payload.participant_id === selfRef.current?.participant_id) {
+      handleForceMuteLocal();
+    }
+
+    // Update participant state
+    setParticipantsById((current) => {
+      const existing = current[event.payload.participant_id];
+      if (!existing) return current;
+      return {
+        ...current,
+        [event.payload.participant_id]: {
+          ...existing,
+          muted_by_host: true,
+        },
+      };
+    });
+  }
+
+  function applyParticipantMuted(event: ModerationParticipantMutedEvent): void {
+    setParticipantsById((current) => {
+      const existing = current[event.payload.participant_id];
+      if (!existing) return current;
+      return {
+        ...current,
+        [event.payload.participant_id]: {
+          ...existing,
+          muted_by_host: event.payload.muted_by_host,
+        },
+      };
+    });
+
+    if (event.payload.participant_id === selfRef.current?.participant_id && event.payload.muted_by_host) {
+      handleForceMuteLocal();
+    }
+  }
+
+  function handleForceMuteLocal(): void {
+    setIsMutedByHost(true);
+    const localTrack = localAudioTrackRef.current;
+    if (localTrack) {
+      void setLocalMicrophoneMuted(localTrack, true)
+        .then(() => {
+          setIsMicMuted(true);
+        })
+        .catch(() => {
+          setIsMicMuted(true);
+        });
+    } else {
+      setIsMicMuted(true);
+    }
+  }
+
+  async function muteParticipant(targetParticipantId: string): Promise<void> {
+    if (isMutingParticipant) return;
+    if (!session) return;
+
+    setIsMutingParticipant(targetParticipantId);
+    setModerationError(null);
+
+    try {
+      // Try REST first
+      try {
+        await api.muteParticipant(roomId, session.roomToken, {
+          target_participant_id: targetParticipantId,
+        });
+      } catch {
+        // Fallback to WS
+        gatewayRef.current?.sendMuteParticipant(targetParticipantId);
+      }
+    } catch (error) {
+      setModerationError(
+        error instanceof Error ? error.message : "Failed to mute participant.",
+      );
+    } finally {
+      setIsMutingParticipant(null);
+    }
   }
 
   function rollbackLanguage(): void {
@@ -1139,12 +1432,22 @@ export function useMeetingRoom({
   }
 
   const connectionState = deriveConnectionState(gatewayState, livekitState);
-  const activeParticipants = Object.values(participantsById).sort((left, right) =>
-    compareParticipants(left, right, selfState?.participant_id),
-  );
+  const activeParticipants = Object.values(participantsById)
+    .map((p) => ({
+      ...p,
+      is_host: p.participant_id === hostParticipantId || p.is_host,
+    }))
+    .sort((left, right) =>
+      compareParticipants(left, right, selfState?.participant_id),
+    );
   const relayStatuses = [...interpreterStatuses].sort((left, right) =>
     right.updatedAt.localeCompare(left.updatedAt),
   );
+  const meetingLanguages = resolveMeetingLanguages(
+    roomMeta?.meeting_languages,
+    roomMeta?.supported_languages,
+  );
+  const isCurrentUserHost = !!(selfState && hostParticipantId && selfState.participant_id === hostParticipantId);
 
   return {
     roomMeta,
@@ -1152,6 +1455,7 @@ export function useMeetingRoom({
       roomMeta?.meeting_mode ?? session?.room.meeting_mode ?? null,
     interpreterMode:
       roomMeta?.interpreter_mode ?? session?.room.interpreter_mode ?? null,
+    meetingLanguages,
     selfState,
     participants: activeParticipants,
     transcripts,
@@ -1190,6 +1494,20 @@ export function useMeetingRoom({
     startScreenShare,
     stopScreenShare,
     leaveRoom,
+    // Chat
+    chatMessages,
+    chatError,
+    isSendingChat,
+    canSendChat: !!selfState && gatewayState === "connected" && !isLeaving,
+    sendChatMessage,
+    // Host
+    hostParticipantId,
+    isCurrentUserHost,
+    // Moderation
+    isMutedByHost,
+    isMutingParticipant,
+    moderationError,
+    muteParticipant,
   };
 
   function clearLocalScreenTrack(livekitRoom: ReturnType<typeof createMeetingRoom> | null): void {
@@ -1261,6 +1579,135 @@ export function useMeetingRoom({
       clearLocalScreenTrack(livekitRoomRef.current);
     }
   }
+}
+
+function normalizeChatMessages(messages: ChatMessage[]): RoomChatMessage[] {
+  return messages
+    .map((message) => normalizeChatMessage(message))
+    .filter((message): message is RoomChatMessage => message !== null)
+    .sort(sortRoomChatMessages);
+}
+
+function normalizeChatMessage(message: ChatMessage): RoomChatMessage | null {
+  const participantId = message.participant_id ?? message.sender_id;
+  const displayName = message.display_name ?? message.sender_display_name;
+  const createdAt = message.created_at ?? message.sent_at;
+
+  if (!message.message_id || !participantId || !displayName || !createdAt) {
+    return null;
+  }
+
+  return {
+    message_id: message.message_id,
+    client_event_id: message.client_event_id ?? null,
+    participant_id: participantId,
+    display_name: displayName,
+    text: message.text,
+    created_at: createdAt,
+    sender_language: message.sender_language ?? message.language ?? null,
+    delivery_status: "sent",
+  };
+}
+
+function mergeRoomChatMessages(
+  current: RoomChatMessage[],
+  incoming: RoomChatMessage[],
+): RoomChatMessage[] {
+  if (incoming.length === 0) {
+    return current;
+  }
+
+  const merged = new Map<string, RoomChatMessage>();
+  const upsert = (message: RoomChatMessage) => {
+    let existingKey: string | null = merged.has(message.message_id)
+      ? message.message_id
+      : null;
+
+    if (!existingKey && message.client_event_id) {
+      for (const [key, existing] of merged.entries()) {
+        if (existing.client_event_id === message.client_event_id) {
+          existingKey = key;
+          break;
+        }
+      }
+    }
+
+    if (!existingKey) {
+      merged.set(message.message_id, message);
+      return;
+    }
+
+    const existing = merged.get(existingKey);
+    if (!existing) {
+      merged.set(message.message_id, message);
+      return;
+    }
+
+    const next = {
+      ...existing,
+      ...message,
+      delivery_status:
+        message.delivery_status
+        ?? existing.delivery_status
+        ?? "sent",
+    };
+    if (existingKey !== next.message_id) {
+      merged.delete(existingKey);
+    }
+    merged.set(next.message_id, next);
+  };
+
+  for (const message of current) {
+    upsert(message);
+  }
+
+  for (const message of incoming) {
+    upsert(message);
+  }
+
+  return Array.from(merged.values()).sort(sortRoomChatMessages);
+}
+
+function markRoomChatDeliveryStatus(
+  current: RoomChatMessage[],
+  messageIdOrClientEventId: string,
+  deliveryStatus: RoomChatMessage["delivery_status"],
+): RoomChatMessage[] {
+  return current.map((message) =>
+    message.message_id === messageIdOrClientEventId
+      || message.client_event_id === messageIdOrClientEventId
+      ? {
+          ...message,
+          delivery_status: deliveryStatus,
+        }
+      : message,
+  );
+}
+
+function createOptimisticChatMessage(
+  selfState: SelfState,
+  text: string,
+  clientEventId: string,
+): RoomChatMessage {
+  return {
+    message_id: `pending_${clientEventId}`,
+    client_event_id: clientEventId,
+    participant_id: selfState.participant_id,
+    display_name: selfState.display_name,
+    text,
+    created_at: new Date().toISOString(),
+    sender_language: selfState.language,
+    delivery_status: "sending",
+  };
+}
+
+function sortRoomChatMessages(left: RoomChatMessage, right: RoomChatMessage): number {
+  const byTime = left.created_at.localeCompare(right.created_at);
+  if (byTime !== 0) {
+    return byTime;
+  }
+
+  return left.message_id.localeCompare(right.message_id);
 }
 
 function compareParticipants(

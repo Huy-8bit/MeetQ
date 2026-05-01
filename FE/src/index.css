@@ -3,6 +3,13 @@
   font-family: "Avenir Next", "Segoe UI", "Helvetica Neue", sans-serif;
   line-height: 1.5;
   font-weight: 400;
+
+.field-row-two {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
   color: #19324a;
   background:
     radial-gradient(circle at top left, rgba(15, 118, 110, 0.15), transparent 28%),
@@ -21,6 +28,12 @@
   --accent-soft: #d5f5f1;
   --accent-strong: #115e59;
   --warning: #b45309;
+
+.field-hint {
+  margin: 0;
+  font-size: 0.9rem;
+  color: rgba(255, 255, 255, 0.72);
+}
   --danger: #b91c1c;
   --shadow: 0 24px 60px rgba(25, 50, 74, 0.12);
 }
@@ -236,6 +249,25 @@ button {
   gap: 8px;
 }
 
+.field-section {
+  display: grid;
+  gap: 14px;
+}
+
+.field-section-header {
+  display: grid;
+  gap: 4px;
+}
+
+.field-section-header strong {
+  font-size: 0.95rem;
+}
+
+.field-section-header p {
+  margin: 0;
+  color: var(--muted);
+}
+
 .field span,
 .compact-field span {
   font-size: 0.85rem;
@@ -425,7 +457,7 @@ button {
 }
 
 .compact-field {
-  min-width: 112px;
+  min-width: 220px;
 }
 
 .room-layout {
@@ -1002,6 +1034,169 @@ button {
   margin-left: 2px;
 }
 
+
+/* ─── Chat Panel ─────────────────────────────────────────────────────────────── */
+
+.chat-panel {
+  padding: 22px;
+  display: grid;
+  gap: 14px;
+}
+
+.chat-message-list {
+  max-height: 320px;
+  overflow-y: auto;
+  display: grid;
+  gap: 8px;
+  padding-right: 4px;
+}
+
+.chat-empty {
+  padding: 18px;
+  text-align: center;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.5);
+  border: 1px dashed var(--stroke);
+}
+
+.chat-empty p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.88rem;
+}
+
+.chat-message {
+  padding: 10px 14px;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.68);
+  border: 1px solid rgba(25, 50, 74, 0.08);
+}
+
+.chat-message-self {
+  background: rgba(213, 245, 241, 0.5);
+  border-color: rgba(15, 118, 110, 0.16);
+}
+
+.chat-message-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.chat-message-header strong {
+  font-size: 0.84rem;
+}
+
+.chat-timestamp {
+  font-size: 0.76rem;
+  color: var(--muted);
+  margin-left: auto;
+}
+
+.chat-lang-pill {
+  padding: 2px 8px !important;
+  font-size: 0.72rem !important;
+}
+
+.chat-message-text {
+  margin: 0;
+  font-size: 0.92rem;
+  line-height: 1.5;
+  word-break: break-word;
+}
+
+.chat-input-bar {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+}
+
+.chat-input {
+  flex: 1;
+  border-radius: 16px;
+  border: 1px solid var(--stroke);
+  background: rgba(255, 255, 255, 0.8);
+  color: var(--text);
+  padding: 12px 14px;
+  outline: none;
+  font: inherit;
+  font-size: 0.92rem;
+}
+
+.chat-input:focus {
+  border-color: rgba(15, 118, 110, 0.48);
+  box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.1);
+}
+
+.chat-input:disabled {
+  opacity: 0.6;
+}
+
+.chat-send-btn {
+  width: auto !important;
+  min-width: 72px;
+  padding: 12px 18px !important;
+  border-radius: 16px;
+  font-size: 0.88rem;
+}
+
+.chat-delivery-badge {
+  padding: 4px 8px;
+  font-size: 0.68rem;
+}
+
+.chat-panel .inline-error {
+  margin-top: -2px;
+}
+
+/* ─── Host Badge ─────────────────────────────────────────────────────────────── */
+
+.badge-host {
+  background: linear-gradient(135deg, rgba(251, 146, 60, 0.2), rgba(245, 158, 11, 0.22));
+  color: #92400e;
+  font-weight: 800;
+  border: 1px solid rgba(245, 158, 11, 0.24);
+}
+
+/* ─── Muted By Host Badge ────────────────────────────────────────────────────── */
+
+.badge-muted-by-host {
+  background: rgba(185, 28, 28, 0.12);
+  color: var(--danger);
+  font-weight: 700;
+}
+
+/* ─── Force Muted Banner ─────────────────────────────────────────────────────── */
+
+.banner-force-muted {
+  font-weight: 700;
+  border: 1px solid rgba(185, 28, 28, 0.18);
+}
+
+/* ─── Mute Participant Button ────────────────────────────────────────────────── */
+
+.button-mute-participant {
+  padding: 6px 14px;
+  border-radius: 12px;
+  font-size: 0.8rem;
+  font-weight: 700;
+  background: rgba(185, 28, 28, 0.1);
+  color: var(--danger);
+  border: 1px solid rgba(185, 28, 28, 0.16);
+  transition: background 140ms ease, transform 140ms ease;
+}
+
+.button-mute-participant:hover:not(:disabled) {
+  background: rgba(185, 28, 28, 0.18);
+  transform: translateY(-1px);
+}
+
+.button-mute-participant:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
 @media (max-width: 1100px) {
   .hero-card,
   .room-layout {
@@ -1031,6 +1226,10 @@ button {
   }
 
   .room-meta-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .field-row-two {
     grid-template-columns: 1fr;
   }
 

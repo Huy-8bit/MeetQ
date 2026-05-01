@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any, Dict, Iterable, Optional
 
+from src.common.lang import PLATFORM_SUPPORTED_LANGS
+
 
 MEETING_MODE_DIRECT_TRANSLATION = "direct_translation"
 MEETING_MODE_BRSE_RELAY = "brse_relay"
@@ -16,17 +18,25 @@ BRSE_PARTICIPANT_ID = "brse_ai"
 BRSE_PARTICIPANT_DISPLAY_NAME = "BRSE AI"
 BRSE_LIVEKIT_IDENTITY_PREFIX = "interp::brse_ai"
 
+DEFAULT_ROOM_MEETING_LANGUAGES = ("vi", "ja")
 DEFAULT_RELAY_LANGUAGE_MAP: Dict[str, str] = {
-    "vi": "ja",
-    "ja": "vi",
+    DEFAULT_ROOM_MEETING_LANGUAGES[0]: DEFAULT_ROOM_MEETING_LANGUAGES[1],
+    DEFAULT_ROOM_MEETING_LANGUAGES[1]: DEFAULT_ROOM_MEETING_LANGUAGES[0],
 }
+
+SUPPORTED_MEETING_LANGUAGES = PLATFORM_SUPPORTED_LANGS
 
 
 def build_brse_livekit_identity(room_id: str) -> str:
     return f"{BRSE_LIVEKIT_IDENTITY_PREFIX}::{room_id}"
 
 
-def build_brse_virtual_participant(room_id: str, joined_at: Optional[str]) -> Dict[str, Any]:
+def build_brse_virtual_participant(
+    room_id: str,
+    joined_at: Optional[str],
+    meeting_languages: Optional[Iterable[str]] = None,
+) -> Dict[str, Any]:
+    pair = list(meeting_languages or [])[:2]
     return {
         "participant_id": BRSE_PARTICIPANT_ID,
         "display_name": BRSE_PARTICIPANT_DISPLAY_NAME,
@@ -39,6 +49,7 @@ def build_brse_virtual_participant(room_id: str, joined_at: Optional[str]) -> Di
         "metadata": {
             "meeting_mode": MEETING_MODE_BRSE_RELAY,
             "interpreter_mode": INTERPRETER_MODE_BRSE_PARTICIPANT,
+            "meeting_languages": pair,
             "publishes_audio": True,
             "publishes_video": False,
             "subscribes_human_audio": True,
@@ -46,7 +57,18 @@ def build_brse_virtual_participant(room_id: str, joined_at: Optional[str]) -> Di
     }
 
 
-def build_brse_audio_routing() -> Dict[str, Any]:
+def build_relay_language_map(meeting_languages: Iterable[str]) -> Dict[str, str]:
+    pair = [lang for lang in meeting_languages if isinstance(lang, str)]
+    if len(pair) != 2 or pair[0] == pair[1]:
+        return dict(DEFAULT_RELAY_LANGUAGE_MAP)
+    return {
+        pair[0]: pair[1],
+        pair[1]: pair[0],
+    }
+
+
+def build_brse_audio_routing(meeting_languages: Iterable[str]) -> Dict[str, Any]:
+    relay_map = build_relay_language_map(meeting_languages)
     return {
         "model": "brse_participant_audio",
         "cross_language_remote_audio": "human_original_plus_brse",
@@ -55,7 +77,7 @@ def build_brse_audio_routing() -> Dict[str, Any]:
         "ai_relay_audio": "virtual_participant_track",
         "interpreter_mode": INTERPRETER_MODE_BRSE_PARTICIPANT,
         "bridge_strategy": "speaker_language_map",
-        "relay_language_map": dict(DEFAULT_RELAY_LANGUAGE_MAP),
+        "relay_language_map": relay_map,
         "virtual_participant_id": BRSE_PARTICIPANT_ID,
     }
 

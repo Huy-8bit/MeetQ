@@ -1,5 +1,560 @@
 # Frontend Implementation State
 
+## Turn Update: 2026-05-01 Chat End-to-End Debug Reopen (Kickoff)
+
+- Time: 2026-05-01T15:23:33+07:00
+- Mode: CODE-ONLY
+- Testing scope: minimal targeted verification only; no full test suite; no new tests
+
+### Objective Locked
+
+- Debug chat end-to-end again because room chat still does not work.
+- Trace full path from `ChatPanel` submit -> FE send handler -> active transport/session -> backend `chat.send` handler -> room state -> `chat.message` broadcast -> FE receive/merge/render.
+- Fix only the chat path and preserve existing room join/leave, websocket lifecycle, LiveKit/media, transcript, BRSE/audio, screen-share, host, and moderation flows.
+
+### Mandatory Read Status
+
+- Read current FE chat/runtime files: `FE/src/lib/ws.ts`, `FE/src/lib/api.ts`, `FE/src/features/room/useMeetingRoom.ts`, `FE/src/pages/RoomPage.tsx`, `FE/src/types/ws.ts`, `FE/src/types/api.ts`, `FE/src/components/ChatPanel.tsx`.
+- Read backend chat contract/runtime reference: `docs/backend/API_CONTRACT.md`, `docs/backend/IMPLEMENTATION_STATE.md`, `BE/server/models.py`, `BE/server/gateway/ws_endpoint.py`, `BE/server/gateway/ws_hub.py`, `BE/server/gateway/room_service.py`, `BE/server/gateway/event_consumer.py`, `BE/server/gateway/room_store.py`.
+
+### Current Trace Hypothesis
+
+- Backend currently has a `chat.send` gateway handler, recent Redis chat state, and `chat.message` broadcast path.
+- FE current send path appears to publish LiveKit data on topic `brse.chat` instead of calling gateway `chat.send`, so messages can bypass backend validation/persist/broadcast/snapshot hydration.
+- Root cause will be finalized after targeted code trace and minimal verification.
+
+## Turn Update: 2026-05-01 Chat End-to-End Debug Reopen (Final Sync)
+
+- Time: 2026-05-01T15:27:25+07:00
+- Status: chat send path fixed on FE; backend runtime path verified by static trace and compile
+
+### Root Cause Confirmed
+
+- Real current root cause: FE send path was using LiveKit data messages instead of backend gateway websocket chat.
+- `ChatPanel` submit did call `meeting.sendChatMessage(...)`, but `FE/src/features/room/useMeetingRoom.ts` required `livekitState === "connected"` and published topic `brse.chat`.
+- Because of that, backend never received `chat.send`; room Redis recent state was not updated; backend `chat.message` broadcast did not happen; join/reconnect `recent_messages` could not include those messages.
+- This was not a current backend handler/broadcast bug: current BE code already has `chat.send` parsing, participant/session validation, recent-message persistence, and `chat.message` publication.
+
+### Full Path Trace Result
+
+- FE input submit: confirmed `ChatPanel.handleSubmit` invokes `onSend(trimmed)` and only clears input on `true`.
+- FE event name/payload before fix: wrong transport; LiveKit data payload `room.chat.message`, not gateway envelope `type=chat.send`.
+- WS lifecycle/session before fix: gateway socket existed but chat send did not use it; chat availability was blocked by LiveKit media state instead of gateway websocket state.
+- BE parse/validation: `BE/server/gateway/ws_endpoint.py` handles `chat.send` and passes `payload.text`, participant id, and session id into `RoomService.send_chat_message(...)`.
+- BE room state/broadcast: `RoomService.send_chat_message(...)` validates text/session, appends Redis recent chat, publishes `chat.message`; gateway-control consumer broadcasts to the room.
+- FE receive/render: `applyChatMessage` handles `chat.message`; `ChatPanel` renders `chatMessages`; snapshot hydrate already reads `recent_messages`.
+
+### FE Fix Applied
+
+- `FE/src/lib/ws.ts`
+  - `GatewaySocket.sendChatMessage(text)` now returns the generated `event_id`.
+  - `sendEnvelope(...)` now returns `event_id` so chat can correlate optimistic UI with backend canonical events.
+- `FE/src/features/room/useMeetingRoom.ts`
+  - Removed LiveKit data-topic chat send/receive path from room chat.
+  - `sendChatMessage(...)` now sends gateway websocket envelope `type=chat.send` with payload `{ text }`.
+  - `canSendChat` now depends on gateway websocket connected state, not LiveKit media connection.
+  - Pending optimistic messages are keyed by `client_event_id` and replaced by canonical backend `chat.message`.
+  - Gateway chat errors matching pending `event_id` now set `chatError` and mark that message `failed` instead of becoming a generic room connection error.
+- `FE/src/types/api.ts`
+  - Added `client_event_id` and backend `language` compatibility to raw `ChatMessage`.
+  - Added `client_event_id` to normalized `RoomChatMessage` for dedupe/reconciliation.
+
+### Snapshot Hydrate / Duplicate Strategy
+
+- Join/initial snapshot still hydrates `session.snapshot.recent_messages` and REST room `recent_messages`.
+- WS `room.snapshot` merges `recent_messages` into the same chat collection.
+- Realtime `chat.message` and snapshot messages dedupe by canonical `message_id`, and also by `client_event_id` so the local pending row is replaced instead of duplicated.
+
+### Files Updated This Turn
+
+- `FE/src/lib/ws.ts`
+- `FE/src/features/room/useMeetingRoom.ts`
+- `FE/src/types/api.ts`
+- `docs/frontend/IMPLEMENTATION_STATE.md`
+- `docs/backend/IMPLEMENTATION_STATE.md`
+
+### Minimal Verification
+
+- `python -m py_compile BE/server/models.py BE/server/events.py BE/server/gateway/ws_endpoint.py BE/server/gateway/ws_hub.py BE/server/gateway/room_service.py BE/server/gateway/event_consumer.py BE/server/gateway/room_store.py` passed.
+- `npx tsc -b --pretty false` no longer reports chat-file errors after the optional `recent_messages` narrowing fix.
+- `npx tsc -b --pretty false` still fails on existing non-chat `FE/src/lib/livekit.ts` errors: `track.name` missing on LiveKit track types at lines 213, 344, and 596.
+
+### Deferred
+
+- No full test suite and no new tests, per instruction.
+- No runtime browser/manual multi-client smoke was run in this turn.
+- Existing non-chat LiveKit type errors remain deferred.
+
+## Turn Update: 2026-05-01 Room Chat Runtime Fix (Kickoff)
+
+- Time: 2026-05-01T20:02:00+07:00
+- Mode: CODE-ONLY
+- Testing deferred: yes
+
+### Objective Locked
+
+- Fix room chat end-to-end on FE so users can actually send messages and see them render correctly in realtime.
+- Follow the existing backend contract for chat send / receive / snapshot hydrate without changing backend.
+- Keep room websocket lifecycle, join/leave, transcript, moderation, BRSE/media flows intact.
+
+### Investigation Scope
+
+- Re-read FE room chat path:
+  - `FE/src/lib/ws.ts`
+  - `FE/src/features/room/useMeetingRoom.ts`
+  - `FE/src/pages/RoomPage.tsx`
+  - `FE/src/components/ChatPanel.tsx`
+  - `FE/src/types/ws.ts`
+  - `FE/src/types/api.ts`
+- Confirm backend chat contract from docs and runtime implementation before editing.
+- Update this state file after root-cause confirmation, after major batch, and before turn end.
+
+## Turn Update: 2026-05-01 Room Chat Runtime Fix (Post-Major)
+
+- Time: 2026-05-01T20:28:00+07:00
+- Status: core FE chat send/receive/state/runtime patch completed
+
+### Root Cause Confirmed
+
+- Backend gateway runtime currently does **not** implement room chat transport:
+  - `BE/server/gateway/ws_endpoint.py` does not handle `chat.send`
+  - `BE/server/gateway/event_consumer.py` does not fan out `chat.message`
+  - backend room snapshot/join snapshot models do not serialize `recent_messages`
+- FE chat path was therefore silently failing because:
+  - `FE/src/features/room/useMeetingRoom.ts` tried to send chat through gateway WS only
+  - `FE/src/components/ChatPanel.tsx` used a synchronous fire-and-forget send lifecycle and cleared local input immediately
+  - FE join snapshot typing did not carry `recent_messages`, so even if snapshot data existed it would not hydrate cleanly through session state
+  - room page disabled chat based on gateway state instead of the runtime transport actually used for chat delivery
+
+### Send / Receive Path Fix Applied
+
+- FE chat transport is now restored through room runtime only, without backend changes:
+  - `FE/src/features/room/useMeetingRoom.ts`
+    - chat send path now publishes reliable LiveKit data messages on topic `brse.chat`
+    - chat receive path now listens to `RoomEvent.DataReceived` and merges incoming room chat payloads into normalized state
+    - optimistic local messages are inserted immediately and promoted from `sending -> sent` or `failed`
+    - gateway `chat.message` events remain supported and are normalized/merged if backend emits them later
+- `FE/src/pages/RoomPage.tsx`
+  - chat panel now binds to dedicated chat runtime flags instead of generic gateway-connected state
+
+### Chat State Model Normalized
+
+- Added normalized FE chat message model in `FE/src/types/api.ts`:
+  - `RoomChatMessage`
+  - required fields: `message_id`, `participant_id`, `display_name`, `text`, `created_at`
+  - optional metadata: `sender_language`, `delivery_status`
+- `FE/src/features/room/useMeetingRoom.ts` now exposes:
+  - `chatMessages`
+  - `sendChatMessage()`
+  - `chatError`
+  - `isSendingChat`
+  - `canSendChat`
+
+### Snapshot / Hydrate / Deduping Fixes
+
+- `FE/src/types/api.ts`
+  - `JoinRoomResponse.snapshot` now accepts `recent_messages?`
+  - raw backend `ChatMessage` type is tolerant to either `sender_* / sent_at` or `participant_* / created_at` field styles
+- `FE/src/features/room/useMeetingRoom.ts`
+  - initial room snapshot and joined session snapshot now hydrate chat history into normalized FE state
+  - room snapshot updates merge `recent_messages` without duplicating existing `message_id`
+  - realtime gateway/livekit messages merge into the same deduped state collection
+
+### Input / UX Fixes
+
+- `FE/src/components/ChatPanel.tsx`
+  - send path is now async instead of synchronous fire-and-forget
+  - input clears only after successful send
+  - send button + Enter submit respect `isSending`
+  - inline chat error is rendered instead of silent failure
+  - sending / failed delivery badges are shown per local message when relevant
+
+### Files Updated In This Batch
+
+- `FE/src/types/api.ts`
+- `FE/src/features/room/useMeetingRoom.ts`
+- `FE/src/components/ChatPanel.tsx`
+- `FE/src/pages/RoomPage.tsx`
+- `FE/src/index.css`
+- `docs/frontend/IMPLEMENTATION_STATE.md`
+
+### Testing Status
+
+- Testing deferred by instruction: no tests run, no test files modified.
+
+## Turn Update: 2026-05-01 Room Chat Runtime Fix (Final Sync)
+
+- Time: 2026-05-01T20:35:00+07:00
+- Scope confirmation:
+  - FE chat no longer depends on the non-implemented gateway `chat.send` runtime path to deliver messages.
+  - FE send path now uses room runtime delivery with explicit pending/failed UI state and useful error surfacing.
+  - FE receive path now merges normalized chat messages from both room snapshot hydration and realtime room events without duplicate `message_id`.
+
+### Final Root Cause Summary
+
+- The original FE implementation assumed a backend gateway chat contract that is not actually implemented in the current repo runtime.
+- Because of that mismatch, chat send was a silent no-op, and the FE input lifecycle still cleared user input as if send had succeeded.
+- Session snapshot typing also lagged the UI assumptions for `recent_messages`.
+
+### Final File Set Touched This Turn
+
+- `FE/src/types/api.ts`
+- `FE/src/features/room/useMeetingRoom.ts`
+- `FE/src/components/ChatPanel.tsx`
+- `FE/src/pages/RoomPage.tsx`
+- `FE/src/index.css`
+- `docs/frontend/IMPLEMENTATION_STATE.md`
+
+### Testing Status
+
+- Testing deferred by instruction: no tests run, no test files modified, no verification step executed.
+
+## Turn Update: 2026-05-01 Platform Language Expansion + Create/Join UX (Kickoff)
+
+- Time: 2026-05-01T19:15:00+07:00
+- Mode: CODE-ONLY
+- Testing deferred: yes
+
+### Objective Locked
+
+- Expand FE-supported room/platform languages from `vi/en/ja` to `vi/en/ja/zh/ko/fr/es`.
+- Make create-room choose the exact 2 `meeting_languages` directly inside the create-room view.
+- Restrict join-room and in-room language selectors to the authoritative room `meeting_languages` pair.
+- Replace user-facing short language codes with full names across create/join/room runtime UI.
+
+### Planned FE Scope
+
+- Add a shared FE language catalog + full-name label helpers for `Vietnamese`, `English`, `Japanese`, `Chinese`, `Korean`, `French`, `Spanish`.
+- Update create-room UX to collect `meeting_languages` with pair validation before submit and surface backend validation errors clearly.
+- Update join-room and room runtime UI to render full-name language labels and block selection outside the room pair.
+- Sync `docs/frontend/IMPLEMENTATION_STATE.md` after each major batch and before turn end.
+
+## Turn Update: 2026-05-01 Platform Language Expansion + Create/Join UX (Post-Major)
+
+- Time: 2026-05-01T19:40:00+07:00
+- Status: core FE language-catalog + create/join/room UX update completed
+
+### Language Catalog Added
+
+- FE shared language source-of-truth now supports:
+  - `vi -> Vietnamese`
+  - `en -> English`
+  - `ja -> Japanese`
+  - `zh -> Chinese`
+  - `ko -> Korean`
+  - `fr -> French`
+  - `es -> Spanish`
+- Shared helper file added:
+  - `FE/src/lib/languages.ts`
+- Full-name rendering strategy:
+  - UI components call shared helper functions instead of rendering `toUpperCase()` language codes
+  - room pair text uses human-readable labels (for example `Vietnamese and Japanese`)
+  - transcript / participant / chat / in-room selector labels now use the same shared map
+
+### Create-Room UX Changes
+
+- `FE/src/pages/HomePage.tsx`
+  - added explicit `Meeting languages` section inside the create-room view
+  - create-room now requires selecting 2 meeting languages directly on the form before room creation
+  - submit path validates:
+    - both languages selected
+    - languages are distinct
+    - languages belong to the shared FE-supported set
+  - backend `invalid_meeting_languages` errors are mapped to usable create-room messages
+
+### Join-Room + Room Runtime Changes
+
+- `FE/src/components/JoinRoomCard.tsx`
+  - join-room language selector is now labeled `Your language`
+  - selector options are limited to the authoritative room `meeting_languages` pair
+  - join-room blocks invalid submission when pair is unavailable or the selection is outside the pair
+- `FE/src/features/room/useMeetingRoom.ts`
+  - room runtime now resolves `meeting_languages` through a shared pair helper instead of a hardcoded `vi/en/ja` path
+  - language-change guard and WS invalid-language rollback now show pair-aware messages with full names
+- `FE/src/pages/RoomPage.tsx`
+  - room header now renders full-name meeting pair text
+  - in-room language selector is constrained to the room pair and shows full-name labels
+
+### Full-Name Rendering Coverage
+
+- Updated user-facing language labels in:
+  - `FE/src/components/ParticipantList.tsx`
+  - `FE/src/components/ParticipantTile.tsx`
+  - `FE/src/components/ChatPanel.tsx`
+  - `FE/src/components/TranscriptPanel.tsx`
+  - `FE/src/components/InterpreterStatusPanel.tsx`
+  - `FE/src/pages/TestPage.tsx`
+- Runtime parsing widened for new language codes in:
+  - `FE/src/lib/livekit.ts`
+- FE type union widened for new codes in:
+  - `FE/src/types/api.ts`
+- Layout tweaks for longer full-name labels in:
+  - `FE/src/index.css`
+
+### Files Updated In This Batch
+
+- `FE/src/lib/languages.ts`
+- `FE/src/types/api.ts`
+- `FE/src/lib/livekit.ts`
+- `FE/src/pages/HomePage.tsx`
+- `FE/src/components/JoinRoomCard.tsx`
+- `FE/src/features/room/useMeetingRoom.ts`
+- `FE/src/pages/RoomPage.tsx`
+- `FE/src/components/ParticipantList.tsx`
+- `FE/src/components/ParticipantTile.tsx`
+- `FE/src/components/ChatPanel.tsx`
+- `FE/src/components/TranscriptPanel.tsx`
+- `FE/src/components/InterpreterStatusPanel.tsx`
+- `FE/src/pages/TestPage.tsx`
+- `FE/src/index.css`
+- `docs/frontend/IMPLEMENTATION_STATE.md`
+
+### Testing Status
+
+- Testing deferred by instruction: no tests run, no test files modified.
+
+## Turn Update: 2026-05-01 Platform Language Expansion + Create/Join UX (Final Sync)
+
+- Time: 2026-05-01T19:48:00+07:00
+- Scope confirmation:
+  - FE create-room now selects `meeting_languages` directly inside the create-room view.
+  - FE join-room and in-room language selectors now constrain choices to the room meeting pair.
+  - FE room/create/join/runtime user-facing language text now renders full names instead of short codes.
+  - FE room/runtime paths now accept `vi/en/ja/zh/ko/fr/es` through shared catalog + widened type/runtime parsing.
+
+### Final Language Strategy Locked
+
+- Source-of-truth catalog lives in `FE/src/lib/languages.ts`.
+- Shared helper responsibilities:
+  - supported language list for selectors
+  - full-name lookup map
+  - room pair formatting helpers
+  - authoritative meeting-pair resolution helper
+- Short codes remain internal-only for API payloads / room state / track metadata parsing.
+
+### Final File Set Touched This Turn
+
+- `FE/src/lib/languages.ts`
+- `FE/src/types/api.ts`
+- `FE/src/lib/livekit.ts`
+- `FE/src/pages/HomePage.tsx`
+- `FE/src/components/JoinRoomCard.tsx`
+- `FE/src/features/room/useMeetingRoom.ts`
+- `FE/src/pages/RoomPage.tsx`
+- `FE/src/components/ParticipantList.tsx`
+- `FE/src/components/ParticipantTile.tsx`
+- `FE/src/components/ChatPanel.tsx`
+- `FE/src/components/TranscriptPanel.tsx`
+- `FE/src/components/InterpreterStatusPanel.tsx`
+- `FE/src/pages/TestPage.tsx`
+- `FE/src/index.css`
+- `docs/frontend/IMPLEMENTATION_STATE.md`
+
+### Testing Status
+
+- Testing deferred by instruction: no tests run, no test files modified, no verification step executed.
+
+## Turn Update: 2026-05-01 Room Chat + Host + Moderation (Kickoff)
+
+- Time: 2026-05-01T13:37:00+07:00
+- Mode: CODE-ONLY
+- Testing deferred: yes
+
+### Objective Locked
+
+- Add room chat UI with realtime messaging via WS `chat.send` / `chat.message`
+- Add host state tracking: `hostParticipantId`, `isCurrentUserHost`, host badge
+- Add automatic host transfer handling from `room.host_changed` events
+- Add host mute controls: host-only mute button in participant list
+- Add force-mute local mic when current participant receives `moderation.force_muted`
+- Hydrate chat/host/moderation state from room snapshot on join
+
+### Planned FE Scope
+
+- `FE/src/types/api.ts`
+- `FE/src/types/ws.ts`
+- `FE/src/lib/api.ts`
+- `FE/src/lib/ws.ts`
+- `FE/src/features/room/useMeetingRoom.ts`
+- `FE/src/pages/RoomPage.tsx`
+- `FE/src/components/ChatPanel.tsx` (new)
+- `FE/src/components/ParticipantList.tsx`
+- `FE/src/components/ParticipantTile.tsx`
+- `FE/src/components/AudioDevicePanel.tsx`
+- `FE/src/index.css`
+- `docs/frontend/IMPLEMENTATION_STATE.md`
+
+## Turn Update: 2026-05-01 Room Chat + Host + Moderation (Post-Major)
+
+- Time: 2026-05-01T13:55:00+07:00
+- Status: core FE implementation completed
+
+### Type/Contract Changes
+
+- `FE/src/types/api.ts`:
+  - `ParticipantSnapshot`: added `is_host`, `muted_by_host`
+  - `RoomSnapshotResponse.room`: added `host_participant_id`
+  - `RoomSnapshotResponse`: added `recent_messages?: ChatMessage[]`
+  - New types: `ChatMessage`, `MuteParticipantRequest`, `MuteParticipantResponse`
+- `FE/src/types/ws.ts`:
+  - New server events: `ChatMessageEvent`, `RoomHostChangedEvent`, `ModerationForceMutedEvent`, `ModerationParticipantMutedEvent`
+  - New client messages: `ChatSendMessage`, `ModerationMuteMessage`
+  - Extended `participant.joined`/`participant.updated` payloads with `is_host`, `muted_by_host`
+  - Extended `room.snapshot` payload with `host_participant_id`, `recent_messages`
+
+### Gateway Client Changes
+
+- `FE/src/lib/ws.ts`:
+  - `GatewaySocket.sendChatMessage(text)`: sends `chat.send` envelope
+  - `GatewaySocket.sendMuteParticipant(targetParticipantId)`: sends `moderation.mute_participant` envelope
+- `FE/src/lib/api.ts`:
+  - `api.muteParticipant(roomId, token, body)`: POST `/api/rooms/{room_id}/moderation/mute`
+
+### Room Runtime State Changes
+
+- `FE/src/features/room/useMeetingRoom.ts`:
+  - New state: `chatMessages`, `hostParticipantId`, `isCurrentUserHost`, `isMutedByHost`, `isMutingParticipant`, `moderationError`
+  - New handlers: `applyChatMessage`, `applyHostChanged`, `applyForceMuted`, `applyParticipantMuted`, `handleForceMuteLocal`
+  - New actions: `sendChatMessage`, `muteParticipant`
+  - Snapshot hydration: loads `host_participant_id`, `is_host` from participants, `recent_messages`, self `muted_by_host`
+  - Host transfer: `room.host_changed` event updates `hostParticipantId` and re-flags all participant `is_host`
+  - Force mute: when `moderation.force_muted` targets self, calls `setLocalMicrophoneMuted(track, true)` and sets `isMutedByHost`
+  - Participant list now derives `is_host` from `hostParticipantId` for UI rendering
+
+### UI Component Changes
+
+- `FE/src/components/ChatPanel.tsx` (new):
+  - Scrollable message list with auto-scroll on new messages
+  - Each message shows sender name, sender language pill, timestamp
+  - Self messages styled distinctly
+  - Input bar with validation (trim, no empty), send button
+  - Disabled state when gateway not connected
+- `FE/src/components/ParticipantList.tsx`:
+  - Host badge (`Host`) shown for `is_host` participants
+  - Muted-by-host badge (`Muted`) shown for `muted_by_host` participants
+  - Mute button shown per remote human participant when `isCurrentUserHost` is true
+  - Mute button has loading state per `isMutingParticipant`
+- `FE/src/components/ParticipantTile.tsx`:
+  - Added `isHost` and `isMutedByHost` props
+  - Host badge and Muted badge rendered in tile footer tags
+- `FE/src/components/AudioDevicePanel.tsx`:
+  - Added `isMutedByHost` prop
+  - When muted by host: unmute button disabled, label shows "Muted by host"
+- `FE/src/pages/RoomPage.tsx`:
+  - Integrated ChatPanel in sidebar stack
+  - Wired host/mute props to ParticipantList and ParticipantTile
+  - Added force-muted banner when `isMutedByHost` is true
+  - Added moderation error banner
+
+### CSS Changes
+
+- `FE/src/index.css`:
+  - Chat panel layout: `.chat-panel`, `.chat-message-list`, `.chat-message`, `.chat-input-bar`, `.chat-send-btn`
+  - Message styling: `.chat-message-self`, `.chat-message-header`, `.chat-timestamp`, `.chat-message-text`
+  - Host badge: `.badge-host` with warm amber gradient
+  - Muted badge: `.badge-muted-by-host` with danger coloring
+  - Force muted banner: `.banner-force-muted`
+  - Mute button: `.button-mute-participant` with hover/disabled states
+
+### Files Created
+
+- `FE/src/components/ChatPanel.tsx`
+
+### Files Modified
+
+- `FE/src/types/api.ts`
+- `FE/src/types/ws.ts`
+- `FE/src/lib/api.ts`
+- `FE/src/lib/ws.ts`
+- `FE/src/features/room/useMeetingRoom.ts`
+- `FE/src/pages/RoomPage.tsx`
+- `FE/src/components/ParticipantList.tsx`
+- `FE/src/components/ParticipantTile.tsx`
+- `FE/src/components/AudioDevicePanel.tsx`
+- `FE/src/index.css`
+- `docs/frontend/IMPLEMENTATION_STATE.md`
+
+### Testing Status
+
+- Testing deferred by instruction: no tests run, no test files modified.
+
+## Turn Update: 2026-05-01 Meeting Language Pair UX (Kickoff)
+
+- Time: 2026-05-01T17:05:00+07:00
+- Mode: CODE-ONLY
+- Testing deferred: yes
+
+### Objective Locked
+
+- Add explicit create-room language-pair selection UX (`meeting_languages`, exactly 2 distinct languages).
+- Restrict join-room language selection to room-level `meeting_languages` only.
+- Surface room language pair context in room UI and runtime state/hook.
+- Wire FE API contracts to backend meeting-pair semantics (no `any`).
+
+### Planned FE Scope
+
+- `FE/src/lib/api.ts`
+- `FE/src/types/api.ts`
+- `FE/src/types/ws.ts`
+- `FE/src/pages/HomePage.tsx`
+- `FE/src/components/JoinRoomCard.tsx`
+- `FE/src/features/room/useMeetingRoom.ts`
+- `FE/src/pages/RoomPage.tsx`
+- `docs/frontend/IMPLEMENTATION_STATE.md`
+
+## Turn Update: 2026-05-01 Meeting Language Pair UX (Post-Major)
+
+- Time: 2026-05-01T17:34:00+07:00
+- Status: core FE implementation completed
+
+### UX + Flow Changes Implemented
+
+- Create room flow now requires explicit meeting pair selection (2 languages) before submit.
+- Join room flow language selector is now constrained to room-level `meeting_languages`.
+- In-room language selector is constrained to same pair; selecting outside pair is blocked in runtime hook.
+- Room header now shows language context clearly:
+  - meeting pair (`A <-> B`)
+  - current user language
+
+### FE Validation Rules Added
+
+- Create room:
+  - must select both language fields
+  - pair must be distinct
+  - language must be valid in `vi|en|ja`
+- Join room:
+  - disable submit if room pair is unavailable/invalid
+  - only allow selecting within resolved room pair
+- In-room language change:
+  - rejects language outside resolved room pair and shows usable error message
+
+### Contract / State Changes
+
+- Added FE request type for create room payload with `meeting_languages` tuple.
+- Added `meeting_languages` support on room summary/snapshot/websocket room payload typing.
+- Updated join request/participant typing to concrete meeting-language type (no `any`).
+- Extended room runtime hook to derive and expose room-level `meetingLanguages` for UI rendering and selector constraints.
+
+### Files Updated (This Turn)
+
+- `FE/src/types/api.ts`
+- `FE/src/types/ws.ts`
+- `FE/src/lib/api.ts`
+- `FE/src/pages/HomePage.tsx`
+- `FE/src/components/JoinRoomCard.tsx`
+- `FE/src/features/room/useMeetingRoom.ts`
+- `FE/src/pages/RoomPage.tsx`
+- `FE/src/index.css`
+- `docs/frontend/IMPLEMENTATION_STATE.md`
+
+## Turn Update: 2026-05-01 Meeting Language Pair UX (Final Sync)
+
+- Time: 2026-05-01T17:38:00+07:00
+- Scope confirmation: FE create/join/in-room language behaviors now follow backend room-level meeting pair semantics.
+- Room state path now carries `meeting_languages` context end-to-end (API types, WS payload type, runtime hook, render path).
+- Backward compatibility: if `meeting_languages` is absent, FE applies graceful fallback from supported languages and blocks unsafe join submit when pair cannot be resolved.
+- Testing status: deferred by instruction (no tests run, no test files modified).
+
 ## Turn Update: 2026-05-01 Audio Device Controls Bugfix (Kickoff)
 
 - Time: 2026-05-01T14:30:00+07:00
@@ -368,6 +923,17 @@
 
 ## Completed This Turn
 
+- [x] Room chat panel — ChatPanel component with scrollable message list, input bar, send action
+- [x] Chat realtime state — `chatMessages` in useMeetingRoom hydrated from snapshot and updated via `chat.message` events
+- [x] Chat WS client — `GatewaySocket.sendChatMessage(text)` sends `chat.send` envelope
+- [x] Host state model — `hostParticipantId`, `isCurrentUserHost` derived in useMeetingRoom
+- [x] Host badge — `Host` badge in ParticipantList and ParticipantTile
+- [x] Host transfer handling — `room.host_changed` event updates host state and re-flags all participants
+- [x] Host mute controls — host-only `Mute` button in ParticipantList per remote human participant
+- [x] Moderation mute REST — `api.muteParticipant()` with WS fallback
+- [x] Force mute local mic — `moderation.force_muted` event triggers `setLocalMicrophoneMuted(track, true)`
+- [x] Muted-by-host UI — disabled unmute button, "Muted by host" label, `Muted` badge, force-muted banner
+- [x] Snapshot hydration — host_participant_id, is_host, recent_messages, muted_by_host loaded on join/reconnect
 - [x] FE lifecycle cleanup hardening — stale closure fix, deterministic ref teardown
 - [x] Added `isScreenSharingRef` to mirror `isScreenSharing` state without closure capture
 - [x] Removed `isScreenSharing` from unload effect deps — handlers now stable per session, no re-registration race on screen share toggle
@@ -474,6 +1040,7 @@
 ## Files Created
 
 - `docs/frontend/IMPLEMENTATION_STATE.md`
+- `FE/src/components/ChatPanel.tsx`
 - `FE/src/features/test/useMicTest.ts`
 - `FE/src/features/test/useTranslationTest.ts`
 - `FE/src/components/MicLevelMeter.tsx`

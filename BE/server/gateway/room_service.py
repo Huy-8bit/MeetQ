@@ -1,7 +1,7 @@
 import json
 import uuid
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from fastapi.encoders import jsonable_encoder
 from redis.asyncio import Redis
@@ -12,13 +12,16 @@ from server.gateway.auth import issue_room_token
 from server.gateway.livekit_tokens import generate_livekit_token
 from server.gateway.room_store import RoomStore
 from server.meeting_modes import (
+    DEFAULT_ROOM_MEETING_LANGUAGES,
     MEETING_MODE_BRSE_RELAY,
     INTERPRETER_MODE_BRSE_PARTICIPANT,
+    SUPPORTED_MEETING_LANGUAGES,
     active_human_participant_count,
     build_brse_audio_routing,
     build_brse_virtual_participant,
 )
 from server.models import (
+    ChatMessage,
     CreateRoomResponse,
     CreateRoomResponseJoin,
     CreateRoomResponseRoom,
@@ -29,6 +32,7 @@ from server.models import (
     JoinRoomResponseRoomToken,
     JoinRoomResponseWebsocket,
     Language,
+    MeetingLanguage,
     ParticipantState,
     RoomSnapshotResponse,
     RoomState,
@@ -43,7 +47,15 @@ class RoomFullError(Exception):
 
 
 class InvalidLanguageError(Exception):
-    pass
+    def __init__(self, message: str, details: Optional[Dict[str, Any]] = None):
+        super().__init__(message)
+        self.details = details or {}
+
+
+class InvalidMeetingLanguagesError(Exception):
+    def __init__(self, message: str, details: Optional[Dict[str, Any]] = None):
+        super().__init__(message)
+        self.details = details or {}
 
 
 class RoomNotFoundError(Exception):
@@ -54,7 +66,15 @@ class ParticipantNotFoundError(Exception):
     pass
 
 
+class InvalidChatMessageError(Exception):
+    def __init__(self, message: str, code: str = "invalid_chat_message"):
+        super().__init__(message)
+        self.code = code
+
+
 class RoomService:
+    MAX_CHAT_MESSAGE_LENGTH = 2000
+
     def __init__(self, store: RoomStore, settings: Settings, redis: Redis):
         self.store = store
         self.settings = settings
@@ -75,10 +95,41 @@ class RoomService:
         envelope = build_envelope(event_type, room_id, jsonable_encoder(payload))
         await self.redis.publish(self.gateway_control_channel, json.dumps(envelope))
 
-    async def create_room(self) -> CreateRoomResponse:
+    def _normalize_meeting_languages(self, meeting_languages: List[str]) -> List[MeetingLanguage]:
+        if not meeting_languages:
+            return list(DEFAULT_ROOM_MEETING_LANGUAGES)
+
+        if len(meeting_languages) != 2:
+            raise InvalidMeetingLanguagesError(
+                "meeting_languages must contain exactly 2 languages",
+                details={"field": "meeting_languages", "expected": 2},
+            )
+
+        if meeting_languages[0] == meeting_languages[1]:
+            raise InvalidMeetingLanguagesError(
+                "meeting_languages must contain 2 distinct languages",
+                details={"field": "meeting_languages", "unique": True},
+            )
+
+        supported = set(SUPPORTED_MEETING_LANGUAGES)
+        invalid = [lang for lang in meeting_languages if lang not in supported]
+        if invalid:
+            raise InvalidMeetingLanguagesError(
+                "meeting_languages contains unsupported language",
+                details={
+                    "field": "meeting_languages",
+                    "unsupported": invalid,
+                    "supported": list(SUPPORTED_MEETING_LANGUAGES),
+                },
+            )
+
+        return [meeting_languages[0], meeting_languages[1]]
+
+    async def create_room(self, meeting_languages: List[str]) -> CreateRoomResponse:
         room_id = self._generate_id("rm")
         now = self._now_str()
         exp = self._exp_str()
+        normalized_meeting_languages = self._normalize_meeting_languages(meeting_languages)
 
         room = RoomState(
             room_id=room_id,
@@ -86,11 +137,12 @@ class RoomService:
             created_at=now,
             expires_at=exp,
             participant_limit=8,
-            supported_languages=["vi", "en", "ja"],
+            supported_languages=list(SUPPORTED_MEETING_LANGUAGES),
+            meeting_languages=normalized_meeting_languages,
             meeting_mode=MEETING_MODE_BRSE_RELAY,
             interpreter_mode=INTERPRETER_MODE_BRSE_PARTICIPANT,
-            audio_routing=build_brse_audio_routing(),
-            virtual_participants=[build_brse_virtual_participant(room_id, now)],
+            audio_routing=build_brse_audio_routing(normalized_meeting_languages),
+            virtual_participants=[build_brse_virtual_participant(room_id, now, normalized_meeting_languages)],
         )
         await self.store.create_room(room)
 
@@ -125,6 +177,7 @@ class RoomService:
                 for transcript in snapshot.recent_transcripts
                 if self._transcript_visible_to_participant(transcript, participant_id)
             ],
+            recent_messages=snapshot.recent_messages,
         )
 
     def _transcript_visible_to_participant(
@@ -150,8 +203,12 @@ class RoomService:
         if active_human_participant_count(snapshot.participants) >= snapshot.room.participant_limit:
             raise RoomFullError()
 
-        if language not in snapshot.room.supported_languages and language != "auto":
-            raise InvalidLanguageError()
+        meeting_pair = list(snapshot.room.meeting_languages)
+        if language == "auto" or language not in meeting_pair:
+            raise InvalidLanguageError(
+                f"language must be one of room meeting_languages: {', '.join(meeting_pair)}",
+                details={"field": "language", "meeting_languages": meeting_pair},
+            )
 
         if snapshot.room.state in {"created", "empty"}:
             meta_json = await self.store.client.get(self.store._meta_key(room_id))
@@ -232,8 +289,84 @@ class RoomService:
             snapshot=SnapshotData(
                 participants=personalized_snapshot.participants,
                 recent_transcripts=personalized_snapshot.recent_transcripts,
+                recent_messages=personalized_snapshot.recent_messages,
             ),
         )
+
+    async def send_chat_message(
+        self,
+        room_id: str,
+        participant_id: str,
+        session_id: Optional[str],
+        text: Any,
+        client_event_id: Optional[str] = None,
+    ) -> ChatMessage:
+        if not isinstance(text, str):
+            raise InvalidChatMessageError("text must be a string")
+
+        normalized_text = text.strip()
+        if not normalized_text:
+            raise InvalidChatMessageError("message text must not be empty", code="empty_chat_message")
+
+        if len(normalized_text) > self.MAX_CHAT_MESSAGE_LENGTH:
+            raise InvalidChatMessageError(
+                f"message text must be at most {self.MAX_CHAT_MESSAGE_LENGTH} characters",
+                code="chat_message_too_long",
+            )
+
+        snapshot = await self.store.get_room_snapshot(room_id)
+        if not snapshot:
+            raise RoomNotFoundError()
+
+        if client_event_id:
+            existing_message = next(
+                (
+                    message
+                    for message in snapshot.recent_messages
+                    if message.client_event_id == client_event_id
+                ),
+                None,
+            )
+            if existing_message is not None:
+                return existing_message
+
+        participant = await self.store.get_participant(room_id, participant_id)
+        if participant is None:
+            raise ParticipantNotFoundError()
+
+        if session_id and participant.session_id != session_id:
+            raise InvalidChatMessageError("session is no longer valid", code="session_mismatch")
+
+        if participant.status == "disconnected":
+            raise ParticipantNotFoundError()
+
+        if participant.is_virtual:
+            raise InvalidChatMessageError("virtual participants cannot send chat", code="chat_not_allowed")
+
+        now = self._now_str()
+        message = ChatMessage(
+            message_id=self._generate_id("msg"),
+            room_id=room_id,
+            participant_id=participant.participant_id,
+            display_name=participant.display_name,
+            language=participant.language,
+            text=normalized_text,
+            created_at=now,
+            client_event_id=client_event_id,
+            sender_id=participant.participant_id,
+            sender_display_name=participant.display_name,
+            sender_language=participant.language,
+            sent_at=now,
+        )
+
+        await self.store.append_chat_message(room_id, message)
+        await self.store.update_participant(
+            room_id,
+            participant_id,
+            {"last_seen_at": now},
+        )
+        await self._publish(EventType.CHAT_MESSAGE, room_id, message.model_dump())
+        return message
 
     async def leave_room(self, room_id: str, participant_id: str, session_id: Optional[str] = None) -> None:
         await self.cleanup_participant(
@@ -443,8 +576,12 @@ class RoomService:
         if not snapshot:
             raise RoomNotFoundError()
 
-        if language not in snapshot.room.supported_languages and language != "auto":
-            raise InvalidLanguageError()
+        meeting_pair = list(snapshot.room.meeting_languages)
+        if language == "auto" or language not in meeting_pair:
+            raise InvalidLanguageError(
+                f"language must be one of room meeting_languages: {', '.join(meeting_pair)}",
+                details={"field": "language", "meeting_languages": meeting_pair},
+            )
 
         p_json = await self.store.client.hget(self.store._parts_key(room_id), participant_id)
         if not p_json:
@@ -470,6 +607,7 @@ class RoomService:
             expires_at=payload["expires_at"],
             participant_limit=payload["participant_limit"],
             supported_languages=payload["supported_languages"],
+            meeting_languages=payload.get("meeting_languages", list(DEFAULT_ROOM_MEETING_LANGUAGES)),
             meeting_mode=payload.get("meeting_mode", MEETING_MODE_BRSE_RELAY),
             interpreter_mode=payload.get("interpreter_mode", INTERPRETER_MODE_BRSE_PARTICIPANT),
             audio_routing=payload["audio_routing"],

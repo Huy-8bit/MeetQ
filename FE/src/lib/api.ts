@@ -1,6 +1,9 @@
 import type {
   ApiErrorEnvelope,
+  CreateRoomRequest,
   CreateRoomResponse,
+  MuteParticipantRequest,
+  MuteParticipantResponse,
   ScreenShareStartRequest,
   ScreenShareStateResponse,
   CreateTranslationTestRequest,
@@ -117,10 +120,10 @@ async function requestJson<T>(
 }
 
 export const api = {
-  createRoom() {
+  createRoom(body: CreateRoomRequest) {
     return requestJson<CreateRoomResponse>("/api/rooms", {
       method: "POST",
-      body: JSON.stringify({}),
+      body: JSON.stringify(body),
     });
   },
 
@@ -155,6 +158,14 @@ export const api = {
       method: "POST",
       headers: buildAuthHeaders(token),
       body: JSON.stringify({}),
+    });
+  },
+
+  muteParticipant(roomId: string, token: string, body: MuteParticipantRequest) {
+    return requestJson<MuteParticipantResponse>(`/api/rooms/${roomId}/moderation/mute`, {
+      method: "POST",
+      headers: buildAuthHeaders(token),
+      body: JSON.stringify(body),
     });
   },
 

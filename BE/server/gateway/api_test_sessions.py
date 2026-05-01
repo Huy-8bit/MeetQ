@@ -14,6 +14,7 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException
 
 from server.gateway.app_state import app_state
+from server.meeting_modes import SUPPORTED_MEETING_LANGUAGES
 from server.models import (
     CreateMicTestSessionResponse,
     CreateTranslationTestRequest,
@@ -22,7 +23,8 @@ from server.models import (
 
 router = APIRouter(prefix="/api/test", tags=["test-sessions"])
 
-_SUPPORTED_LANGS = {"vi", "en", "ja"}
+_SUPPORTED_LANGS = tuple(SUPPORTED_MEETING_LANGUAGES)
+_SUPPORTED_LANG_SET = set(_SUPPORTED_LANGS)
 
 
 # ------------------------------------------------------------------
@@ -73,7 +75,7 @@ async def create_translation_test_session(
     """
     Create a translation-test session.
 
-    FE must provide `src_lang` and `tgt_lang` (vi | en | ja).
+    FE must provide explicit platform-supported `src_lang` and `tgt_lang`.
     FE uses the returned `websocket.url` to connect and stream PCM16 audio.
     The server processes audio through the realtime translation pipeline and
     replies with `translation_test.partial` and `translation_test.final` events.
@@ -83,25 +85,25 @@ async def create_translation_test_session(
 
     Session lifecycle: created -> listening -> translating -> completed -> (auto-expired after 15 min)
     """
-    if body.src_lang not in _SUPPORTED_LANGS:
+    if body.src_lang not in _SUPPORTED_LANG_SET:
         raise HTTPException(
             status_code=422,
             detail={
                 "error": {
                     "code": "invalid_language",
-                    "message": f"src_lang must be one of {sorted(_SUPPORTED_LANGS)}",
-                    "details": {"field": "src_lang"},
+                    "message": f"src_lang must be one of {', '.join(_SUPPORTED_LANGS)}",
+                    "details": {"field": "src_lang", "supported": list(_SUPPORTED_LANGS)},
                 }
             },
         )
-    if body.tgt_lang not in _SUPPORTED_LANGS:
+    if body.tgt_lang not in _SUPPORTED_LANG_SET:
         raise HTTPException(
             status_code=422,
             detail={
                 "error": {
                     "code": "invalid_language",
-                    "message": f"tgt_lang must be one of {sorted(_SUPPORTED_LANGS)}",
-                    "details": {"field": "tgt_lang"},
+                    "message": f"tgt_lang must be one of {', '.join(_SUPPORTED_LANGS)}",
+                    "details": {"field": "tgt_lang", "supported": list(_SUPPORTED_LANGS)},
                 }
             },
         )

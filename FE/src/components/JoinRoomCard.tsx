@@ -1,32 +1,79 @@
-import { useState } from "react";
-import type { Language, RoomSnapshotResponse } from "../types/api";
+import { useEffect, useState, type FormEvent } from "react";
+import {
+  formatMeetingLanguagePair,
+  getLanguageLabel,
+} from "../lib/languages";
+import type { MeetingLanguage, RoomSnapshotResponse } from "../types/api";
 
 interface JoinRoomCardProps {
   room: RoomSnapshotResponse["room"];
   participants: RoomSnapshotResponse["participants"];
-  onJoin: (payload: { displayName: string; language: Language }) => Promise<void>;
+  meetingLanguages: MeetingLanguage[];
+  onJoin: (payload: { displayName: string; language: MeetingLanguage }) => Promise<void>;
   isSubmitting: boolean;
   error: string | null;
 }
 
-const SUPPORTED_LANGUAGES: Language[] = ["vi", "en", "ja"];
-
 export function JoinRoomCard({
   room,
   participants,
+  meetingLanguages,
   onJoin,
   isSubmitting,
   error,
 }: JoinRoomCardProps) {
   const [displayName, setDisplayName] = useState("");
-  const [language, setLanguage] = useState<Language>("vi");
+  const [language, setLanguage] = useState<MeetingLanguage | "">("");
+  const [validationError, setValidationError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (language && meetingLanguages.length === 2 && !meetingLanguages.includes(language)) {
+      setLanguage("");
+    }
+  }, [language, meetingLanguages]);
+
+  const languagePairUnavailable = meetingLanguages.length !== 2;
+
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    if (!displayName.trim()) {
+      setValidationError("Please enter your display name.");
+      return;
+    }
+
+    if (languagePairUnavailable) {
+      setValidationError(
+        "Room meeting language pair is unavailable. Reload room snapshot or ask the host to recreate the room.",
+      );
+      return;
+    }
+
+    if (!language) {
+      setValidationError("Choose your language from the room meeting pair.");
+      return;
+    }
+
+    if (!meetingLanguages.includes(language)) {
+      setValidationError(
+        `Choose one of the room meeting languages: ${formatMeetingLanguagePair(meetingLanguages)}.`,
+      );
+      return;
+    }
+
+    setValidationError(null);
+    await onJoin({
+      displayName: displayName.trim(),
+      language,
+    });
+  }
 
   return (
     <section className="join-card panel">
       <div className="panel-header">
         <div>
           <h2>Join Room</h2>
-          <p>Enter a display name, choose your language, and let BRSE AI relay across the room.</p>
+          <p>Enter a display name and choose your language from the room meeting pair.</p>
         </div>
       </div>
 
@@ -47,21 +94,15 @@ export function JoinRoomCard({
         </div>
       </div>
 
-      <form
-        className="join-form"
-        onSubmit={(event) => {
-          event.preventDefault();
-          void onJoin({
-            displayName: displayName.trim(),
-            language,
-          });
-        }}
-      >
+      <form className="join-form" onSubmit={(event) => void handleSubmit(event)}>
         <label className="field">
           <span>Name</span>
           <input
             value={displayName}
-            onChange={(event) => setDisplayName(event.target.value)}
+            onChange={(event) => {
+              setDisplayName(event.target.value);
+              setValidationError(null);
+            }}
             maxLength={40}
             placeholder="Your display name"
             required
@@ -69,24 +110,50 @@ export function JoinRoomCard({
         </label>
 
         <label className="field">
-          <span>Language</span>
+          <span>Your language</span>
           <select
             value={language}
-            onChange={(event) => setLanguage(event.target.value as Language)}
+            onChange={(event) => {
+              setLanguage(event.target.value as MeetingLanguage | "");
+              setValidationError(null);
+            }}
+            disabled={languagePairUnavailable}
           >
-            {SUPPORTED_LANGUAGES.map((item) => (
-              <option key={item} value={item}>
-                {item.toUpperCase()}
-              </option>
-            ))}
+            {languagePairUnavailable ? (
+              <option value={language}>Meeting language pair unavailable</option>
+            ) : (
+              <>
+                <option value="">Choose your language</option>
+                {meetingLanguages.map((item) => (
+                  <option key={item} value={item}>
+                    {getLanguageLabel(item)}
+                  </option>
+                ))}
+              </>
+            )}
           </select>
         </label>
 
-        <button className="button-primary" type="submit" disabled={isSubmitting}>
+        <p className="field-hint">
+          Meeting languages: {formatMeetingLanguagePair(meetingLanguages)}
+        </p>
+
+        <button
+          className="button-primary"
+          type="submit"
+          disabled={isSubmitting || languagePairUnavailable}
+        >
           {isSubmitting ? "Joining..." : "Join Meeting"}
         </button>
       </form>
 
+      {languagePairUnavailable ? (
+        <div className="inline-error">
+          Room meeting language pair is unavailable. Reload room snapshot or ask the host to recreate the room.
+        </div>
+      ) : null}
+
+      {validationError ? <div className="inline-error">{validationError}</div> : null}
       {error ? <div className="inline-error">{error}</div> : null}
 
       <div className="join-card-footer">
@@ -110,7 +177,7 @@ export function JoinRoomCard({
                     <span className="badge kind">BRSE AI</span>
                   ) : null}
                   <span className="language-pill">
-                    {participant.language.toUpperCase()}
+                    {getLanguageLabel(participant.language)}
                   </span>
                 </div>
               </div>
