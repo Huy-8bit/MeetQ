@@ -35,7 +35,7 @@ Ràng buộc thiết kế:
 
 - Python 3.12+, `asyncio`
 - Không dùng SQL database
-- Room state lưu Redis với TTL 24 giờ
+- Room state lưu Redis với TTL = meeting duration + 5 phút grace (mặc định 35 phút)
 - `BE/src/` giữ nguyên, toàn bộ code mới nằm dưới `BE/server/`
 - Gateway và Interpreter giao tiếp qua **Redis pub/sub + Redis state**, không dùng shared memory, không dùng internal HTTP
 
@@ -85,9 +85,9 @@ REDIS_URL=redis://redis:6379/0
 ROOM_JWT_SECRET=replace-me
 ROOM_JWT_ALG=HS256
 ROOM_TOKEN_TTL_SECONDS=86400
-ROOM_TTL_SECONDS=86400
+ROOM_MEETING_DURATION_SECONDS=1800
 ROOM_EMPTY_GRACE_SECONDS=30
-ROOM_MAX_PARTICIPANTS=8
+ROOM_MAX_PARTICIPANTS=0
 LIVEKIT_API_KEY=devkey
 LIVEKIT_API_SECRET=secret
 LIVEKIT_WS_URL_PUBLIC=ws://localhost:7880
@@ -163,7 +163,7 @@ Gateway dùng Redis làm source of truth cho room và participant metadata.
 | `brseai:v1:room:{room_id}:seq` | string(int) | Monotonic event/transcript sequence |
 | `brseai:v1:room:{room_id}:locks:cleanup` | string | Optional short-lived cleanup lock |
 
-Gateway refresh TTL 24h trên `meta`, `participants`, `transcripts`, `seq` mỗi khi:
+Gateway refresh TTL (meeting duration + 5 phút cleanup grace) trên `meta`, `participants`, `transcripts`, `seq` mỗi khi:
 
 - room được tạo
 - participant join
@@ -172,7 +172,7 @@ Gateway refresh TTL 24h trên `meta`, `participants`, `transcripts`, `seq` mỗi
 - transcript mới được persist
 - interpreter status cập nhật
 
-Khi room chuyển sang `empty`, TTL vẫn được refresh thêm 24h tính từ thời điểm room rỗng lần cuối.
+Khi room chuyển sang `empty`, TTL vẫn được refresh thêm cleanup grace tính từ thời điểm room rỗng lần cuối.
 
 ### Logical Models
 
@@ -202,7 +202,7 @@ class RoomState(TypedDict):
     emptied_at: str | None
     expires_at: str
     brse_enabled: bool
-    participant_limit: int
+    participant_limit: int | None  # None = no backend participant cap
     supported_languages: list[str]
     meeting_languages: list[str]  # exact 2, distinct, subset of supported_languages
     audio_routing: dict[str, str]
@@ -242,8 +242,8 @@ class TranscriptState(TypedDict):
     "created_at": "2026-04-29T13:00:00Z",
     "activated_at": "2026-04-29T13:01:14Z",
     "emptied_at": null,
-    "expires_at": "2026-04-30T13:12:54Z",
-    "participant_limit": 8,
+    "expires_at": "2026-04-29T13:30:00Z",
+    "participant_limit": null,
     "supported_languages": ["vi", "en", "ja", "zh", "ko", "fr", "es"],
     "participant_count": 2,
     "transcript_count": 14,
@@ -330,12 +330,11 @@ Common error envelope:
 ```json
 {
   "error": {
-    "code": "room_full",
-    "message": "Room rm_8f3k2v1m already has 8 active participants.",
+    "code": "room_expired",
+    "message": "Room meeting duration has expired. Please create a new room.",
     "request_id": "req_01hs8z1b2p",
     "details": {
-      "room_id": "rm_8f3k2v1m",
-      "participant_limit": 8
+      "room_id": "rm_8f3k2v1m"
     }
   }
 }
@@ -372,7 +371,7 @@ Validation:
     "created_at": "2026-04-29T13:00:00Z",
     "expires_at": "2026-04-30T13:00:00Z",
     "brse_enabled": true,
-    "participant_limit": 8,
+    "participant_limit": null,
     "supported_languages": ["vi", "en", "ja", "zh", "ko", "fr", "es"],
     "meeting_languages": ["vi", "ja"]
   },
@@ -407,7 +406,7 @@ Không cần auth cho MVP. Room id đủ khó đoán và không có room listing
     "state": "active",
     "created_at": "2026-04-29T13:00:00Z",
     "expires_at": "2026-04-30T13:12:54Z",
-    "participant_limit": 8,
+    "participant_limit": null,
     "supported_languages": ["vi", "en", "ja", "zh", "ko", "fr", "es"],
     "meeting_languages": ["vi", "ja"],
     "participant_count": 2
@@ -475,7 +474,8 @@ Sinh participant session, room JWT, LiveKit token, và snapshot ban đầu.
 1. `display_name` trimmed length `1..40`
 2. `language` phải thuộc đúng `room.meeting_languages` của room
 3. room phải tồn tại và chưa `deleted`
-4. `participant_count < ROOM_MAX_PARTICIPANTS`
+4. room phải chưa expired (meeting duration 30 phút)
+5. nếu `ROOM_MAX_PARTICIPANTS > 0`: `participant_count < ROOM_MAX_PARTICIPANTS`
 
 #### Success Response `200 OK`
 
@@ -484,7 +484,7 @@ Sinh participant session, room JWT, LiveKit token, và snapshot ban đầu.
   "room": {
     "room_id": "rm_8f3k2v1m",
     "state": "active",
-    "participant_limit": 8,
+    "participant_limit": null,
     "supported_languages": ["vi", "en", "ja", "zh", "ko", "fr", "es"],
     "meeting_languages": ["vi", "ja"]
   },
@@ -527,7 +527,8 @@ Sinh participant session, room JWT, LiveKit token, và snapshot ban đầu.
 | Status | Code | Meaning |
 | --- | --- | --- |
 | `404` | `room_not_found` | Room không tồn tại. |
-| `409` | `room_full` | Room đã đủ 8 participants active/reconnecting. |
+| `410` | `room_expired` | Room meeting duration đã hết (30 phút). |
+| `409` | `room_full` | Room đã đủ participants (chỉ khi ROOM_MAX_PARTICIPANTS > 0). |
 | `422` | `invalid_display_name` | Tên rỗng hoặc quá dài. |
 | `422` | `invalid_language` | Language không thuộc room `meeting_languages`. |
 | `503` | `redis_unavailable` | Không lưu được participant state. |
@@ -733,7 +734,7 @@ Gửi ngay sau connect thành công.
     },
     "room": {
       "state": "active",
-      "participant_limit": 8,
+      "participant_limit": null,
       "supported_languages": ["vi", "en", "ja", "zh", "ko", "fr", "es"]
     },
     "participants": [

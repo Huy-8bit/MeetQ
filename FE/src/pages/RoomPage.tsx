@@ -5,6 +5,7 @@ import {
   formatMeetingLanguagePair,
 } from "../lib/languages";
 import { useSessionStore } from "../state/session";
+import { useRoomExpiry } from "../features/room/useRoomExpiry";
 import type {
   MeetingLanguage,
   RoomSnapshotResponse,
@@ -33,6 +34,7 @@ export function RoomPage() {
   const [roomSnapshot, setRoomSnapshot] = useState<RoomSnapshotResponse | null>(null);
   const [loadingSnapshot, setLoadingSnapshot] = useState(true);
   const [snapshotError, setSnapshotError] = useState<string | null>(null);
+  const [snapshotExpired, setSnapshotExpired] = useState(false);
   const [joining, setJoining] = useState(false);
   const [joinError, setJoinError] = useState<string | null>(null);
   const [activePanel, setActivePanel] = useState<RoomPanelTab>("relay");
@@ -52,23 +54,35 @@ export function RoomPage() {
     let cancelled = false;
     setLoadingSnapshot(true);
     setSnapshotError(null);
+    setSnapshotExpired(false);
 
     void (async () => {
       try {
         const response = await api.getRoom(roomId);
         if (!cancelled) {
           setRoomSnapshot(response);
+          // Check if room is already expired from snapshot expires_at
+          if (response.room.expires_at) {
+            const expired = new Date(response.room.expires_at).getTime() <= Date.now();
+            if (expired) {
+              setSnapshotExpired(true);
+            }
+          }
         }
       } catch (error) {
         if (cancelled) {
           return;
         }
 
-        setSnapshotError(
-          error instanceof ApiError
-            ? mapRoomSnapshotError(error)
-            : "Could not load room details.",
-        );
+        if (error instanceof ApiError && error.code === "room_expired") {
+          setSnapshotExpired(true);
+        } else {
+          setSnapshotError(
+            error instanceof ApiError
+              ? mapRoomSnapshotError(error)
+              : "Could not load room details.",
+          );
+        }
       } finally {
         if (!cancelled) {
           setLoadingSnapshot(false);
@@ -87,6 +101,13 @@ export function RoomPage() {
     session,
     onSessionInvalidated: handleSessionInvalidated,
   });
+
+  // expiresAt comes from the live meeting state (updated via WS snapshots) or fallback to REST snapshot
+  const expiresAt = meeting.expiresAt ?? roomSnapshot?.room.expires_at ?? null;
+  const { isExpired: isTimerExpired } = useRoomExpiry(expiresAt);
+
+  // Room is expired if: backend told us (snapshotExpired), timer ran out, or meeting hook says so
+  const isRoomExpired = snapshotExpired || isTimerExpired || meeting.isRoomExpired;
 
   const activeScreenShareParticipants = meeting.participants.filter(
     (participant) => participant.is_screen_sharing,
@@ -110,6 +131,11 @@ export function RoomPage() {
     language: MeetingLanguage;
   }) {
     if (!roomId) {
+      return;
+    }
+
+    if (isRoomExpired) {
+      setJoinError("This meeting has expired and is no longer accepting participants.");
       return;
     }
 
@@ -146,11 +172,16 @@ export function RoomPage() {
       });
       saveSession(response);
     } catch (error) {
-      setJoinError(
-        error instanceof ApiError
-          ? mapJoinError(error, roomMeetingLanguages)
-          : "Could not join room. Check backend availability.",
-      );
+      if (error instanceof ApiError && error.code === "room_expired") {
+        setSnapshotExpired(true);
+        setJoinError("This meeting has expired.");
+      } else {
+        setJoinError(
+          error instanceof ApiError
+            ? mapJoinError(error, roomMeetingLanguages)
+            : "Could not join room. Check backend availability.",
+        );
+      }
     } finally {
       setJoining(false);
     }
@@ -167,13 +198,29 @@ export function RoomPage() {
     );
   }
 
+  // Expired room with no session: show dedicated expired page (not generic error)
+  if (snapshotExpired && !session) {
+    return (
+      <main className="room-boot">
+        <div className="empty-state room-expired-page">
+          <span className="room-expired-icon" aria-hidden="true">⏱</span>
+          <strong>Meeting ended</strong>
+          <p>This room has expired. Meetings last 30 minutes.</p>
+          <button type="button" className="button-secondary" onClick={() => navigate("/")}>
+            Back Home
+          </button>
+        </div>
+      </main>
+    );
+  }
+
   if (snapshotError && !roomSnapshot && !session) {
     return (
       <main className="room-boot">
         <div className="empty-state">
           <strong>Room unavailable</strong>
           <p>{snapshotError}</p>
-          <button className="button-secondary" onClick={() => navigate("/")}>
+          <button type="button" className="button-secondary" onClick={() => navigate("/")}>
             Back Home
           </button>
         </div>
@@ -192,6 +239,7 @@ export function RoomPage() {
           room={roomSnapshot.room}
           participants={roomSnapshot.participants}
           meetingLanguages={roomMeetingLanguages}
+          isExpired={isRoomExpired}
           onJoin={handleJoin}
           isSubmitting={joining}
           error={joinError}
@@ -208,11 +256,12 @@ export function RoomPage() {
         meetingLanguages={roomMeetingLanguages}
         currentLanguage={meeting.selfState?.language || session.participant.language}
         participantCount={meeting.participants.length}
+        expiresAt={expiresAt}
         connectionState={meeting.connectionState}
         brseEnabled={meeting.brseEnabled}
         isTogglingBrse={meeting.isTogglingBrse}
         brseToggleError={meeting.brseToggleError}
-        canToggleBrse={meeting.canToggleBrse}
+        canToggleBrse={meeting.canToggleBrse && !isRoomExpired}
         onChangeLanguage={(language) => meeting.changeLanguage(language)}
         onToggleBrse={(nextEnabled) => {
           void meeting.toggleBrseMode(nextEnabled);
@@ -220,6 +269,11 @@ export function RoomPage() {
       />
 
       <div className="room-alert-stack">
+        {isRoomExpired ? (
+          <div className="banner banner-danger banner-room-expired">
+            This meeting has ended. The room expired after 30 minutes.
+          </div>
+        ) : null}
         {meeting.connectionError ? (
           <div className="banner banner-danger">{meeting.connectionError}</div>
         ) : null}
@@ -275,11 +329,11 @@ export function RoomPage() {
               void meeting.toggleCameraEnabled();
             }}
             onToggleScreenShare={() => {
+              if (isRoomExpired) return;
               if (meeting.isScreenSharing) {
                 void meeting.stopScreenShare({ reason: "manual_stop" });
                 return;
               }
-
               void meeting.startScreenShare();
             }}
             onOpenPanel={setActivePanel}
@@ -316,7 +370,7 @@ export function RoomPage() {
               messages={meeting.chatMessages}
               selfParticipantId={meeting.selfState?.participant_id}
               onSend={meeting.sendChatMessage}
-              disabled={!meeting.canSendChat}
+              disabled={!meeting.canSendChat || isRoomExpired}
               error={meeting.chatError}
               isSending={meeting.isSendingChat}
               embedded
@@ -405,6 +459,9 @@ function mapRoomSnapshotError(error: ApiError): string {
   if (error.code === "room_not_found") {
     return "Room not found.";
   }
+  if (error.code === "room_expired") {
+    return "This meeting has expired.";
+  }
   return error.message;
 }
 
@@ -414,6 +471,9 @@ function mapJoinError(error: ApiError, meetingLanguages: MeetingLanguage[]): str
   }
   if (error.code === "room_not_found") {
     return "Room not found.";
+  }
+  if (error.code === "room_expired") {
+    return "This meeting has expired and is no longer accepting participants.";
   }
   if (error.code === "livekit_unavailable") {
     return "LiveKit is unavailable right now.";

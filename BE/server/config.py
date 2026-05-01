@@ -13,6 +13,8 @@ class Settings(BaseSettings):
     # JWT
     room_jwt_secret: str
     room_token_ttl_seconds: int = 86400
+    room_meeting_duration_seconds: int = 1800  # 30 minutes logical meeting duration
+    room_max_participants: int = 0  # 0 = no backend participant cap enforcement
     
     # LiveKit
     livekit_api_key: str

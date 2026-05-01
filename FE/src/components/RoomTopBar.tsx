@@ -4,6 +4,7 @@ import {
   formatMeetingLanguageBridge,
   getLanguageLabel,
 } from "../lib/languages";
+import { useRoomExpiry } from "../features/room/useRoomExpiry";
 import { BrseToggleControl } from "./BrseToggleControl";
 import { ConnectionBadge } from "./ConnectionBadge";
 
@@ -13,6 +14,7 @@ interface RoomTopBarProps {
   meetingLanguages: MeetingLanguage[];
   currentLanguage: Language;
   participantCount: number;
+  expiresAt: string | null | undefined;
   connectionState: GatewayConnectionState;
   brseEnabled: boolean;
   isTogglingBrse: boolean;
@@ -28,6 +30,7 @@ export function RoomTopBar({
   meetingLanguages,
   currentLanguage,
   participantCount,
+  expiresAt,
   connectionState,
   brseEnabled,
   isTogglingBrse,
@@ -38,6 +41,8 @@ export function RoomTopBar({
 }: RoomTopBarProps) {
   const languageOptions =
     meetingLanguages.length === 2 ? meetingLanguages : [currentLanguage];
+
+  const { remainingLabel, isExpired } = useRoomExpiry(expiresAt);
 
   return (
     <header className="room-topbar">
@@ -54,6 +59,11 @@ export function RoomTopBar({
             <span>{roomId}</span>
             <span>{formatMeetingLanguageBridge(meetingLanguages)}</span>
             <span>{participantCount} participant{participantCount === 1 ? "" : "s"}</span>
+            {remainingLabel ? (
+              <span className={isExpired ? "room-timer-chip room-timer-chip-expired" : "room-timer-chip"}>
+                {isExpired ? "Meeting ended" : `${remainingLabel} left`}
+              </span>
+            ) : null}
           </div>
         </div>
       </div>

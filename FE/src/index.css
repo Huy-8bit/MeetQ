@@ -387,13 +387,14 @@ button {
 }
 
 .transcript-panel {
-  min-height: 420px;
+  min-height: 280px;
 }
 
 .transcript-list {
-  max-height: 520px;
+  max-height: 480px;
   overflow-y: auto;
   padding-right: 4px;
+  scroll-behavior: smooth;
 }
 
 .participant-preview,
@@ -634,7 +635,7 @@ button {
 
 .transcript-item {
   display: grid;
-  gap: 12px;
+  gap: 8px;
   align-items: stretch;
   transition: border-color 160ms ease, background-color 160ms ease;
 }
@@ -679,12 +680,13 @@ button {
 
 .transcript-relay {
   margin: 0;
-  padding: 12px 14px;
-  border-radius: 14px;
+  padding: 8px 12px;
+  border-radius: 12px;
   background: rgba(15, 118, 110, 0.08);
   color: var(--accent-strong);
   font-weight: 700;
-  line-height: 1.55;
+  line-height: 1.5;
+  font-size: 0.92rem;
 }
 
 .transcript-item.is-partial .transcript-source {
@@ -1481,6 +1483,28 @@ button {
   font-weight: 700;
 }
 
+/* ── Room timer chip ─────────────────────────────────────────────────────── */
+.room-timer-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 8px;
+  background: rgba(20, 184, 166, 0.12);
+  border: 1px solid rgba(45, 212, 191, 0.22);
+  color: #5eead4;
+  font-size: 0.78rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.01em;
+}
+
+.room-timer-chip-expired {
+  background: rgba(127, 29, 29, 0.22);
+  border-color: rgba(248, 113, 113, 0.22);
+  color: #fca5a5;
+}
+
 .room-alert-stack {
   display: grid;
   gap: 8px;
@@ -2032,13 +2056,15 @@ button {
 }
 
 .room-side-content .transcript-list {
-  max-height: none;
-  overflow: visible;
-  padding-right: 0;
+  max-height: min(55vh, 440px);
+  overflow-y: auto;
+  padding-right: 2px;
+  scroll-behavior: smooth;
 }
 
 .room-side-content .transcript-item {
-  padding: 13px;
+  padding: 10px 12px;
+  gap: 6px;
 }
 
 .room-side-content .transcript-item.is-latest {
@@ -2048,11 +2074,34 @@ button {
 
 .room-side-content .transcript-source {
   color: #172033;
+  font-size: 0.88rem;
+  line-height: 1.45;
 }
 
 .room-side-content .transcript-relay {
   color: #0f766e;
   background: rgba(20, 184, 166, 0.1);
+  font-size: 0.86rem;
+  line-height: 1.45;
+  padding: 6px 10px;
+  border-radius: 10px;
+}
+
+.room-side-content .transcript-item-header {
+  gap: 6px;
+}
+
+.room-side-content .transcript-item-header strong {
+  font-size: 0.82rem;
+}
+
+.room-side-content .transcript-item-header span {
+  font-size: 0.76rem;
+}
+
+.room-side-content .transcript-badges .badge {
+  font-size: 0.72rem;
+  padding: 4px 8px;
 }
 
 .room-side-content .chat-panel {
@@ -2473,6 +2522,25 @@ button {
   color: #0f172a;
 }
 
+/* ── Create room policy note ─────────────────────────────────────────────── */
+.create-room-policy-note {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  border-radius: 10px;
+  background: rgba(20, 184, 166, 0.08);
+  border: 1px solid rgba(45, 212, 191, 0.16);
+  color: #5eead4;
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+
+.create-room-policy-note::before {
+  content: "⏱";
+  font-style: normal;
+}
+
 .create-room-cta,
 .join-room-cta {
   min-height: 50px;
@@ -2583,6 +2651,57 @@ button {
 
 .join-room-meta-row strong {
   color: #f8fafc;
+}
+
+.expiry-label {
+  color: #5eead4;
+}
+
+.expiry-label-expired {
+  color: #fca5a5;
+}
+
+/* ── Room expired state (join card) ──────────────────────────────────────── */
+.room-expired-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 36px 24px;
+  text-align: center;
+}
+
+.room-expired-state strong {
+  font-size: 1.1rem;
+  color: #f8fafc;
+}
+
+.room-expired-state p {
+  color: #94a3b8;
+  font-size: 0.9rem;
+  max-width: 280px;
+}
+
+.room-expired-icon {
+  font-size: 2rem;
+  display: block;
+  opacity: 0.7;
+}
+
+/* ── Room expired page (standalone) ─────────────────────────────────────── */
+.room-expired-page {
+  border: 1px solid rgba(248, 113, 113, 0.16);
+  background: rgba(127, 29, 29, 0.08);
+}
+
+.room-expired-page strong {
+  color: #fca5a5;
+}
+
+/* ── In-room expired banner ──────────────────────────────────────────────── */
+.banner-room-expired {
+  font-weight: 700;
 }
 
 .join-room-card {

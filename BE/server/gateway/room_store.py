@@ -18,7 +18,7 @@ class RoomStore:
     def __init__(
         self,
         client: redis.Redis,
-        ttl_seconds: int = 86400,
+        ttl_seconds: int = 2100,  # 30-min meeting + 5-min cleanup grace
         transcript_limit: int = 50,
         chat_limit: int = 100,
     ):

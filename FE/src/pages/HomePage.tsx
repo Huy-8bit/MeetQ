@@ -156,6 +156,10 @@ export function HomePage() {
               {createValidationError ? <div className="inline-error">{createValidationError}</div> : null}
               {createError ? <div className="inline-error">{createError}</div> : null}
 
+              <div className="create-room-policy-note">
+                Meetings last 30 minutes
+              </div>
+
               <button
                 className="create-room-cta"
                 type="button"

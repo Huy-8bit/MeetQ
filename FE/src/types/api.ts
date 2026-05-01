@@ -111,7 +111,7 @@ export interface RoomSummary {
   created_at: string;
   expires_at: string;
   brse_enabled?: boolean;
-  participant_limit: number;
+  participant_limit: number | null;
   supported_languages: Language[];
   meeting_languages?: MeetingLanguage[];
   meeting_mode?: MeetingMode;

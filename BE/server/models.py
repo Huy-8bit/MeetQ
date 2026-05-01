@@ -96,7 +96,7 @@ class RoomState(BaseModel):
     created_at: str
     expires_at: str
     brse_enabled: bool = DEFAULT_BRSE_ENABLED
-    participant_limit: int = 8
+    participant_limit: Optional[int] = None  # None = no backend participant cap
     supported_languages: List[MeetingLanguage] = Field(
         default_factory=lambda: list(SUPPORTED_MEETING_LANGUAGES)
     )
@@ -172,7 +172,7 @@ class CreateRoomResponseRoom(BaseModel):
     created_at: str
     expires_at: str
     brse_enabled: bool
-    participant_limit: int
+    participant_limit: Optional[int] = None
     supported_languages: List[MeetingLanguage]
     meeting_languages: List[MeetingLanguage]
     meeting_mode: MeetingMode

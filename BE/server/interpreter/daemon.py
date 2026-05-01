@@ -17,13 +17,28 @@ from server.meeting_modes import active_human_participant_count
 logger = logging.getLogger(__name__)
 
 
+def _is_room_expired(snapshot) -> bool:
+    """Check if the room meeting duration has elapsed."""
+    from datetime import datetime, timezone
+    if snapshot is None:
+        return True
+    expires_at_str = getattr(snapshot.room, 'expires_at', None)
+    if not expires_at_str:
+        return False
+    try:
+        expires_at = datetime.fromisoformat(expires_at_str.replace('Z', '+00:00'))
+        return datetime.now(timezone.utc) >= expires_at
+    except (ValueError, TypeError):
+        return False
+
+
 class InterpreterDaemon:
     def __init__(self, settings: Settings, redis: Redis):
         self.settings = settings
         self.redis = redis
         self.gateway_control_channel = settings.redis_channel_gateway_control
         self.interpreter_events_channel = settings.redis_channel_interpreter_events
-        self.room_store = RoomStore(redis, ttl_seconds=settings.room_token_ttl_seconds)
+        self.room_store = RoomStore(redis, ttl_seconds=settings.room_meeting_duration_seconds + 300)
         self.managers: Dict[str, RoomInterpreterManager] = {}
         self._pubsub = None
 
@@ -40,6 +55,10 @@ class InterpreterDaemon:
         if event_type == EventType.PARTICIPANT_JOINED:
             snapshot = await self.room_store.get_room_snapshot(room_id)
             if snapshot is None or not snapshot.room.brse_enabled:
+                await self._terminate_manager(room_id)
+                return
+            # Don't spawn runtime for expired rooms
+            if _is_room_expired(snapshot):
                 await self._terminate_manager(room_id)
                 return
             manager = await self._spawn_manager(room_id, snapshot=snapshot)
@@ -100,6 +119,11 @@ class InterpreterDaemon:
         if snapshot is None:
             snapshot = await self.room_store.get_room_snapshot(room_id)
         if snapshot is None or not snapshot.room.brse_enabled:
+            return None
+
+        # Don't spawn runtime for expired rooms
+        if _is_room_expired(snapshot):
+            logger.info("Room %s is expired; not spawning interpreter manager", room_id)
             return None
 
         logger.info("Spawning interpreter manager for room %s", room_id)

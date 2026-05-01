@@ -5,6 +5,7 @@ from server.gateway.room_service import (
     InvalidLanguageError,
     InvalidMeetingLanguagesError,
     ParticipantNotFoundError,
+    RoomExpiredError,
     RoomFullError,
     RoomNotFoundError,
     RoomService,
@@ -60,6 +61,12 @@ async def join_room(room_id: str, req: JoinRoomRequest, service: RoomService = D
         return await service.join_room(room_id, req.display_name, req.language, req.client)
     except RoomNotFoundError:
         return _error_response("room_not_found", "Room not found", 404)
+    except RoomExpiredError:
+        return _error_response(
+            "room_expired",
+            "Room meeting duration has expired. Please create a new room.",
+            410,
+        )
     except RoomFullError:
         return _error_response("room_full", "Room is full", 409)
     except InvalidLanguageError as exc:

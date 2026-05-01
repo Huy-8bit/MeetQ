@@ -1,5 +1,7 @@
 # Backend <-> Frontend API Contract
 
+> Update note (2026-05-01): room policy changed. Meeting duration is now 30 minutes (was 24h). `expires_at` reflects this. `participant_limit` is now `null` (no backend participant cap). Joining an expired room returns `410 room_expired`. New event `room.expired` can be broadcast to connected clients.
+>
 > Update note (2026-05-01): rooms now expose explicit `brse_enabled`. Create-room can set it, snapshots/events expose it, and `brse_enabled=false` means a normal human-only meeting: no `brse_ai` virtual participant, no BRSE interpreter runtime, no BRSE transcript/audio output.
 >
 > Update note (2026-04-30): new rooms now default to BRSE relay semantics. FE should expect `meeting_mode=brse_relay`, `interpreter_mode=brse_participant`, a virtual participant `brse_ai`, room-wide relay transcripts with `kind=relay`, and BRSE audio as virtual participant track metadata. Older per-listener translated-audio sections below are legacy reference and are no longer the authoritative output model for BRSE rooms.
@@ -247,7 +249,7 @@ Rules:
     "created_at": "ISO-8601 UTC string",
     "expires_at": "ISO-8601 UTC string",
     "brse_enabled": true,
-    "participant_limit": 8,
+    "participant_limit": null,
     "supported_languages": ["vi", "en", "ja", "zh", "ko", "fr", "es"],
     "meeting_languages": ["vi", "ja"]
   },
@@ -266,9 +268,9 @@ Rules:
     "room_id": "rm_8f3k2v1m",
     "state": "created",
     "created_at": "2026-04-29T13:00:00.000Z",
-    "expires_at": "2026-04-30T13:00:00.000Z",
+    "expires_at": "2026-04-29T13:30:00.000Z",
     "brse_enabled": true,
-    "participant_limit": 8,
+    "participant_limit": null,
     "supported_languages": ["vi", "en", "ja", "zh", "ko", "fr", "es"],
     "meeting_languages": ["vi", "ja"]
   },
@@ -299,7 +301,7 @@ Lấy snapshot room khi FE load room page hoặc reconnect.
     "created_at": "ISO-8601 UTC string",
     "expires_at": "ISO-8601 UTC string",
     "brse_enabled": true,
-    "participant_limit": 8,
+    "participant_limit": null,
     "supported_languages": ["vi", "en", "ja", "zh", "ko", "fr", "es"],
     "meeting_languages": ["vi", "ja"],
     "audio_routing": {
@@ -359,9 +361,9 @@ Lấy snapshot room khi FE load room page hoặc reconnect.
     "room_id": "rm_8f3k2v1m",
     "state": "active",
     "created_at": "2026-04-29T13:00:00.000Z",
-    "expires_at": "2026-04-30T13:12:54.000Z",
+    "expires_at": "2026-04-29T13:30:00.000Z",
     "brse_enabled": true,
-    "participant_limit": 8,
+    "participant_limit": null,
     "supported_languages": ["vi", "en", "ja", "zh", "ko", "fr", "es"],
     "meeting_languages": ["vi", "ja"],
     "audio_routing": {
@@ -430,7 +432,7 @@ Join room và nhận đủ credentials cho Gateway WS + LiveKit.
     "room_id": "string",
     "state": "active",
     "brse_enabled": true,
-    "participant_limit": 8,
+    "participant_limit": null,
     "supported_languages": ["vi", "en", "ja", "zh", "ko", "fr", "es"],
     "meeting_languages": ["vi", "ja"],
     "audio_routing": {
@@ -475,7 +477,7 @@ Join room và nhận đủ credentials cho Gateway WS + LiveKit.
     "room_id": "rm_8f3k2v1m",
     "state": "active",
     "brse_enabled": true,
-    "participant_limit": 8,
+    "participant_limit": null,
     "supported_languages": ["vi", "en", "ja", "zh", "ko", "fr", "es"],
     "meeting_languages": ["vi", "ja"],
     "audio_routing": {
@@ -562,7 +564,7 @@ Response là room summary đã cập nhật:
   "room_id": "rm_8f3k2v1m",
   "state": "active",
   "brse_enabled": true,
-  "participant_limit": 8,
+  "participant_limit": null,
   "supported_languages": ["vi", "en", "ja", "zh", "ko", "fr", "es"],
   "meeting_languages": ["vi", "ja"],
   "meeting_mode": "brse_relay",
@@ -756,7 +758,7 @@ Validation:
     "room": {
       "state": "created | active | empty",
       "brse_enabled": true,
-      "participant_limit": 8,
+      "participant_limit": null,
       "supported_languages": ["vi", "en", "ja", "zh", "ko", "fr", "es"],
       "meeting_languages": ["vi", "ja"],
       "audio_routing": {
@@ -790,7 +792,7 @@ Validation:
     "room": {
       "state": "active",
       "brse_enabled": true,
-      "participant_limit": 8,
+      "participant_limit": null,
       "supported_languages": ["vi", "en", "ja", "zh", "ko", "fr", "es"],
       "meeting_languages": ["vi", "ja"],
       "audio_routing": {

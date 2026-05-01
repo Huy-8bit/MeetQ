@@ -43,7 +43,7 @@ async def lifespan(app: FastAPI):
     # Startup
     app_state.settings = get_settings()
     app_state.redis = await create_redis_client(app_state.settings.redis_url)
-    app_state.room_store = RoomStore(app_state.redis, ttl_seconds=app_state.settings.room_token_ttl_seconds)
+    app_state.room_store = RoomStore(app_state.redis, ttl_seconds=app_state.settings.room_meeting_duration_seconds + 300)
     app_state.room_service = RoomService(app_state.room_store, app_state.settings, app_state.redis)
     app_state.ws_hub = WSHub(
         on_connection_lost=_on_ws_connection_lost,

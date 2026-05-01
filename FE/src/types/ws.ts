@@ -32,7 +32,8 @@ export type RoomSnapshotEvent = WsEnvelope<
     room: {
       state: "created" | "active" | "empty";
       brse_enabled?: boolean;
-      participant_limit: number;
+      participant_limit: number | null;
+      expires_at?: string;
       supported_languages: Language[];
       meeting_languages?: MeetingLanguage[];
       meeting_mode?: "direct_translation" | "brse_relay";
@@ -237,6 +238,15 @@ export type RoomBrseUpdatedEvent = WsEnvelope<
   }
 >;
 
+export type RoomExpiredEvent = WsEnvelope<
+  "room.expired",
+  {
+    room_id: string;
+    expired_at: string;
+    reason?: string | null;
+  }
+>;
+
 export type ServerEvent =
   | RoomSnapshotEvent
   | ParticipantJoinedEvent
@@ -248,6 +258,7 @@ export type ServerEvent =
   | ScreenShareStartedEvent
   | ScreenShareStoppedEvent
   | RoomBrseUpdatedEvent
+  | RoomExpiredEvent
   | ChatMessageEvent
   | RoomHostChangedEvent
   | ModerationForceMutedEvent

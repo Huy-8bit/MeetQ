@@ -1,5 +1,87 @@
 # Backend Implementation State
 
+## Turn Update: 2026-05-01 Room Policy: 30-Min Duration + No Participant Cap (Final Sync)
+
+- Time: 2026-05-01T20:22:41+07:00
+- Mode: CODE-ONLY
+- Testing deferred: yes, per instruction
+
+### Objective Locked
+
+- Change room meeting duration policy to 30 minutes (was 24h).
+- Remove backend participant limit enforcement (was hard cap of 8).
+- Ensure expired rooms reject new joins and do not spawn new BRSE runtimes.
+- Keep all existing room flows (create/join/leave/chat/screen-share/BRSE/transcript) intact.
+
+### Mandatory Read Status
+
+- Read required docs: `API_CONTRACT.md`, `GATEWAY_DESIGN.md`, `IMPLEMENTATION_STATE.md`
+- Read required backend files: `models.py`, `api_rooms.py`, `room_service.py`, `ws_endpoint.py`, `event_consumer.py`, `room_store.py`, `config.py`, `events.py`, `meeting_modes.py`
+- Read interpreter lifecycle files: `daemon.py`, `room_manager.py`
+
+### Room Expiry Strategy
+
+- **Logical meeting expiry**: 30 minutes from room creation (`room_meeting_duration_seconds = 1800`)
+- **Redis key retention TTL**: meeting duration + 5 minutes grace = 35 minutes (`room_meeting_duration_seconds + 300`)
+  - Grace allows stale event cleanup, snapshot reads for recently-expired rooms, and consistent cleanup
+- **Room JWT token TTL**: remains at 24h (`room_token_ttl_seconds = 86400`) — separate from meeting duration
+  - JWT lifetime is longer because it covers reconnect/session scenarios; meeting expiry is enforced at the room state layer, not the JWT layer
+- **Product-facing room validity**: 30 minutes. After `expires_at`, no new joins are allowed regardless of Redis key existence.
+
+### Participant Limit Strategy
+
+- **Backend enforcement**: removed. `participant_limit` field is now `Optional[int] = None` in models.
+- **Behavior**: when `participant_limit` is `None` or `0`, backend does not enforce any participant cap.
+- **Backward compatibility**: field is preserved in contract/response payloads as `null`. FE can interpret `null` as "no limit".
+- **Config**: `ROOM_MAX_PARTICIPANTS = 0` (0 = no enforcement). Can be set > 0 to re-enable cap if needed.
+- **Old validation removed**: `join_room` no longer raises `RoomFullError` when `participant_limit` is None.
+
+### Room Expired Handling
+
+- **Join room**: raises `RoomExpiredError` → API returns `410 room_expired`
+- **WebSocket connect**: checks room expiry before accepting → close code `4410` "Room expired"
+- **GET room**: still returns snapshot for expired rooms (useful for post-meeting history/debug)
+- **Interpreter daemon**: does not spawn new BRSE runtime for expired rooms; terminates existing managers
+- **Event**: `room.expired` event type added (`EventType.ROOM_EXPIRED`); can be broadcast by future background expiry sweeper (deferred to next turn)
+- **Active sessions at expiry boundary**: connected participants continue until disconnect; backend does not force-close existing WS at the moment of expiry (practical strategy; FE-side expiry UI deferred)
+
+### Runtime Cleanup Behavior
+
+- Expired rooms do not spawn new interpreter runtime (`_is_room_expired()` check in daemon)
+- If a room expires while runtime is active, runtime continues until natural teardown (participant leave, disconnect, or next gateway event check)
+- Redis keys auto-expire via TTL (35 min) so no manual cleanup sweep is needed
+- Room state transitions remain intact: created → active → empty → deleted (via TTL)
+
+### Contract Compatibility
+
+- `participant_limit` field kept in all response models as `Optional[int]`; value is `null` for new rooms
+- `expires_at` field remains unchanged in shape; value now reflects 30-min duration instead of 24h
+- New error code `room_expired` (HTTP 410) for join attempts on expired rooms
+- New WS close code `4410` for WebSocket connections to expired rooms
+- `room.expired` event type registered but active broadcast is deferred
+
+### Files Changed
+
+- `BE/server/config.py` — added `room_meeting_duration_seconds`, `room_max_participants`
+- `BE/server/events.py` — added `ROOM_EXPIRED` event type
+- `BE/server/models.py` — `participant_limit` → `Optional[int] = None`
+- `BE/server/gateway/room_service.py` — 30-min expiry, room expiry check, removed participant cap enforcement
+- `BE/server/gateway/api_rooms.py` — `RoomExpiredError` handling (410)
+- `BE/server/gateway/ws_endpoint.py` — room expiry check on WS connect (4410)
+- `BE/server/gateway/room_store.py` — default TTL updated to 2100 (35 min)
+- `BE/server/gateway/main.py` — RoomStore TTL wired from config
+- `BE/server/interpreter/daemon.py` — room expiry gate for BRSE runtime spawn
+- `docs/backend/API_CONTRACT.md` — updated policy notes, examples, error codes
+- `docs/backend/GATEWAY_DESIGN.md` — updated TTL, participant_limit, env vars, error cases
+- `docs/backend/IMPLEMENTATION_STATE.md` — this entry
+
+### Deferred Items
+
+- `room.expired` broadcast to connected WS clients (background expiry sweeper task) — deferred to next turn
+- FE-side room expiry UI handling — out of scope (backend only)
+- Force-disconnect of active WS sessions at exact expiry moment — deferred (current strategy: let sessions naturally end)
+- Testing — deferred per instruction (CODE-ONLY mode)
+
 ## Turn Update: 2026-05-01 BRSE Relay Quality Hardening (Kickoff)
 
 - Time: 2026-05-01T20:01:44+07:00

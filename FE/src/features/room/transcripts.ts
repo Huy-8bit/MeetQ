@@ -6,6 +6,14 @@ import type {
 } from "../../types/api";
 import type { TranscriptPayload } from "../../types/ws";
 
+/**
+ * Maximum number of transcript entries kept in state.
+ * Chose 30 as a practical cap: enough to show recent conversation context
+ * (covering ~2-3 min of active relay), but prevents unbounded DOM growth
+ * that causes layout instability and perf issues.
+ */
+export const MAX_TRANSCRIPT_ENTRIES = 30;
+
 export type TranscriptKind = "source" | "translated" | "relay";
 
 export interface TranscriptEntry {
@@ -74,7 +82,47 @@ export function mergeTranscriptCollections(
     merged.set(item.transcriptId, choosePreferredTranscript(existing, item));
   }
 
-  return Array.from(merged.values()).sort(sortTranscriptEntries);
+  const sorted = Array.from(merged.values()).sort(sortTranscriptEntries);
+  return pruneTranscriptCollection(sorted);
+}
+
+/**
+ * Prune transcript collection to MAX_TRANSCRIPT_ENTRIES.
+ * Strategy:
+ * - Never drop active partial entries (they are being updated in realtime)
+ * - Drop oldest final entries first
+ * - If still over limit after dropping finals, drop oldest partials
+ */
+export function pruneTranscriptCollection(
+  entries: TranscriptEntry[],
+): TranscriptEntry[] {
+  if (entries.length <= MAX_TRANSCRIPT_ENTRIES) {
+    return entries;
+  }
+
+  // Separate partials and finals
+  const partials: TranscriptEntry[] = [];
+  const finals: TranscriptEntry[] = [];
+
+  for (const entry of entries) {
+    if (entry.isFinal) {
+      finals.push(entry);
+    } else {
+      partials.push(entry);
+    }
+  }
+
+  // Keep all partials, trim finals from the oldest
+  const slotsForFinals = Math.max(0, MAX_TRANSCRIPT_ENTRIES - partials.length);
+  const keptFinals = finals.slice(-slotsForFinals);
+
+  // If partials alone exceed the limit, trim oldest partials too
+  const combined = [...keptFinals, ...partials].sort(sortTranscriptEntries);
+  if (combined.length > MAX_TRANSCRIPT_ENTRIES) {
+    return combined.slice(-MAX_TRANSCRIPT_ENTRIES);
+  }
+
+  return combined;
 }
 
 function normalizeSnapshotTranscript(

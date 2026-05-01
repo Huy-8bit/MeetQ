@@ -74,6 +74,11 @@ class BrseToggleForbiddenError(Exception):
         self.code = code
 
 
+class RoomExpiredError(Exception):
+    """Room meeting duration (30 min) has elapsed; no new joins or actions."""
+    pass
+
+
 class InvalidChatMessageError(Exception):
     def __init__(self, message: str, code: str = "invalid_chat_message"):
         super().__init__(message)
@@ -96,8 +101,33 @@ class RoomService:
         return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
     def _exp_str(self) -> str:
+        """Room meeting expiry: 30-minute logical meeting duration from now."""
+        exp = datetime.now(timezone.utc) + timedelta(seconds=self.settings.room_meeting_duration_seconds)
+        return exp.isoformat().replace("+00:00", "Z")
+
+    def _token_exp_str(self) -> str:
+        """Room token expiry: longer TTL for JWT validity."""
         exp = datetime.now(timezone.utc) + timedelta(seconds=self.settings.room_token_ttl_seconds)
         return exp.isoformat().replace("+00:00", "Z")
+
+    def _is_room_expired(self, room_state) -> bool:
+        """Check if room meeting duration has elapsed."""
+        expires_at_str = None
+        if hasattr(room_state, 'expires_at'):
+            expires_at_str = room_state.expires_at
+        elif hasattr(room_state, 'room') and hasattr(room_state.room, 'expires_at'):
+            expires_at_str = room_state.room.expires_at
+        elif isinstance(room_state, dict):
+            expires_at_str = room_state.get('expires_at')
+
+        if not expires_at_str:
+            return False
+
+        try:
+            expires_at = datetime.fromisoformat(expires_at_str.replace('Z', '+00:00'))
+            return datetime.now(timezone.utc) >= expires_at
+        except (ValueError, TypeError):
+            return False
 
     async def _publish(self, event_type: str, room_id: str, payload: Any):
         envelope = build_envelope(event_type, room_id, jsonable_encoder(payload))
@@ -157,7 +187,7 @@ class RoomService:
             created_at=now,
             expires_at=exp,
             brse_enabled=brse_enabled,
-            participant_limit=8,
+            participant_limit=None,  # No backend participant cap
             supported_languages=list(SUPPORTED_MEETING_LANGUAGES),
             meeting_languages=normalized_meeting_languages,
             meeting_mode=MEETING_MODE_BRSE_RELAY,
@@ -304,8 +334,17 @@ class RoomService:
         if not snapshot:
             raise RoomNotFoundError()
 
-        if active_human_participant_count(snapshot.participants) >= snapshot.room.participant_limit:
+        # Participant limit check: only enforce if a positive cap is configured
+        if (
+            snapshot.room.participant_limit is not None
+            and snapshot.room.participant_limit > 0
+            and active_human_participant_count(snapshot.participants) >= snapshot.room.participant_limit
+        ):
             raise RoomFullError()
+
+        # Check room expiry: 30-minute meeting duration
+        if self._is_room_expired(snapshot):
+            raise RoomExpiredError()
 
         meeting_pair = list(snapshot.room.meeting_languages)
         if language == "auto" or language not in meeting_pair:
@@ -378,7 +417,7 @@ class RoomService:
             ),
             room_token=JoinRoomResponseRoomToken(
                 token=room_token,
-                expires_at=self._exp_str(),
+                expires_at=self._token_exp_str(),
             ),
             websocket=JoinRoomResponseWebsocket(
                 url=f"/ws/rooms/{room_id}?token={room_token}",
@@ -710,7 +749,7 @@ class RoomService:
             created_at=payload["created_at"],
             expires_at=payload["expires_at"],
             brse_enabled=payload.get("brse_enabled", DEFAULT_BRSE_ENABLED),
-            participant_limit=payload["participant_limit"],
+            participant_limit=payload.get("participant_limit"),  # None = no cap
             supported_languages=payload["supported_languages"],
             meeting_languages=payload.get("meeting_languages", list(DEFAULT_ROOM_MEETING_LANGUAGES)),
             meeting_mode=payload.get("meeting_mode", MEETING_MODE_BRSE_RELAY),

@@ -1,6 +1,20 @@
-import { useEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import type { TranscriptEntry } from "../features/room/transcripts";
 import { formatLanguageFlow, getLanguageLabel } from "../lib/languages";
+
+/**
+ * Max items rendered in the transcript list at the render layer.
+ * This is a safety net on top of state-layer pruning (MAX_TRANSCRIPT_ENTRIES=30).
+ * Using 25 here to keep the visible list slightly shorter and more scannable.
+ */
+const MAX_VISIBLE_ENTRIES = 25;
+
+/**
+ * Distance (px) from the bottom edge within which auto-scroll activates.
+ * If the user has scrolled more than this distance away from the bottom,
+ * we assume they are reviewing history and do NOT force-scroll.
+ */
+const AUTO_SCROLL_THRESHOLD = 120;
 
 interface TranscriptPanelProps {
   entries: TranscriptEntry[];
@@ -14,24 +28,39 @@ export function TranscriptPanel({
   embedded = false,
 }: TranscriptPanelProps) {
   const listRef = useRef<HTMLDivElement | null>(null);
+  const isNearBottomRef = useRef(true);
 
-  const latestTranscriptId = useMemo(
-    () => entries[entries.length - 1]?.transcriptId ?? null,
+  const visibleEntries = useMemo(
+    () => (entries.length > MAX_VISIBLE_ENTRIES ? entries.slice(-MAX_VISIBLE_ENTRIES) : entries),
     [entries],
   );
 
-  useEffect(() => {
+  const latestTranscriptId = useMemo(
+    () => visibleEntries[visibleEntries.length - 1]?.transcriptId ?? null,
+    [visibleEntries],
+  );
+
+  const handleScroll = useCallback(() => {
     const node = listRef.current;
-    if (!node || entries.length === 0) {
+    if (!node) {
       return;
     }
 
     const distanceFromBottom =
       node.scrollHeight - node.scrollTop - node.clientHeight;
-    if (distanceFromBottom < 80) {
+    isNearBottomRef.current = distanceFromBottom < AUTO_SCROLL_THRESHOLD;
+  }, []);
+
+  useEffect(() => {
+    const node = listRef.current;
+    if (!node || visibleEntries.length === 0) {
+      return;
+    }
+
+    if (isNearBottomRef.current) {
       node.scrollTop = node.scrollHeight;
     }
-  }, [entries]);
+  }, [visibleEntries]);
 
   return (
     <section className={embedded ? "transcript-panel panel-section" : "panel transcript-panel"}>
@@ -44,10 +73,13 @@ export function TranscriptPanel({
               : "Normal meeting transcript appears here when speech is available."}
           </p>
         </div>
+        {visibleEntries.length > 0 ? (
+          <span className="panel-count">{visibleEntries.length}</span>
+        ) : null}
       </div>
 
-      <div className="transcript-list" ref={listRef}>
-        {entries.length === 0 ? (
+      <div className="transcript-list" ref={listRef} onScroll={handleScroll}>
+        {visibleEntries.length === 0 ? (
           <div className="empty-state small">
             <strong>Waiting for speech</strong>
             <p>
@@ -58,7 +90,7 @@ export function TranscriptPanel({
           </div>
         ) : null}
 
-        {entries.map((entry) => (
+        {visibleEntries.map((entry) => (
           <article
             className={`transcript-item ${entry.isFinal ? "" : "is-partial"} ${latestTranscriptId === entry.transcriptId ? "is-latest" : ""}`}
             key={entry.transcriptId}

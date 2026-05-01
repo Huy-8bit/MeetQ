@@ -57,6 +57,7 @@ import type {
   ParticipantLeftEvent,
   ParticipantUpdatedEvent,
   RoomBrseUpdatedEvent,
+  RoomExpiredEvent,
   RoomHostChangedEvent,
   RoomSnapshotEvent,
   ScreenShareStartedEvent,
@@ -179,6 +180,9 @@ export function useMeetingRoom({
   const [isMutedByHost, setIsMutedByHost] = useState(false);
   const [isMutingParticipant, setIsMutingParticipant] = useState<string | null>(null);
   const [moderationError, setModerationError] = useState<string | null>(null);
+
+  // ─── Room expiry state ──────────────────────────────────────────────────────
+  const [isRoomExpired, setIsRoomExpired] = useState(false);
 
   const gatewayRef = useRef<GatewaySocket | null>(null);
   const livekitRoomRef = useRef<ReturnType<typeof createMeetingRoom> | null>(
@@ -320,6 +324,7 @@ export function useMeetingRoom({
       setIsMutedByHost(false);
       setIsMutingParticipant(null);
       setModerationError(null);
+      setIsRoomExpired(false);
       void setRoomAudioOutputDevice("").catch(() => undefined);
       refreshMediaRef.current = null;
       return;
@@ -1067,6 +1072,9 @@ export function useMeetingRoom({
       case "room.brse_updated":
         applyBrseUpdated(event);
         return;
+      case "room.expired":
+        applyRoomExpired(event);
+        return;
       case "transcript.partial":
       case "transcript.final":
         applyTranscriptEvent(event);
@@ -1103,7 +1111,7 @@ export function useMeetingRoom({
       room_id: current?.room_id || roomId,
       state: event.payload.room.state,
       created_at: current?.created_at || new Date().toISOString(),
-      expires_at: current?.expires_at || new Date().toISOString(),
+      expires_at: event.payload.room.expires_at ?? current?.expires_at ?? new Date().toISOString(),
       brse_enabled: event.payload.room.brse_enabled ?? current?.brse_enabled,
       participant_limit: event.payload.room.participant_limit,
       supported_languages: event.payload.room.supported_languages,
@@ -1342,6 +1350,13 @@ export function useMeetingRoom({
     if (!nextEnabled) {
       clearBrseRuntimeSurfaces();
     }
+  }
+
+  function applyRoomExpired(_event: RoomExpiredEvent): void {
+    setIsRoomExpired(true);
+    setRoomMeta((current) =>
+      current ? { ...current, state: "empty" } : current,
+    );
   }
 
   function applyTranscriptEvent(
@@ -1618,6 +1633,8 @@ export function useMeetingRoom({
     interpreterMode:
       roomMeta?.interpreter_mode ?? session?.room.interpreter_mode ?? null,
     meetingLanguages,
+    expiresAt: roomMeta?.expires_at ?? session?.room.expires_at ?? null,
+    isRoomExpired,
     selfState,
     participants: activeParticipants,
     transcripts: visibleTranscripts,

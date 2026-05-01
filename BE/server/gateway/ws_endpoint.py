@@ -7,10 +7,25 @@ from server.gateway.room_service import (
     BrseToggleForbiddenError,
     InvalidChatMessageError,
     InvalidLanguageError,
+    RoomExpiredError,
     RoomNotFoundError,
     ParticipantNotFoundError,
 )
 from server.events import EventType, build_envelope
+
+
+def _is_room_snapshot_expired(snapshot) -> bool:
+    """Check if the room meeting duration has elapsed."""
+    from datetime import datetime, timezone
+    expires_at_str = getattr(snapshot.room, 'expires_at', None)
+    if not expires_at_str:
+        return False
+    try:
+        expires_at = datetime.fromisoformat(expires_at_str.replace('Z', '+00:00'))
+        return datetime.now(timezone.utc) >= expires_at
+    except (ValueError, TypeError):
+        return False
+
 
 router = APIRouter()
 
@@ -57,6 +72,11 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str, token: str = Qu
             return
     except RoomNotFoundError:
         await websocket.close(code=4404, reason="Room not found")
+        return
+
+    # Check room expiry before allowing WS connection
+    if _is_room_snapshot_expired(snapshot):
+        await websocket.close(code=4410, reason="Room expired")
         return
 
     await app_state.ws_hub.connect(room_id, participant_id, state_participant.session_id, websocket)

@@ -1,5 +1,161 @@
 # Frontend Implementation State
 
+## Turn Update: 2026-05-01 Room Policy UI — 30-Min Duration + No Participant Cap (Completed)
+
+- Time: 2026-05-01T21:00:00+07:00
+- Mode: CODE-ONLY
+- Testing deferred: yes, per instruction
+
+### Objective
+
+Reflect new room policy on the frontend:
+1. Meeting duration is 30 minutes — users must see this clearly at create/join/in-room stages.
+2. `participant_limit` is now `null` (no hard cap) — remove all `/8`-style cap UI.
+3. Room expiry is the source of truth — FE uses `expires_at` from backend.
+4. Expired room handling: block join, show clear state, handle in-room expiry gracefully.
+
+### Strategy
+
+**Expiry/Timer UX:**
+- Create `useRoomExpiry(expiresAt)` hook that computes `remainingMs`, `remainingLabel`, and `isExpired` on a 1-second ticker.
+- `expiresAt` comes from `room.expires_at` in the room snapshot/join response.
+- Countdown format: `MM:SS` when < 10 min, `Xm` when > 10 min.
+- When expired: ticker stops, `isExpired = true`, UI switches to expired state.
+- Room timer shown in `RoomTopBar` in place of bare participant count.
+- Join card shows `expires_at` as a human-readable "expires at HH:MM" context.
+- Create room page shows "Meetings last 30 minutes" hint near the CTA.
+
+**Participant-Cap UI Changes:**
+- `RoomSummary.participant_limit` typed as `number | null` (was `number`).
+- All `{count}/{limit}` patterns removed from `JoinRoomCard`.
+- `RoomTopBar` participant count shown without any cap suffix.
+- `room.snapshot` WS type updated: `participant_limit: number | null`.
+- No new cap-related wording added anywhere.
+
+**Expired-Room Handling:**
+- `mapRoomSnapshotError` handles `410 / room_expired` → "This room has expired."
+- `mapJoinError` handles `room_expired` → clear message, disables join.
+- `JoinRoomCard` receives `isExpired` prop; when true: disables form, shows banner.
+- `useMeetingRoom` handles `room.expired` WS event: sets `isRoomExpired = true`, locks UI actions.
+- `RoomPage` checks expiry at load (from snapshot `expires_at`) and during session (from `useMeetingRoom`).
+
+### Files to Modify
+
+- `FE/src/types/api.ts` — `participant_limit: number | null`
+- `FE/src/types/ws.ts` — `participant_limit: number | null` in snapshot room, add `RoomExpiredEvent`
+- `FE/src/features/room/useRoomExpiry.ts` — new hook (countdown + expired state)
+- `FE/src/features/room/useMeetingRoom.ts` — expose `expiresAt`, `isRoomExpired`; handle `room.expired` WS event
+- `FE/src/components/JoinRoomCard.tsx` — remove cap display, show expiry context, handle expired
+- `FE/src/pages/HomePage.tsx` — add "Meetings last 30 minutes" hint
+- `FE/src/components/RoomTopBar.tsx` — show time remaining, remove cap suffix
+- `FE/src/pages/RoomPage.tsx` — wire expiry hook, pass `isExpired` + `expiresAt`, handle 410 on load/join
+- `FE/src/index.css` — timer chip styles, expiry banner styles
+
+### Files Modified
+
+- `FE/src/types/api.ts` — `participant_limit: number | null`
+- `FE/src/types/ws.ts` — `participant_limit: number | null` in snapshot room; added `expires_at?`; added `RoomExpiredEvent`; `RoomExpiredEvent` added to `ServerEvent` union
+- `FE/src/features/room/useRoomExpiry.ts` — new hook: countdown ticker, `remainingLabel`, `isExpired`, `formatExpiresAtHuman`
+- `FE/src/features/room/useMeetingRoom.ts` — imported `RoomExpiredEvent`; added `isRoomExpired` state; handles `room.expired` WS event via `applyRoomExpired`; `applyRoomSnapshot` now propagates `expires_at` from WS payload; return object exposes `expiresAt` and `isRoomExpired`; session reset clears `isRoomExpired`
+- `FE/src/components/JoinRoomCard.tsx` — removed `{count}/{limit}` display; shows `participant_count` only; shows `expires_at` as "Expires at HH:MM"; accepts `isExpired` prop; when expired renders `room-expired-state` block and disables form
+- `FE/src/pages/HomePage.tsx` — added "Meetings last 30 minutes" `create-room-policy-note` above Create Room CTA
+- `FE/src/components/RoomTopBar.tsx` — accepts `expiresAt` prop; uses `useRoomExpiry`; shows `room-timer-chip` in meta line ("Xm left" / "MM:SS left" / "Meeting ended")
+- `FE/src/pages/RoomPage.tsx` — uses `useRoomExpiry`; derives `isRoomExpired` from timer + backend + WS; shows dedicated expired page when room is expired pre-join; passes `isExpired` to `JoinRoomCard`; passes `expiresAt` to `RoomTopBar`; shows `banner-room-expired` in-room when expired; maps `room_expired` (410) in both `mapRoomSnapshotError` and `mapJoinError`; disables chat send and screen share toggle when expired; `canToggleBrse` respects `isRoomExpired`
+- `FE/src/index.css` — added `.room-timer-chip`, `.room-timer-chip-expired`, `.create-room-policy-note`, `.expiry-label`, `.expiry-label-expired`, `.room-expired-state`, `.room-expired-icon`, `.room-expired-page`, `.banner-room-expired`
+
+### TypeScript
+
+- 0 new errors introduced
+- 3 pre-existing errors in `FE/src/lib/livekit.ts` (`track.name`) remain unchanged — deferred per prior sessions
+
+### Testing
+
+- Deferred per instruction (CODE-ONLY mode).
+
+---
+
+## Turn Update: 2026-05-01 Transcript/Relay Panel UX Fix (Completed)
+
+- Time: 2026-05-01T20:19:00+07:00
+- Mode: CODE-ONLY
+- Testing deferred: yes
+
+### Problem
+
+Relay/transcript panel appended entries without limit, causing:
+- Panel grew infinitely tall, pushing room layout out of control
+- Side panel `.transcript-list` had `max-height: none; overflow: visible` — no scroll containment
+- No pruning in state or render layer — all entries rendered regardless of count
+- Auto-scroll was simplistic — always forced scroll on any entry change
+
+### Strategy
+
+**State-layer pruning** (chosen over render-only limit because it also reduces memory):
+- `MAX_TRANSCRIPT_ENTRIES = 30` — keeps ~2-3 min of active conversation context
+- Pruning preserves all active **partial** entries (in-progress utterances) and trims oldest **final** entries first
+- Applied inside `mergeTranscriptCollections()` so every state update is bounded
+
+**Render-layer safety net**:
+- `MAX_VISIBLE_ENTRIES = 25` in `TranscriptPanel` — ensures DOM never exceeds this many items even if state has more
+- Slices from the end (`entries.slice(-25)`) so the most recent are always shown
+
+**Smart auto-scroll**:
+- Tracks `isNearBottom` via `onScroll` handler with 120px threshold
+- Only auto-scrolls when user is already near the bottom
+- Does NOT force-scroll when user is reviewing older entries
+
+**CSS scroll containment restored**:
+- `.room-side-content .transcript-list`: `max-height: min(55vh, 440px); overflow-y: auto` — bounded and scrollable
+- `.transcript-list` base: `max-height: 480px; scroll-behavior: smooth`
+
+**Compact layout**:
+- Transcript items tightened: gap 12→8px (base), 6px (side panel)
+- `.transcript-relay` padding reduced: 12px 14px → 8px 12px
+- Side panel transcript text: font-size 0.88rem, line-height 1.45
+- Side panel badges: font-size 0.72rem, padding 4px 8px
+- Side panel header text sized down for density
+
+### Changes Made
+
+- `FE/src/features/room/transcripts.ts`:
+  - Added `MAX_TRANSCRIPT_ENTRIES = 30` constant
+  - Added `pruneTranscriptCollection()` function
+  - `mergeTranscriptCollections()` now calls `pruneTranscriptCollection()` after merge
+- `FE/src/components/TranscriptPanel.tsx`:
+  - Added `MAX_VISIBLE_ENTRIES = 25` render limit
+  - Smart auto-scroll: `isNearBottomRef` + `onScroll` handler with `AUTO_SCROLL_THRESHOLD = 120`
+  - Visible entry count badge in panel header
+  - `useMemo` for `visibleEntries` to avoid unnecessary re-renders
+- `FE/src/index.css`:
+  - `.transcript-panel`: `min-height: 420px → 280px`
+  - `.transcript-list`: `max-height: 520px → 480px`, added `scroll-behavior: smooth`
+  - `.transcript-item`: gap `12px → 8px`
+  - `.transcript-relay`: padding `12px 14px → 8px 12px`, font-size `0.92rem`
+  - `.room-side-content .transcript-list`: `max-height: min(55vh, 440px); overflow-y: auto` (was `none`/`visible`)
+  - `.room-side-content .transcript-item`: padding `13px → 10px 12px`, gap `6px`
+  - Added compact overrides for `.room-side-content` transcript text, headers, badges
+
+### Partial/Final Merge Behavior
+
+No changes needed. The existing `choosePreferredTranscript()` in `transcripts.ts` already:
+- Keeps final over partial when both exist for same `transcript_id`
+- Updates in-place via Map keyed by `transcriptId`
+- Does NOT create duplicate rows for the same utterance
+
+The issue was NOT merge behavior — it was the absence of pruning and scroll containment.
+
+### Files Modified
+
+- `FE/src/features/room/transcripts.ts`
+- `FE/src/components/TranscriptPanel.tsx`
+- `FE/src/index.css`
+- `docs/frontend/IMPLEMENTATION_STATE.md`
+
+### Testing Status
+
+- Testing deferred by instruction: no tests run, no test files modified.
+- TypeScript: `tsc --noEmit` passes with 0 errors.
+
 ## Turn Update: 2026-05-01 Full Product UI Redesign + Camera Toggle (Kickoff)
 
 - Time: 2026-05-01T19:37:46+07:00
