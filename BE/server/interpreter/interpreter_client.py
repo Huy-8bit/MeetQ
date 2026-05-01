@@ -41,10 +41,18 @@ class InterpreterRealtimeClient(RealtimeClient):
         self._response_started_at: Optional[float] = None
         self._first_text_delta_at: Optional[float] = None
         self._first_audio_delta_at: Optional[float] = None
+        self._utterance_committed_at: Optional[float] = None
         self._response_audio_chunks: int = 0
         self._send_queue_drops: int = 0
+        self._send_queue_drop_log_at: float = 0.0
         self._conversation_item_ids: list[str] = []
         self._conversation_item_id_set: set[str] = set()
+        self._cancelled_response_ids: set[str] = set()
+        self._suppress_response_output = False
+        self._current_response_had_text = False
+        self._using_audio_transcript_text = False
+        self._text_done_emitted = False
+        self._audio_transcript_text_parts: list[str] = []
         self.on_input_transcript_delta: Callable[[str], None] = lambda t: None
         self.on_transcript_complete: Callable[[str], None] = lambda t: None
         self.on_text_delta: Callable[[str], None] = lambda t: None
@@ -81,10 +89,18 @@ class InterpreterRealtimeClient(RealtimeClient):
         self._response_started_at = None
         self._first_text_delta_at = None
         self._first_audio_delta_at = None
+        self._utterance_committed_at = None
         self._response_audio_chunks = 0
         self._send_queue_drops = 0
+        self._send_queue_drop_log_at = 0.0
         self._conversation_item_ids = []
         self._conversation_item_id_set.clear()
+        self._cancelled_response_ids.clear()
+        self._suppress_response_output = False
+        self._current_response_had_text = False
+        self._using_audio_transcript_text = False
+        self._text_done_emitted = False
+        self._audio_transcript_text_parts = []
         self._session_ready_event = asyncio.Event()
         self._set_audio_consumer_ready(False)
         if self._deterministic_routing:
@@ -102,6 +118,7 @@ class InterpreterRealtimeClient(RealtimeClient):
                 self._log(
                     "interpreter.session_config "
                     f"src={self.src_lang} tgt={self.tgt_lang} "
+                    f"meeting_languages={self.meeting_languages} "
                     f"vad={INTERPRETER_VAD_CONFIG} temp={INTERPRETER_TEMPERATURE}"
                 )
 
@@ -149,10 +166,12 @@ class InterpreterRealtimeClient(RealtimeClient):
                     pass
                 else:
                     self._send_queue_drops += 1
+                    self._log_send_queue_drop()
             try:
                 audio_q.put_nowait(encoded)
             except asyncio.QueueFull:
                 self._send_queue_drops += 1
+                self._log_send_queue_drop()
 
         def _capture_thread() -> None:
             audio_in.start()
@@ -222,6 +241,7 @@ class InterpreterRealtimeClient(RealtimeClient):
             now = time.monotonic()
             self._speech_started_at = now
             self._speech_stopped_at = None
+            self._utterance_committed_at = None
             self._response_started_at = None
             self._first_text_delta_at = None
             self._first_audio_delta_at = None
@@ -241,6 +261,21 @@ class InterpreterRealtimeClient(RealtimeClient):
                 self._log("speech_stopped")
             else:
                 self._log(f"speech_stopped duration_ms={duration_ms}")
+
+        elif etype == "input_audio_buffer.committed":
+            self._remember_conversation_item_from_event(event)
+            now = time.monotonic()
+            self._utterance_committed_at = now
+            metric_bits = []
+            if self._speech_started_at is not None:
+                metric_bits.append(
+                    f"from_speech_started_ms={int((now - self._speech_started_at) * 1000)}"
+                )
+            if self._speech_stopped_at is not None:
+                metric_bits.append(
+                    f"from_speech_stopped_ms={int((now - self._speech_stopped_at) * 1000)}"
+                )
+            self._log("input_audio_buffer.committed " + " ".join(metric_bits))
 
         elif etype == "conversation.item.input_audio_transcription.delta":
             delta = event.get("delta", "")
@@ -269,17 +304,36 @@ class InterpreterRealtimeClient(RealtimeClient):
                 self.on_transcript_complete(transcript)
 
         elif etype == "response.created":
-            self.on_status_change("translating")
             self._current_response_id = event.get("response", {}).get("id")
+            if self._current_response_id in self._cancelled_response_ids:
+                self._suppress_response_output = True
+                logger.debug(
+                    "Dropping created event for cancelled BRSE response id=%s",
+                    self._current_response_id,
+                )
+                return
+            else:
+                self._suppress_response_output = False
+            self.on_status_change("translating")
             self._assistant_speaking = True
             self._response_started_at = time.monotonic()
             self._first_text_delta_at = None
             self._first_audio_delta_at = None
             self._response_audio_chunks = 0
+            self._current_response_had_text = False
+            self._using_audio_transcript_text = False
+            self._text_done_emitted = False
+            self._audio_transcript_text_parts = []
             self._log(f"response.created id={self._current_response_id}")
 
         elif etype == "response.text.delta":
+            if self._should_drop_response_event(etype, event):
+                return
+            if self._using_audio_transcript_text:
+                return
             delta = event.get("delta", "")
+            if delta:
+                self._current_response_had_text = True
             if delta and self._first_text_delta_at is None:
                 now = time.monotonic()
                 self._first_text_delta_at = now
@@ -292,20 +346,32 @@ class InterpreterRealtimeClient(RealtimeClient):
                     metric_bits.append(
                         f"from_speech_started_ms={int((now - self._speech_started_at) * 1000)}"
                     )
+                if self._utterance_committed_at is not None:
+                    metric_bits.append(
+                        f"from_audio_committed_ms={int((now - self._utterance_committed_at) * 1000)}"
+                    )
                 self._log("first_text_delta " + " ".join(metric_bits))
             self.on_text_delta(delta)
 
         elif etype == "response.text.done":
+            if self._should_drop_response_event(etype, event):
+                return
+            if self._using_audio_transcript_text:
+                return
             text = event.get("text", "").strip()
             self._stat_translations += 1
+            self._text_done_emitted = True
             self.on_text_done(text)
 
         elif etype == "response.audio.delta":
+            if self._should_drop_response_event(etype, event):
+                return
             encoded = event.get("delta", "")
             if encoded:
                 self._stat_audio_chunks += 1
                 self._response_audio_chunks += 1
-                if self._first_audio_delta_at is None:
+                first_audio_delta = self._first_audio_delta_at is None
+                if first_audio_delta:
                     now = time.monotonic()
                     self._first_audio_delta_at = now
                     metric_bits = []
@@ -317,15 +383,59 @@ class InterpreterRealtimeClient(RealtimeClient):
                         metric_bits.append(
                             f"from_speech_started_ms={int((now - self._speech_started_at) * 1000)}"
                         )
+                    if self._utterance_committed_at is not None:
+                        metric_bits.append(
+                            f"from_audio_committed_ms={int((now - self._utterance_committed_at) * 1000)}"
+                        )
                     self._log("first_audio_delta " + " ".join(metric_bits))
-                self.on_status_change("playing")
+                    self.on_status_change("playing")
                 self.on_audio_delta(encoded)
 
         elif etype == "response.audio.done":
+            if self._should_drop_response_event(etype, event):
+                return
             self._log(f"response.audio.done chunks={self._response_audio_chunks}")
             self.on_audio_done()
 
+        elif etype == "response.audio_transcript.delta":
+            if self._should_drop_response_event(etype, event):
+                return
+            if not self._current_response_had_text and not self._text_done_emitted:
+                delta = event.get("delta", "")
+                if delta:
+                    self._using_audio_transcript_text = True
+                    self._audio_transcript_text_parts.append(delta)
+                    if self._first_text_delta_at is None:
+                        now = time.monotonic()
+                        self._first_text_delta_at = now
+                        self._log(
+                            "first_text_delta source=audio_transcript "
+                            f"from_response_created_ms={self._ms_since(self._response_started_at, now)} "
+                            f"from_audio_committed_ms={self._ms_since(self._utterance_committed_at, now)}"
+                        )
+                    self.on_text_delta(delta)
+
+        elif etype == "response.audio_transcript.done":
+            if self._should_drop_response_event(etype, event):
+                return
+            if not self._current_response_had_text and not self._text_done_emitted:
+                text = event.get("transcript", "").strip()
+                if not text:
+                    text = "".join(self._audio_transcript_text_parts).strip()
+                if text:
+                    self._using_audio_transcript_text = True
+                    self._stat_translations += 1
+                    self._text_done_emitted = True
+                    self.on_text_done(text)
+
         elif etype == "response.done":
+            dropped_response = self._should_drop_response_event(etype, event)
+            response_id = self._event_response_id(event)
+            if response_id:
+                self._cancelled_response_ids.discard(response_id)
+            if dropped_response:
+                await self._prune_conversation(ws)
+                return
             self._assistant_speaking = False
             self._current_response_id = None
             metric_bits = [
@@ -379,7 +489,15 @@ class InterpreterRealtimeClient(RealtimeClient):
         if ws is None:
             return
 
+        if self._assistant_speaking:
+            await self._cancel_response(ws)
+        elif self._conversation_item_ids:
+            await self._prune_conversation(ws)
         await ws.send(json.dumps(self._session_update_payload()))
+        self._log(
+            "interpreter.routing_updated "
+            f"src={self.src_lang} tgt={self.tgt_lang} meeting_languages={self.meeting_languages}"
+        )
 
     def _session_update_payload(self) -> dict[str, Any]:
         instructions = self._current_instructions()
@@ -388,11 +506,77 @@ class InterpreterRealtimeClient(RealtimeClient):
             self.request_audio_output,
         )
 
+    async def _cancel_response(self, ws) -> None:
+        response_id = self._current_response_id
+        if response_id:
+            self._cancelled_response_ids.add(response_id)
+        self._suppress_response_output = True
+        self._log(f"barge_in_or_route_change cancelling response id={response_id}")
+        try:
+            await ws.send(json.dumps({"type": "response.cancel"}))
+        except Exception as exc:
+            logger.warning("Could not send interpreter response.cancel: %s", exc)
+        self._assistant_speaking = False
+        self._current_response_id = None
+        await self._prune_conversation(ws)
+
+    def _should_drop_response_event(self, etype: str, event: Dict[str, Any]) -> bool:
+        response_id = self._event_response_id(event)
+        if response_id and response_id in self._cancelled_response_ids:
+            logger.debug("Dropping cancelled BRSE response event type=%s id=%s", etype, response_id)
+            return True
+        if self._suppress_response_output:
+            logger.debug("Suppressing stale BRSE response event type=%s id=%s", etype, response_id)
+            return True
+        if self._current_response_id is None:
+            logger.debug("Dropping response event without active response type=%s id=%s", etype, response_id)
+            return True
+        if response_id and self._current_response_id and response_id != self._current_response_id:
+            logger.debug(
+                "Dropping mismatched BRSE response event type=%s event_id=%s current_id=%s",
+                etype,
+                response_id,
+                self._current_response_id,
+            )
+            return True
+        return False
+
+    def _event_response_id(self, event: Dict[str, Any]) -> Optional[str]:
+        response_id = event.get("response_id")
+        if isinstance(response_id, str) and response_id:
+            return response_id
+        response = event.get("response")
+        if isinstance(response, dict):
+            nested_id = response.get("id")
+            if isinstance(nested_id, str) and nested_id:
+                return nested_id
+        return None
+
+    def _ms_since(self, started_at: Optional[float], now: Optional[float] = None) -> str:
+        if started_at is None:
+            return "n/a"
+        if now is None:
+            now = time.monotonic()
+        return str(int((now - started_at) * 1000))
+
+    def _log_send_queue_drop(self) -> None:
+        now = time.monotonic()
+        if now - self._send_queue_drop_log_at < 2.0:
+            return
+        self._send_queue_drop_log_at = now
+        self._log(
+            "interpreter_send_queue_drop "
+            f"total={self._send_queue_drops} maxsize={INTERPRETER_SEND_QUEUE_MAXSIZE}"
+        )
+
     def _remember_conversation_item_from_event(self, event: Dict[str, Any]) -> None:
         item = event.get("item")
         if not isinstance(item, dict):
             item = event.get("output_item")
         if not isinstance(item, dict):
+            item_id = event.get("item_id")
+            if isinstance(item_id, str) and item_id:
+                self._remember_conversation_item(item_id)
             return
 
         item_id = item.get("id")

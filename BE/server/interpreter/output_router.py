@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import binascii
 import logging
+import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, Optional
 
@@ -54,6 +56,13 @@ class OutputRouter:
         self._generation = 0
         self._op_lock = asyncio.Lock()
         self._pending_clear = False
+        self._captured_chunks = 0
+        self._captured_frames = 0
+        self._flush_count = 0
+        self._clear_count = 0
+        self._reset_count = 0
+        self._decode_errors = 0
+        self._first_frame_at: Optional[float] = None
 
     def audio_track_name(self) -> Optional[str]:
         state = self._state
@@ -76,6 +85,21 @@ class OutputRouter:
             "speaker_id": self.speaker_id,
             "source_language": self.src_lang,
             "target_language": self.target_lang,
+            "stats": self.stats_snapshot(),
+        }
+
+    def stats_snapshot(self) -> Dict[str, Any]:
+        state = self._state
+        return {
+            "generation": self._generation,
+            "active": bool(state and state.active),
+            "buffer_bytes": len(state.buffer) if state is not None else 0,
+            "captured_chunks": self._captured_chunks,
+            "captured_frames": self._captured_frames,
+            "flush_count": self._flush_count,
+            "clear_count": self._clear_count,
+            "reset_count": self._reset_count,
+            "decode_errors": self._decode_errors,
         }
 
     async def ensure_track(self) -> None:
@@ -101,6 +125,7 @@ class OutputRouter:
         )
         self._state = state
         self._pending_clear = False
+        self._first_frame_at = None
 
         logger.info(
             "BRSE relay source created speaker=%s route=%s->%s generation=%d queue_ms=%d",
@@ -150,7 +175,20 @@ class OutputRouter:
         )
 
     async def capture_base64_audio(self, encoded_chunk: str) -> bool:
-        return await self.capture_pcm(base64.b64decode(encoded_chunk))
+        try:
+            pcm = base64.b64decode(encoded_chunk, validate=True)
+        except (binascii.Error, ValueError) as exc:
+            self._decode_errors += 1
+            logger.warning(
+                "Dropping invalid BRSE relay audio chunk speaker=%s route=%s->%s decode_errors=%d error=%s",
+                self.speaker_id,
+                self.src_lang,
+                self.target_lang,
+                self._decode_errors,
+                exc,
+            )
+            return False
+        return await self.capture_pcm(pcm)
 
     async def capture_pcm(self, pcm_bytes: bytes) -> bool:
         async with self._op_lock:
@@ -161,19 +199,33 @@ class OutputRouter:
             if state is None or not state.active:
                 return False
 
+            self._captured_chunks += 1
             state.buffer.extend(pcm_bytes)
             return await self._publish_buffered_frames(flush=False)
 
     async def flush(self) -> bool:
         async with self._op_lock:
+            self._flush_count += 1
             return await self._publish_buffered_frames(flush=True)
 
     def clear_queue(self) -> None:
         state = self._state
         if state is None:
             return
+        self._clear_count += 1
+        buffer_bytes = len(state.buffer)
         state.buffer.clear()
         self._pending_clear = True
+        logger.debug(
+            "Clearing BRSE relay audio queue speaker=%s route=%s->%s generation=%d "
+            "buffer_bytes=%d clear_count=%d",
+            self.speaker_id,
+            self.src_lang,
+            self.target_lang,
+            state.generation,
+            buffer_bytes,
+            self._clear_count,
+        )
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
@@ -263,6 +315,16 @@ class OutputRouter:
         )
         try:
             await state.source.capture_frame(frame)
+            self._captured_frames += 1
+            if self._first_frame_at is None:
+                self._first_frame_at = time.monotonic()
+                logger.info(
+                    "BRSE first relay audio frame speaker=%s route=%s->%s generation=%d",
+                    self.speaker_id,
+                    self.src_lang,
+                    self.target_lang,
+                    state.generation,
+                )
             return True, ""
         except Exception as exc:
             logger.exception(
@@ -276,11 +338,13 @@ class OutputRouter:
             return False, f"BRSE relay audio track became unusable: {exc}"
 
     async def _reset_track_locked(self, message: str) -> None:
+        self._reset_count += 1
         logger.warning(
-            "Resetting BRSE relay track speaker=%s route=%s->%s reason=%s",
+            "Resetting BRSE relay track speaker=%s route=%s->%s reset_count=%d reason=%s",
             self.speaker_id,
             self.src_lang,
             self.target_lang,
+            self._reset_count,
             message,
         )
         state = self._state

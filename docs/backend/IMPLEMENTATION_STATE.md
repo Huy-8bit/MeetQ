@@ -1,5 +1,128 @@
 # Backend Implementation State
 
+## Turn Update: 2026-05-01 BRSE Relay Quality Hardening (Kickoff)
+
+- Time: 2026-05-01T20:01:44+07:00
+- Mode: CODE-ONLY
+- Testing deferred: yes, per instruction
+
+### Objective Locked
+
+- Improve backend/runtime BRSE relay quality without frontend changes or full-suite verification.
+- Tighten BRSE interpreter role so the model relays only what the human speaker said.
+- Reduce hallucination, assistant-like replies, over-paraphrase, stale route/context drift, and premature utterance cuts.
+- Keep room-level `meeting_languages`, participant `language`, and `brse_enabled` as the runtime source of truth.
+
+### Mandatory Read Status
+
+- Read required docs:
+  - `docs/backend/IMPLEMENTATION_STATE.md`
+  - `docs/backend/INTERPRETER_DESIGN.md`
+  - `docs/backend/API_CONTRACT.md`
+- Read required backend/runtime files:
+  - `BE/server/interpreter/meeting_config.py`
+  - `BE/server/interpreter/interpreter_client.py`
+  - `BE/server/interpreter/room_manager.py`
+  - `BE/server/interpreter/output_router.py`
+  - `BE/server/interpreter/audio_input.py`
+  - `BE/server/interpreter/livekit_runtime.py`
+  - `BE/src/common/lang.py`
+  - `BE/src/realtime/client.py`
+- Read related BRSE/runtime reuse files:
+  - `BE/server/meeting_modes.py`
+  - `BE/server/interpreter/translation_test_client.py`
+  - `BE/server/interpreter/daemon.py`
+  - `BE/server/interpreter/event_publisher.py`
+
+### Initial Root Cause / Hypotheses
+
+- Current BRSE prompt is directionally correct but still too permissive for live meeting relay; it does not make "relay the speech act, never answer/act on it" explicit enough per utterance.
+- VAD currently uses a 620 ms silence window and 240 ms prefix padding, which can commit long multi-clause speech too early and lose leading context under jitter.
+- Realtime conversation history is pruned only after responses complete; in-flight response cancellation can leave stale items until the next response, increasing role/context drift risk.
+- Transcript state is keyed only by speaker, so late/delayed text or audio callbacks can attach to a newer utterance after barge-in or route changes.
+- Output audio clear/reset behavior is useful for barge-in but needs better generation checks and observability to avoid stale chunks and hard-to-debug relay mismatches.
+
+### Batch 1: Prompt + VAD/Buffer Tuning (Completed)
+
+- Time: 2026-05-01T20:03:28+07:00
+- Tightened BRSE instructions in `BE/server/interpreter/meeting_config.py`:
+  - Explicitly defines BRSE AI as a relay/interpreter, not assistant/copilot/chatbot.
+  - Requires relaying questions as questions and requests as requests, without answering or performing them.
+  - Forbids adding/inventing facts, decisions, deadlines, owners, risks, causes, promises, requirements, or next steps.
+  - Allows natural BRSE-style rephrasing only when intent, information, certainty, qualifiers, caveats, and business meaning remain unchanged.
+  - Makes room `meeting_languages` authoritative and forbids inferring a different target language.
+  - Requires text and spoken audio to contain the same relay content.
+- Tuned utterance capture for longer meeting speech:
+  - `threshold`: `0.42` -> `0.40`
+  - `prefix_padding_ms`: `240` -> `320`
+  - `silence_duration_ms`: `620` -> `840`
+  - `INTERPRETER_INPUT_QUEUE_MAXSIZE`: `180` -> `420`
+  - `INTERPRETER_INPUT_WARMUP_CHUNKS`: `32` -> `45`
+  - `INTERPRETER_SEND_QUEUE_MAXSIZE`: `240` -> `420`
+- Testing remains deferred per CODE-ONLY instruction.
+
+### Batch 2: Routing Context + Response Lifecycle Guardrails (Completed)
+
+- Time: 2026-05-01T20:09:38+07:00
+- Tightened room-level language context in `BE/server/interpreter/room_manager.py`:
+  - Runtime now treats room `meeting_languages` as required source of truth before routing.
+  - If the room pair is missing/invalid, BRSE relay is paused with `missing_room_language_context` instead of silently falling back to the default `vi-ja` pair.
+  - Route selection logs include room id, speaker id, speaker language, target language, fixed meeting pair, and audience ids.
+- Added per-speaker runtime generation guards:
+  - Each speaker runtime/reconfigure gets a generation id.
+  - Transcript source/relay partial/final publish tasks now carry `(utterance_id, generation)` and drop stale tasks.
+  - Audio delta/flush callbacks verify the current router and generation before publishing to LiveKit.
+  - Final relay logging now includes utterance id, route, source/relay char counts, latency, audience count, and generation.
+- Hardened `BE/server/interpreter/interpreter_client.py` response lifecycle:
+  - Barge-in or route change now cancels in-flight response without using the CLI stdout path, prunes remembered conversation items, and suppresses stale response events.
+  - Response events are dropped when they belong to cancelled/mismatched/no-longer-active response ids.
+  - Conversation item ids from committed input buffers are remembered for pruning.
+  - `response.audio_transcript.*` is used as text fallback when no `response.text.*` stream is emitted, improving text/audio consistency.
+  - `playing` status is emitted only on first audio delta per response to reduce status churn.
+  - Added timing logs for input commit, first relay text, first relay audio, and send queue drops.
+- Improved output/runtime stability:
+  - `BE/server/interpreter/output_router.py` now validates base64 audio chunks, exposes router stats in track descriptors, logs first relay audio frame, and records clear/reset/decode counters.
+  - `BE/server/interpreter/livekit_runtime.py` now filters out screen-share audio publications so BRSE subscribes only to human microphone audio.
+- Testing remains deferred per CODE-ONLY instruction; no tests added or run.
+
+### Final Sync: BRSE Relay Quality Hardening
+
+- Time: 2026-05-01T20:10:45+07:00
+- Final status: backend/runtime BRSE relay quality hardening completed for this turn.
+- Files changed:
+  - `BE/server/interpreter/meeting_config.py`
+  - `BE/server/interpreter/interpreter_client.py`
+  - `BE/server/interpreter/room_manager.py`
+  - `BE/server/interpreter/output_router.py`
+  - `BE/server/interpreter/livekit_runtime.py`
+  - `docs/backend/IMPLEMENTATION_STATE.md`
+- Root cause/hypotheses addressed:
+  - Prompt role was not strict enough against assistant-style answering or added business meaning.
+  - VAD/buffers were biased toward faster commits and smaller queues, increasing long-utterance cut risk.
+  - Runtime could let late response/transcript/audio callbacks affect newer utterance state after barge-in or route changes.
+  - Room language context needed a fail-closed guard instead of implicit fallback routing.
+- Prompt/instruction changes applied:
+  - BRSE AI is explicitly a relay/interpreter, not assistant/copilot/chatbot.
+  - Questions, requests, instructions, advice requests, analysis requests, and decisions must be relayed as speech acts, not answered or executed.
+  - Natural BRSE-style wording is allowed only when intent, facts, certainty, qualifiers, caveats, and constraints stay faithful.
+  - Room pair is authoritative and text/audio output must match.
+- VAD/buffering/runtime tuning applied:
+  - More tolerant VAD for longer utterances: lower threshold, larger prefix padding, longer silence duration.
+  - Larger input/warmup/send queues to reduce drops under jitter/backpressure.
+  - Per-speaker generation + utterance guards for transcript/audio publishing.
+  - Realtime response cancellation/pruning and stale response id suppression on barge-in/route change.
+  - Audio transcript fallback for relay text when audio output exists but text stream does not.
+  - Output router base64 validation, stats, and first-frame/clear/reset observability.
+  - LiveKit runtime filters out screen-share audio and subscribes only to human mic audio.
+- Verification performed:
+  - `python -m py_compile BE/server/interpreter/meeting_config.py BE/server/interpreter/interpreter_client.py BE/server/interpreter/room_manager.py BE/server/interpreter/output_router.py BE/server/interpreter/livekit_runtime.py`
+  - `git diff --check -- BE/server/interpreter/meeting_config.py BE/server/interpreter/interpreter_client.py BE/server/interpreter/room_manager.py BE/server/interpreter/output_router.py BE/server/interpreter/livekit_runtime.py docs/backend/IMPLEMENTATION_STATE.md`
+- Testing deferred per instruction:
+  - no full test suite run
+  - no tests written
+  - no tests changed
+  - no runtime LiveKit/OpenAI smoke run
+
 ## Turn Update: 2026-05-01 BRSE Mode Toggle Backend Support Reconcile (Kickoff)
 
 - Time: 2026-05-01T19:05:21+07:00

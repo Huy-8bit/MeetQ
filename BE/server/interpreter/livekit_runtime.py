@@ -66,7 +66,7 @@ class LiveKitRuntime:
         publication: rtc.RemoteTrackPublication,
         participant: rtc.RemoteParticipant,
     ):
-        if track.kind != rtc.TrackKind.KIND_AUDIO or participant.identity.startswith("interp::"):
+        if not self._is_human_microphone_audio(participant, publication):
             return
 
         try:
@@ -101,9 +101,7 @@ class LiveKitRuntime:
         participant = args[1]
         if not isinstance(participant, rtc.RemoteParticipant):
             return
-        if participant.identity.startswith("interp::"):
-            return
-        if getattr(publication, "kind", None) != rtc.TrackKind.KIND_AUDIO:
+        if not self._is_human_microphone_audio(participant, publication):
             return
 
         setter = getattr(publication, "set_subscribed", None)
@@ -119,7 +117,7 @@ class LiveKitRuntime:
         publication: rtc.RemoteTrackPublication,
         participant: rtc.RemoteParticipant,
     ):
-        if track.kind == rtc.TrackKind.KIND_AUDIO and not participant.identity.startswith("interp::"):
+        if self._is_human_microphone_audio(participant, publication):
             logger.info("Unsubscribed from human mic track of %s", participant.identity)
             self._streams.pop(participant.identity, None)
             self.on_media_disconnected(participant.identity)
@@ -136,7 +134,7 @@ class LiveKitRuntime:
                 continue
             publications = getattr(participant, "track_publications", {}) or {}
             for publication in publications.values():
-                if publication.kind != rtc.TrackKind.KIND_AUDIO:
+                if not self._is_human_microphone_audio(participant, publication):
                     continue
                 setter = getattr(publication, "set_subscribed", None)
                 if callable(setter):
@@ -144,3 +142,26 @@ class LiveKitRuntime:
                         setter(True)
                     except Exception:
                         logger.exception("Failed to subscribe existing audio publication for %s", participant.identity)
+
+    def _is_human_microphone_audio(
+        self,
+        participant: rtc.RemoteParticipant,
+        publication: rtc.RemoteTrackPublication,
+    ) -> bool:
+        if participant.identity.startswith("interp::"):
+            return False
+        if getattr(publication, "kind", None) != rtc.TrackKind.KIND_AUDIO:
+            return False
+
+        source = getattr(publication, "source", None)
+        if source is None:
+            return True
+        source_label = getattr(source, "name", str(source)).lower()
+        if "screen" in source_label:
+            logger.debug(
+                "Ignoring non-microphone audio publication for %s source=%s",
+                participant.identity,
+                source_label,
+            )
+            return False
+        return True
