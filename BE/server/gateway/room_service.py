@@ -12,6 +12,8 @@ from server.gateway.auth import issue_room_token
 from server.gateway.livekit_tokens import generate_livekit_token
 from server.gateway.room_store import RoomStore
 from server.meeting_modes import (
+    BRSE_PARTICIPANT_ID,
+    DEFAULT_BRSE_ENABLED,
     DEFAULT_ROOM_MEETING_LANGUAGES,
     MEETING_MODE_BRSE_RELAY,
     INTERPRETER_MODE_BRSE_PARTICIPANT,
@@ -64,6 +66,12 @@ class RoomNotFoundError(Exception):
 
 class ParticipantNotFoundError(Exception):
     pass
+
+
+class BrseToggleForbiddenError(Exception):
+    def __init__(self, message: str, code: str = "brse_toggle_forbidden"):
+        super().__init__(message)
+        self.code = code
 
 
 class InvalidChatMessageError(Exception):
@@ -125,7 +133,19 @@ class RoomService:
 
         return [meeting_languages[0], meeting_languages[1]]
 
-    async def create_room(self, meeting_languages: List[str]) -> CreateRoomResponse:
+    def _build_brse_virtual_participants(
+        self,
+        room_id: str,
+        timestamp: str,
+        meeting_languages: List[MeetingLanguage],
+    ) -> List[Dict[str, Any]]:
+        return [build_brse_virtual_participant(room_id, timestamp, meeting_languages)]
+
+    async def create_room(
+        self,
+        meeting_languages: List[str],
+        brse_enabled: bool = DEFAULT_BRSE_ENABLED,
+    ) -> CreateRoomResponse:
         room_id = self._generate_id("rm")
         now = self._now_str()
         exp = self._exp_str()
@@ -136,13 +156,18 @@ class RoomService:
             state="created",
             created_at=now,
             expires_at=exp,
+            brse_enabled=brse_enabled,
             participant_limit=8,
             supported_languages=list(SUPPORTED_MEETING_LANGUAGES),
             meeting_languages=normalized_meeting_languages,
             meeting_mode=MEETING_MODE_BRSE_RELAY,
             interpreter_mode=INTERPRETER_MODE_BRSE_PARTICIPANT,
             audio_routing=build_brse_audio_routing(normalized_meeting_languages),
-            virtual_participants=[build_brse_virtual_participant(room_id, now, normalized_meeting_languages)],
+            virtual_participants=(
+                self._build_brse_virtual_participants(room_id, now, normalized_meeting_languages)
+                if brse_enabled
+                else []
+            ),
         )
         await self.store.create_room(room)
 
@@ -158,6 +183,85 @@ class RoomService:
                 share_url=f"/rooms/{room_id}",
             ),
         )
+
+    async def set_brse_enabled(
+        self,
+        room_id: str,
+        brse_enabled: bool,
+        *,
+        actor_participant_id: Optional[str],
+        session_id: Optional[str],
+        reason: str,
+    ) -> CreateRoomResponseRoom:
+        snapshot = await self.store.get_room_snapshot(room_id)
+        if not snapshot:
+            raise RoomNotFoundError()
+
+        if not actor_participant_id:
+            raise BrseToggleForbiddenError("authenticated participant is required to change BRSE mode")
+
+        actor = await self.store.get_participant(room_id, actor_participant_id)
+        if actor is None or actor.status == "disconnected" or actor.is_virtual:
+            raise BrseToggleForbiddenError("active human participant is required to change BRSE mode")
+        if session_id and actor.session_id != session_id:
+            raise BrseToggleForbiddenError("session is no longer valid", code="session_mismatch")
+
+        if snapshot.room.brse_enabled == brse_enabled:
+            if not brse_enabled:
+                await self.store.update_room(room_id, {"virtual_participants": []})
+                await self.store.clear_transcripts(room_id)
+            fresh_snapshot = await self.store.get_room_snapshot(room_id)
+            if not fresh_snapshot:
+                raise RoomNotFoundError()
+            return self._room_response_from_state(fresh_snapshot.room)
+
+        now = self._now_str()
+        meeting_languages = list(snapshot.room.meeting_languages)
+        patch: Dict[str, Any] = {
+            "brse_enabled": brse_enabled,
+            "meeting_mode": MEETING_MODE_BRSE_RELAY,
+            "interpreter_mode": INTERPRETER_MODE_BRSE_PARTICIPANT,
+            "audio_routing": build_brse_audio_routing(meeting_languages),
+            "virtual_participants": (
+                self._build_brse_virtual_participants(room_id, now, meeting_languages)
+                if brse_enabled
+                else []
+            ),
+        }
+        updated_room = await self.store.update_room(room_id, patch)
+        if updated_room is None:
+            raise RoomNotFoundError()
+
+        if not brse_enabled:
+            await self.store.clear_transcripts(room_id)
+
+        await self._publish(
+            EventType.ROOM_BRSE_UPDATED,
+            room_id,
+            {
+                "room_id": room_id,
+                "brse_enabled": brse_enabled,
+                "timestamp": now,
+                "changed_by": actor_participant_id,
+                "reason": reason,
+            },
+        )
+
+        if brse_enabled:
+            for participant in updated_room.virtual_participants:
+                await self._publish(EventType.PARTICIPANT_JOINED, room_id, participant)
+        else:
+            await self._publish(
+                EventType.PARTICIPANT_LEFT,
+                room_id,
+                {
+                    "participant_id": BRSE_PARTICIPANT_ID,
+                    "left_at": now,
+                    "reason": "brse_disabled",
+                },
+            )
+
+        return self._room_response_from_state(updated_room)
 
     async def get_room(self, room_id: str) -> RoomSnapshotResponse:
         snapshot = await self.store.get_room_snapshot(room_id)
@@ -605,6 +709,7 @@ class RoomService:
             state=payload["state"],
             created_at=payload["created_at"],
             expires_at=payload["expires_at"],
+            brse_enabled=payload.get("brse_enabled", DEFAULT_BRSE_ENABLED),
             participant_limit=payload["participant_limit"],
             supported_languages=payload["supported_languages"],
             meeting_languages=payload.get("meeting_languages", list(DEFAULT_ROOM_MEETING_LANGUAGES)),

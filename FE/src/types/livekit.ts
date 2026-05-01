@@ -33,6 +33,7 @@ export interface VideoFeed {
   isVirtual: boolean;
   livekitIdentity?: string | null;
   metadata?: Record<string, unknown>;
+  isCameraOff?: boolean;
   track: LocalVideoTrack | RemoteVideoTrack | null;
 }
 

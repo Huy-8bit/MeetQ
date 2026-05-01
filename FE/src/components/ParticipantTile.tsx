@@ -8,6 +8,8 @@ interface ParticipantTileProps {
   isScreenSharing?: boolean;
   isHost?: boolean;
   isMutedByHost?: boolean;
+  isBrseEnabled?: boolean;
+  relayStatusLabel?: string;
 }
 
 export function ParticipantTile({
@@ -16,6 +18,8 @@ export function ParticipantTile({
   isScreenSharing = false,
   isHost = false,
   isMutedByHost = false,
+  isBrseEnabled = true,
+  relayStatusLabel = "Relay idle",
 }: ParticipantTileProps) {
   const isBrse = feed.kind === "virtual_brse" || feed.isVirtual;
   const initials = feed.displayName
@@ -28,11 +32,18 @@ export function ParticipantTile({
   return (
     <article className={`participant-tile ${isBrse ? "participant-tile-brse" : ""}`}>
       <div className="participant-media-frame">
-        {feed.track ? (
+        {feed.track && !feed.isCameraOff ? (
           <VideoTrackView track={feed.track} mirrored={feed.isLocal} />
+        ) : isBrse ? (
+          <div className="participant-fallback participant-fallback-brse">
+            <span className="brse-avatar-mark">BRSE</span>
+            <strong>{isBrseEnabled ? relayStatusLabel : "Relay off"}</strong>
+            <p>{isBrseEnabled ? "AI relay participant" : "Normal meeting mode"}</p>
+          </div>
         ) : (
-          <div className="participant-fallback">
-            <span>{isBrse ? "AI" : initials || "?"}</span>
+          <div className="participant-fallback participant-fallback-human">
+            <span>{initials || "?"}</span>
+            <strong>{feed.isLocal && feed.isCameraOff ? "Camera off" : feed.displayName}</strong>
           </div>
         )}
       </div>
@@ -44,7 +55,7 @@ export function ParticipantTile({
               || (feed.isLocal
                 ? "You"
                 : isBrse
-                  ? "Virtual BRSE relay"
+                  ? relayStatusLabel
                   : "Participant")}
           </p>
         </div>

@@ -4,9 +4,15 @@ import { formatLanguageFlow, getLanguageLabel } from "../lib/languages";
 
 interface TranscriptPanelProps {
   entries: TranscriptEntry[];
+  brseEnabled?: boolean;
+  embedded?: boolean;
 }
 
-export function TranscriptPanel({ entries }: TranscriptPanelProps) {
+export function TranscriptPanel({
+  entries,
+  brseEnabled = true,
+  embedded = false,
+}: TranscriptPanelProps) {
   const listRef = useRef<HTMLDivElement | null>(null);
 
   const latestTranscriptId = useMemo(
@@ -28,11 +34,15 @@ export function TranscriptPanel({ entries }: TranscriptPanelProps) {
   }, [entries]);
 
   return (
-    <section className="panel transcript-panel">
+    <section className={embedded ? "transcript-panel panel-section" : "panel transcript-panel"}>
       <div className="panel-header">
         <div>
-          <h3>Conversation + BRSE Relay</h3>
-          <p>Original speech stays visible, and BRSE AI relay lines are rendered as separate room-wide events.</p>
+          <h3>{brseEnabled ? "Transcript + Relay" : "Transcript"}</h3>
+          <p>
+            {brseEnabled
+              ? "Original speech and BRSE relay lines stay separated for scanning."
+              : "Normal meeting transcript appears here when speech is available."}
+          </p>
         </div>
       </div>
 
@@ -40,7 +50,11 @@ export function TranscriptPanel({ entries }: TranscriptPanelProps) {
         {entries.length === 0 ? (
           <div className="empty-state small">
             <strong>Waiting for speech</strong>
-            <p>Human speech and BRSE relay transcripts will appear here as the meeting progresses.</p>
+            <p>
+              {brseEnabled
+                ? "Human speech and relay output will appear here."
+                : "Human speech will appear here when available."}
+            </p>
           </div>
         ) : null}
 

@@ -4,6 +4,7 @@ from pydantic import BaseModel, Field
 
 from server.meeting_modes import (
     BRSE_PARTICIPANT_ID,
+    DEFAULT_BRSE_ENABLED,
     DEFAULT_RELAY_LANGUAGE_MAP,
     DEFAULT_ROOM_MEETING_LANGUAGES,
     INTERPRETER_MODE_BRSE_PARTICIPANT,
@@ -94,6 +95,7 @@ class RoomState(BaseModel):
     state: RoomStatus
     created_at: str
     expires_at: str
+    brse_enabled: bool = DEFAULT_BRSE_ENABLED
     participant_limit: int = 8
     supported_languages: List[MeetingLanguage] = Field(
         default_factory=lambda: list(SUPPORTED_MEETING_LANGUAGES)
@@ -169,6 +171,7 @@ class CreateRoomResponseRoom(BaseModel):
     state: RoomStatus
     created_at: str
     expires_at: str
+    brse_enabled: bool
     participant_limit: int
     supported_languages: List[MeetingLanguage]
     meeting_languages: List[MeetingLanguage]
@@ -191,6 +194,7 @@ class CreateRoomRequest(BaseModel):
     meeting_languages: List[str] = Field(
         default_factory=lambda: list(DEFAULT_ROOM_MEETING_LANGUAGES)
     )
+    brse_enabled: bool = DEFAULT_BRSE_ENABLED
 
 
 class JoinRoomRequestClient(BaseModel):

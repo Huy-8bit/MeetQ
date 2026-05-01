@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Body, Depends, Response
 from fastapi.responses import JSONResponse
 from server.gateway.room_service import (
+    BrseToggleForbiddenError,
     InvalidLanguageError,
     InvalidMeetingLanguagesError,
     ParticipantNotFoundError,
@@ -12,6 +13,7 @@ from server.gateway.dependencies import get_room_service, verify_token_dependenc
 from server.models import (
     CreateRoomRequest,
     CreateRoomResponse,
+    CreateRoomResponseRoom,
     RoomSnapshotResponse,
     JoinRoomRequest,
     JoinRoomResponse,
@@ -41,7 +43,7 @@ async def create_room(
 ):
     try:
         payload = req or CreateRoomRequest()
-        return await service.create_room(payload.meeting_languages)
+        return await service.create_room(payload.meeting_languages, payload.brse_enabled)
     except InvalidMeetingLanguagesError as exc:
         return _error_response("invalid_meeting_languages", str(exc), 422, exc.details)
 
@@ -67,6 +69,48 @@ async def join_room(room_id: str, req: JoinRoomRequest, service: RoomService = D
             422,
             exc.details or {"field": "language"},
         )
+
+
+@router.post("/api/rooms/{room_id}/brse/enable", response_model=CreateRoomResponseRoom)
+async def enable_brse(
+    room_id: str,
+    claims: Dict[str, Any] = Depends(verify_token_dependency),
+    service: RoomService = Depends(get_room_service),
+):
+    try:
+        return await service.set_brse_enabled(
+            room_id,
+            True,
+            actor_participant_id=claims.get("participant_id"),
+            session_id=claims.get("session_id"),
+            reason="rest_enable",
+        )
+    except RoomNotFoundError:
+        return _error_response("room_not_found", "Room not found", 404)
+    except BrseToggleForbiddenError as exc:
+        status_code = 409 if exc.code == "session_mismatch" else 403
+        return _error_response(exc.code, str(exc), status_code)
+
+
+@router.post("/api/rooms/{room_id}/brse/disable", response_model=CreateRoomResponseRoom)
+async def disable_brse(
+    room_id: str,
+    claims: Dict[str, Any] = Depends(verify_token_dependency),
+    service: RoomService = Depends(get_room_service),
+):
+    try:
+        return await service.set_brse_enabled(
+            room_id,
+            False,
+            actor_participant_id=claims.get("participant_id"),
+            session_id=claims.get("session_id"),
+            reason="rest_disable",
+        )
+    except RoomNotFoundError:
+        return _error_response("room_not_found", "Room not found", 404)
+    except BrseToggleForbiddenError as exc:
+        status_code = 409 if exc.code == "session_mismatch" else 403
+        return _error_response(exc.code, str(exc), status_code)
 
 @router.delete("/api/rooms/{room_id}/leave", status_code=204)
 async def leave_room(

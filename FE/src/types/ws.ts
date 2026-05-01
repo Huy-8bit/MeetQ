@@ -31,6 +31,7 @@ export type RoomSnapshotEvent = WsEnvelope<
     };
     room: {
       state: "created" | "active" | "empty";
+      brse_enabled?: boolean;
       participant_limit: number;
       supported_languages: Language[];
       meeting_languages?: MeetingLanguage[];
@@ -225,6 +226,17 @@ export type ScreenShareStoppedEvent = WsEnvelope<
   }
 >;
 
+export type RoomBrseUpdatedEvent = WsEnvelope<
+  "room.brse_updated",
+  {
+    room_id: string;
+    brse_enabled: boolean;
+    timestamp: string;
+    changed_by?: string | null;
+    reason?: string | null;
+  }
+>;
+
 export type ServerEvent =
   | RoomSnapshotEvent
   | ParticipantJoinedEvent
@@ -235,6 +247,7 @@ export type ServerEvent =
   | InterpreterStatusEvent
   | ScreenShareStartedEvent
   | ScreenShareStoppedEvent
+  | RoomBrseUpdatedEvent
   | ChatMessageEvent
   | RoomHostChangedEvent
   | ModerationForceMutedEvent
@@ -309,11 +322,23 @@ export type ScreenShareStopMessage = WsEnvelope<
   Record<string, never>
 >;
 
+export type RoomBrseEnableMessage = WsEnvelope<
+  "room.brse.enable",
+  Record<string, never>
+>;
+
+export type RoomBrseDisableMessage = WsEnvelope<
+  "room.brse.disable",
+  Record<string, never>
+>;
+
 export type ClientMessage =
   | PingMessage
   | SetLanguageMessage
   | ScreenShareStartMessage
   | ScreenShareStopMessage
+  | RoomBrseEnableMessage
+  | RoomBrseDisableMessage
   | ChatSendMessage
   | ModerationMuteMessage;
 

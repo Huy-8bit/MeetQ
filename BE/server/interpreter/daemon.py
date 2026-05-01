@@ -38,12 +38,29 @@ class InterpreterDaemon:
             return
 
         if event_type == EventType.PARTICIPANT_JOINED:
-            manager = await self._spawn_manager(room_id)
+            snapshot = await self.room_store.get_room_snapshot(room_id)
+            if snapshot is None or not snapshot.room.brse_enabled:
+                await self._terminate_manager(room_id)
+                return
+            manager = await self._spawn_manager(room_id, snapshot=snapshot)
             if manager is not None:
-                snapshot = await self.room_store.get_room_snapshot(room_id)
-                if snapshot is not None:
-                    await manager.sync_room_context(snapshot.room.meeting_languages)
+                await manager.sync_room_context(snapshot.room.meeting_languages)
                 await manager.sync_participant(payload)
+            return
+
+        if event_type == EventType.ROOM_BRSE_UPDATED:
+            enabled = bool(payload.get("brse_enabled"))
+            if not enabled:
+                await self._terminate_manager(room_id)
+                return
+
+            snapshot = await self.room_store.get_room_snapshot(room_id)
+            if snapshot is None or not snapshot.room.brse_enabled:
+                return
+
+            manager = await self._spawn_manager(room_id, snapshot=snapshot)
+            if manager is not None:
+                await manager.sync_room_context(snapshot.room.meeting_languages)
             return
 
         manager = self.managers.get(room_id)
@@ -52,8 +69,10 @@ class InterpreterDaemon:
 
         if event_type == EventType.PARTICIPANT_UPDATED:
             snapshot = await self.room_store.get_room_snapshot(room_id)
-            if snapshot is not None:
-                await manager.sync_room_context(snapshot.room.meeting_languages)
+            if snapshot is None or not snapshot.room.brse_enabled:
+                await self._terminate_manager(room_id)
+                return
+            await manager.sync_room_context(snapshot.room.meeting_languages)
             await manager.sync_participant(payload)
             return
 
@@ -62,12 +81,26 @@ class InterpreterDaemon:
             if participant_id:
                 await manager.remove_participant(participant_id)
             snapshot = await self.room_store.get_room_snapshot(room_id)
-            if snapshot is None or active_human_participant_count(snapshot.participants) == 0:
+            if (
+                snapshot is None
+                or not snapshot.room.brse_enabled
+                or active_human_participant_count(snapshot.participants) == 0
+            ):
                 await self._terminate_manager(room_id)
 
-    async def _spawn_manager(self, room_id: str) -> Optional[RoomInterpreterManager]:
+    async def _spawn_manager(
+        self,
+        room_id: str,
+        *,
+        snapshot=None,
+    ) -> Optional[RoomInterpreterManager]:
         if room_id in self.managers:
             return self.managers[room_id]
+
+        if snapshot is None:
+            snapshot = await self.room_store.get_room_snapshot(room_id)
+        if snapshot is None or not snapshot.room.brse_enabled:
+            return None
 
         logger.info("Spawning interpreter manager for room %s", room_id)
         publisher = RedisEventPublisher(self.redis, room_id, self.interpreter_events_channel)
@@ -76,12 +109,10 @@ class InterpreterDaemon:
 
         try:
             await manager.start()
-            snapshot = await self.room_store.get_room_snapshot(room_id)
-            if snapshot is not None:
-                manager.bootstrap_participants(
-                    snapshot.participants,
-                    meeting_languages=snapshot.room.meeting_languages,
-                )
+            manager.bootstrap_participants(
+                snapshot.participants,
+                meeting_languages=snapshot.room.meeting_languages,
+            )
             return manager
         except Exception:
             logger.exception("Failed to start interpreter manager for room %s", room_id)

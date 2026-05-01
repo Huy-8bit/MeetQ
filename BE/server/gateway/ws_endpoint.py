@@ -4,6 +4,7 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query
 from server.gateway.app_state import app_state
 from server.gateway.auth import verify_room_token, ExpiredTokenError, InvalidTokenError, TokenRoomMismatchError
 from server.gateway.room_service import (
+    BrseToggleForbiddenError,
     InvalidChatMessageError,
     InvalidLanguageError,
     RoomNotFoundError,
@@ -176,6 +177,38 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str, token: str = Qu
                             "payload": {
                                 "code": "participant_not_found",
                                 "message": "participant no longer active",
+                            },
+                        })
+
+                elif msg_type in {"room.brse.enable", "room.brse.disable"}:
+                    try:
+                        await app_state.room_service.set_brse_enabled(
+                            room_id,
+                            msg_type == "room.brse.enable",
+                            actor_participant_id=participant_id,
+                            session_id=state_participant.session_id,
+                            reason="ws_enable" if msg_type == "room.brse.enable" else "ws_disable",
+                        )
+                    except RoomNotFoundError:
+                        await websocket.send_json({
+                            "type": "error",
+                            "event_id": event_id,
+                            "room_id": room_id,
+                            "sent_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                            "payload": {
+                                "code": "room_not_found",
+                                "message": "room no longer exists",
+                            },
+                        })
+                    except BrseToggleForbiddenError as exc:
+                        await websocket.send_json({
+                            "type": "error",
+                            "event_id": event_id,
+                            "room_id": room_id,
+                            "sent_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                            "payload": {
+                                "code": exc.code,
+                                "message": str(exc),
                             },
                         })
 

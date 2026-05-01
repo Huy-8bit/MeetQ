@@ -1,5 +1,314 @@
 # Frontend Implementation State
 
+## Turn Update: 2026-05-01 Full Product UI Redesign + Camera Toggle (Kickoff)
+
+- Time: 2026-05-01T19:37:46+07:00
+- Mode: CODE-ONLY
+- Testing deferred: yes; no tests, build, or runtime verification will be run this turn
+
+### Objective Locked
+
+- Redesign the three main FE screens:
+  - Landing / create room
+  - Join room
+  - Meeting room
+- Tighten the room information architecture so the main panel focuses on `Relay`, `Chat`, and `People`.
+- Move `Settings` out of the main tab set into a secondary drawer/popover launched from a gear-style control.
+- Add a clear camera on/off control and FE runtime path while preserving existing mic, BRSE, screen share, chat, transcript, people, and host mute flows.
+
+### Mandatory Read Status
+
+- Read required docs and state:
+  - `docs/frontend/IMPLEMENTATION_STATE.md`
+  - `docs/backend/API_CONTRACT.md`
+  - `docs/backend/IMPLEMENTATION_STATE.md`
+- Read FE pages:
+  - `FE/src/pages/HomePage.tsx`
+  - `FE/src/pages/RoomPage.tsx`
+  - `FE/src/pages/TestPage.tsx`
+- Read FE room components:
+  - `FE/src/components/JoinRoomCard.tsx`
+  - `FE/src/components/RoomTopBar.tsx`
+  - `FE/src/components/RoomControlBar.tsx`
+  - `FE/src/components/RoomSidePanel.tsx`
+  - `FE/src/components/MeetingStage.tsx`
+  - `FE/src/components/ParticipantTile.tsx`
+  - `FE/src/components/BrseRelayPanel.tsx`
+  - `FE/src/components/TranscriptPanel.tsx`
+  - `FE/src/components/ChatPanel.tsx`
+  - `FE/src/components/ParticipantList.tsx`
+  - `FE/src/components/AudioDevicePanel.tsx`
+  - existing support components in `FE/src/components/`
+- Read FE runtime/types/style:
+  - `FE/src/features/room/useMeetingRoom.ts`
+  - `FE/src/lib/api.ts`
+  - `FE/src/lib/ws.ts`
+  - `FE/src/lib/livekit.ts`
+  - `FE/src/types/api.ts`
+  - `FE/src/types/ws.ts`
+  - `FE/src/types/livekit.ts`
+  - `FE/src/index.css`
+
+### Planned Product IA
+
+- Landing:
+  - compact product shell with clear create-room and join-existing actions in one cohesive layout
+  - language pair selectors upgraded from generic form fields into first-class selectable controls
+  - test utilities demoted to a quiet secondary action
+- Join:
+  - focused join panel with compact room metadata, clear meeting pair, name input, language selection, and subdued participant preview
+  - BRSE AI/virtual participants should not dominate the pre-join experience
+- Meeting:
+  - top bar remains compact for identity/language/connection/BRSE mode
+  - control bar becomes meeting-app-style controls: mic, camera, share, relay/chat/people shortcuts, settings gear, leave
+  - side panel main tabs become `Relay`, `Chat`, `People` only
+  - audio settings move to secondary settings drawer
+  - BRSE state remains visible but does not occupy oversized stage space unless useful
+
+### Camera Toggle Plan
+
+- Add LiveKit helper support for local camera lookup and muted/unmuted toggling.
+- Add hook state:
+  - `isCameraOff`
+  - `isTogglingCamera`
+  - `cameraToggleError`
+  - `toggleCameraEnabled()`
+- Keep local video tile fallback productized when camera is off.
+
+## Turn Update: 2026-05-01 Full Product UI Redesign + Camera Toggle (Final Sync)
+
+- Time: 2026-05-01T19:47:14+07:00
+- Mode: CODE-ONLY
+- Testing deferred: yes; no tests, build, typecheck, or browser/runtime verification were run by explicit instruction
+
+### Layout Strategy Implemented
+
+- Landing / create room:
+  - Reworked `FE/src/pages/HomePage.tsx` into a compact product shell.
+  - Primary hierarchy is now product purpose → create room → join existing room → test utility.
+  - `Mic & Translation Test` is demoted to a quiet header utility link.
+  - Create flow now uses first-class language-pair selector cards with full language names and a clear meeting bridge preview.
+  - Join-existing is a secondary row in the same launch surface, not a competing hero block.
+- Join room:
+  - Reworked `FE/src/components/JoinRoomCard.tsx` into a focused pre-join composition.
+  - Room id, meeting languages, participant count, room state, and BRSE/normal mode are summarized before the form.
+  - Name and language selection are grouped as the user's setup.
+  - Human participants are previewed compactly; virtual BRSE AI no longer takes visual spotlight in the pre-join state.
+- Meeting room:
+  - Kept `FE/src/pages/RoomPage.tsx` as the orchestration layer while moving presentation into room components.
+  - `RoomTopBar` stays compact for room identity, language, connection state, and BRSE toggle.
+  - `MeetingStage` remains the primary canvas for screen share/video.
+  - `RoomControlBar` now owns meeting actions: mic, camera, screen share, Relay/Chat/People shortcuts, Settings, and Leave.
+
+### Panel Architecture
+
+- Main side panel now has only:
+  - `Relay`
+  - `Chat`
+  - `People`
+- `Settings` was removed from the primary tab set in `FE/src/components/RoomSidePanel.tsx`.
+- Audio/device settings moved into new `FE/src/components/SettingsDrawer.tsx`.
+- `RoomPage` opens the settings drawer from the control bar and embeds `AudioDevicePanel` there.
+- This keeps the main meeting surface focused on active meeting work instead of secondary device configuration.
+
+### Camera Toggle Runtime Path
+
+- `FE/src/types/livekit.ts`
+  - Added `VideoFeed.isCameraOff`.
+- `FE/src/lib/livekit.ts`
+  - Added `getLocalCameraTrack`.
+  - Added `isCameraMuted`.
+  - Added `setLocalCameraMuted`.
+  - Added `publishLocalCameraTrack` so the camera button can publish a camera track if one is missing.
+  - `buildMediaSnapshot` now marks local and remote video feeds as camera-off when no video track exists or the track is muted.
+- `FE/src/features/room/useMeetingRoom.ts`
+  - Added `isCameraOff`, `isTogglingCamera`, `cameraToggleError`.
+  - Added `toggleCameraEnabled()`.
+  - Camera state refreshes from LiveKit publications alongside mic/media snapshot refresh.
+  - Toggle behavior now mutes/unmutes an existing camera track or publishes a new local camera track when needed.
+- `FE/src/components/RoomControlBar.tsx`
+  - Added visible camera on/off control in the primary meeting controls.
+- `FE/src/components/ParticipantTile.tsx`
+  - Local camera-off state renders a deliberate fallback instead of an awkward blank tile.
+
+### Component / Style Changes
+
+- New component:
+  - `FE/src/components/SettingsDrawer.tsx`
+- Refactored components:
+  - `FE/src/pages/HomePage.tsx`
+  - `FE/src/components/JoinRoomCard.tsx`
+  - `FE/src/pages/RoomPage.tsx`
+  - `FE/src/components/RoomTopBar.tsx`
+  - `FE/src/components/RoomControlBar.tsx`
+  - `FE/src/components/RoomSidePanel.tsx`
+  - `FE/src/components/ParticipantTile.tsx`
+- Style updates:
+  - `FE/src/index.css` now includes the product redesign pass for landing, join, meeting controls, camera fallback, side-panel tab count, and settings drawer.
+
+### Deferred Verification
+
+- Not run by instruction:
+  - tests
+  - test edits
+  - build
+  - typecheck
+  - browser/dev-server/runtime verification
+
+## Turn Update: 2026-05-01 Room Meeting UI Redesign + BRSE Toggle (Kickoff)
+
+- Time: 2026-05-01T19:14:45+07:00
+- Mode: CODE-ONLY
+- Testing deferred: yes; no tests will be run, written, or edited this turn
+
+### Objective Locked
+
+- Redesign the room meeting page around a meeting-first hierarchy instead of stacked dashboard cards.
+- Keep existing join/session, gateway websocket, LiveKit media, mic/cam, screen share, transcript, BRSE relay, chat, participant, host mute, and audio settings runtime paths.
+- Add explicit in-room BRSE mode control wired to the backend `brse_enabled` contract.
+
+### Mandatory Read Status
+
+- Read required state/contract/runtime files:
+  - `docs/frontend/IMPLEMENTATION_STATE.md`
+  - `docs/backend/API_CONTRACT.md`
+  - `docs/backend/IMPLEMENTATION_STATE.md`
+  - `FE/src/pages/RoomPage.tsx`
+  - `FE/src/features/room/useMeetingRoom.ts`
+  - `FE/src/lib/api.ts`
+  - `FE/src/lib/ws.ts`
+  - `FE/src/types/api.ts`
+  - `FE/src/types/ws.ts`
+  - `FE/src/index.css`
+- Read room-rendering components in `FE/src/components/`:
+  - `AudioDevicePanel.tsx`
+  - `ChatPanel.tsx`
+  - `ConnectionBadge.tsx`
+  - `InterpreterStatusPanel.tsx`
+  - `JoinRoomCard.tsx`
+  - `MediaElements.tsx`
+  - `MicLevelMeter.tsx`
+  - `ParticipantList.tsx`
+  - `ParticipantTile.tsx`
+  - `TranscriptPanel.tsx`
+
+### Planned Layout Strategy
+
+- Replace the oversized header + card stack with:
+  - compact top bar for room identity, language pair, connection, user language, BRSE toggle, and leave action
+  - dominant meeting stage for active screen share first, otherwise video grid
+  - bottom meeting control bar for mic and screen share
+  - tabbed side panel for relay/transcript, chat, participants, and settings
+- Move audio device settings out of the main canvas into the side panel settings tab.
+- Treat BRSE as mode state:
+  - ON: show productized relay activity/status and relay transcript surface
+  - OFF: show normal meeting state, hide/de-emphasize relay activity, keep transcript/chat usable where available
+
+### BRSE Toggle Contract Plan
+
+- Add `brse_enabled` to FE room summary/snapshot/join types.
+- Add REST methods for `POST /api/rooms/{room_id}/brse/enable|disable`.
+- Add WS client methods/types for `room.brse.enable|room.brse.disable` and server event type `room.brse_updated`.
+- In `useMeetingRoom`, expose `brseEnabled`, `isTogglingBrse`, `brseToggleError`, `canToggleBrse`, and `toggleBrseMode`.
+- Prefer REST toggle confirmation and also handle `room.brse_updated` / `room.snapshot` as source of truth.
+
+### Batch 1: Runtime Contract + IA Refactor (Completed)
+
+- Time: 2026-05-01T19:27:17+07:00
+- Added FE contract support:
+  - `FE/src/types/api.ts` now exposes optional `brse_enabled` on `RoomSummary` and create-room payload compatibility.
+  - `FE/src/types/ws.ts` now types `room.brse.enable`, `room.brse.disable`, and `room.brse_updated`.
+  - `FE/src/lib/api.ts` now has REST `enableBrse()` / `disableBrse()` methods.
+  - `FE/src/lib/ws.ts` now has WS `enableBrse()` / `disableBrse()` helpers for the documented gateway contract.
+- Updated `FE/src/features/room/useMeetingRoom.ts`:
+  - hydrates `brse_enabled` from join, REST snapshot, and WS snapshot
+  - handles `room.brse_updated`
+  - exposes `brseEnabled`, `canToggleBrse`, `isTogglingBrse`, `brseToggleError`, and `toggleBrseMode`
+  - hides stale BRSE relay audio/video/status/transcript surfaces when BRSE is off
+  - ignores relay transcript/status events while BRSE is off
+- Replaced room page information architecture:
+  - compact `RoomTopBar` for room identity, language pair, current language, connection state, BRSE toggle, and leave action
+  - `MeetingStage` for screen-share-first stage and video grid/strip
+  - `RoomControlBar` for mic and screen-share meeting controls plus quick panel switching
+  - `RoomSidePanel` tabs for relay/transcript, chat, participants, and settings
+  - `BrseRelayPanel` for BRSE on/off state and relay activity summary
+- Existing feature surfaces were preserved and embedded into the new IA:
+  - `ChatPanel` embedded under Chat
+  - `TranscriptPanel` embedded under Relay
+  - `ParticipantList` embedded under People with host mute controls
+  - `AudioDevicePanel` moved under Settings
+- Visual direction updated in `FE/src/index.css`:
+  - dark meeting canvas for primary stage
+  - compact glass top bar/control bar
+  - light tabbed side panel for secondary workflows
+  - productized BRSE relay tile/status treatment
+  - responsive collapse to single-column room layout
+- Testing remains deferred by instruction.
+
+### Final Sync: Room Meeting UI Redesign + BRSE Toggle
+
+- Time: 2026-05-01T19:29:08+07:00
+- Final status: FE room page has been redesigned and BRSE toggle wiring has been added without backend changes.
+
+### Final Layout Strategy
+
+- The room page now prioritizes the meeting experience:
+  - `RoomTopBar`: compact room identity, language pair, current language selector, participant count, connection state, BRSE toggle, leave action
+  - `MeetingStage`: primary stage for active screen share; falls back to video grid when no one is sharing
+  - `RoomControlBar`: primary meeting controls for microphone and screen sharing, plus quick access to side-panel tabs
+  - `RoomSidePanel`: tabbed secondary workspace for `Relay`, `Chat`, `People`, and `Settings`
+- The old right-column stack of separate cards is removed from the room page render path.
+- Audio settings moved out of the main canvas into the `Settings` tab.
+- Participants and host mute controls moved into the `People` tab.
+- Chat now occupies a full side-panel tab with scrollable message history and a stable input bar.
+- Transcript and BRSE relay state live together in the `Relay` tab.
+
+### BRSE Toggle Behavior
+
+- Toggle placement: `RoomTopBar`, next to connection state and before Leave.
+- Visible states:
+  - `BRSE On`: AI relay active/available
+  - `BRSE Off`: normal meeting mode
+  - `Updating`: pending backend confirmation
+- Runtime behavior:
+  - REST `enableBrse()` / `disableBrse()` is used for toggle confirmation.
+  - WS `room.brse_updated` is handled as a live source of truth.
+  - WS `room.snapshot` continues to hydrate `brse_enabled`.
+  - When BRSE turns off, FE hides stale BRSE virtual participant video, BRSE audio sinks, interpreter statuses, and relay transcript rows.
+  - When BRSE is off, the relay tab degrades to normal meeting/transcript state instead of showing a dead BRSE panel.
+
+### Components Added
+
+- `FE/src/components/BrseToggleControl.tsx`
+- `FE/src/components/RoomTopBar.tsx`
+- `FE/src/components/MeetingStage.tsx`
+- `FE/src/components/RoomControlBar.tsx`
+- `FE/src/components/RoomSidePanel.tsx`
+- `FE/src/components/BrseRelayPanel.tsx`
+
+### Components Refactored
+
+- `FE/src/pages/RoomPage.tsx`
+- `FE/src/features/room/useMeetingRoom.ts`
+- `FE/src/components/ChatPanel.tsx`
+- `FE/src/components/TranscriptPanel.tsx`
+- `FE/src/components/ParticipantList.tsx`
+- `FE/src/components/ParticipantTile.tsx`
+- `FE/src/components/AudioDevicePanel.tsx`
+- `FE/src/index.css`
+- `FE/src/lib/api.ts`
+- `FE/src/lib/ws.ts`
+- `FE/src/types/api.ts`
+- `FE/src/types/ws.ts`
+
+### Testing Status
+
+- Testing deferred by instruction:
+  - no tests run
+  - no tests written
+  - no tests edited
+  - no build/runtime verification run
+
 ## Turn Update: 2026-05-01 Chat End-to-End Debug Reopen (Kickoff)
 
 - Time: 2026-05-01T15:23:33+07:00

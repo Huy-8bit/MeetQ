@@ -9,6 +9,7 @@ interface ChatPanelProps {
   disabled?: boolean;
   error?: string | null;
   isSending?: boolean;
+  embedded?: boolean;
 }
 
 export function ChatPanel({
@@ -18,6 +19,7 @@ export function ChatPanel({
   disabled = false,
   error = null,
   isSending = false,
+  embedded = false,
 }: ChatPanelProps) {
   const [inputText, setInputText] = useState("");
   const listRef = useRef<HTMLDivElement>(null);
@@ -52,7 +54,7 @@ export function ChatPanel({
   }
 
   return (
-    <section className="panel chat-panel">
+    <section className={embedded ? "chat-panel panel-section" : "panel chat-panel"}>
       <div className="panel-header">
         <div>
           <h3>Room Chat</h3>

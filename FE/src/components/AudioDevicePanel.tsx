@@ -17,6 +17,7 @@ interface AudioDevicePanelProps {
   isSwitchingAudioOutput: boolean;
   audioOutputError: string | null;
   onSelectAudioOutput: (deviceId: string) => void;
+  embedded?: boolean;
 }
 
 export function AudioDevicePanel({
@@ -36,9 +37,10 @@ export function AudioDevicePanel({
   isSwitchingAudioOutput,
   audioOutputError,
   onSelectAudioOutput,
+  embedded = false,
 }: AudioDevicePanelProps) {
   return (
-    <section className="panel audio-settings-panel">
+    <section className={embedded ? "audio-settings-panel panel-section" : "panel audio-settings-panel"}>
       <div className="panel-header">
         <div>
           <h3>Audio Settings</h3>

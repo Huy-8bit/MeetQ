@@ -86,6 +86,10 @@ async def _handle_interpreter_events(msg_data: dict):
     if not room_id or not app_state.ws_hub or not app_state.room_store:
         return
 
+    snapshot = await app_state.room_store.get_room_snapshot(room_id)
+    if snapshot is None or not snapshot.room.brse_enabled:
+        return
+
     if event_type == EventType.PARTICIPANT_MEDIA_CONNECTED:
         p_id = payload.get("participant_id")
         if p_id:

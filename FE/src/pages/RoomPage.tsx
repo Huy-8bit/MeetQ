@@ -3,23 +3,24 @@ import { useNavigate, useParams } from "react-router-dom";
 import { api, ApiError } from "../lib/api";
 import {
   formatMeetingLanguagePair,
-  getLanguageLabel,
 } from "../lib/languages";
 import { useSessionStore } from "../state/session";
 import type {
-  Language,
   MeetingLanguage,
   RoomSnapshotResponse,
 } from "../types/api";
-import { AudioTrackSink, VideoTrackView } from "../components/MediaElements";
+import { AudioTrackSink } from "../components/MediaElements";
 import { ChatPanel } from "../components/ChatPanel";
 import { JoinRoomCard } from "../components/JoinRoomCard";
-import { ConnectionBadge } from "../components/ConnectionBadge";
 import { AudioDevicePanel } from "../components/AudioDevicePanel";
-import { InterpreterStatusPanel } from "../components/InterpreterStatusPanel";
 import { ParticipantList } from "../components/ParticipantList";
-import { ParticipantTile } from "../components/ParticipantTile";
 import { TranscriptPanel } from "../components/TranscriptPanel";
+import { BrseRelayPanel } from "../components/BrseRelayPanel";
+import { MeetingStage } from "../components/MeetingStage";
+import { RoomControlBar } from "../components/RoomControlBar";
+import { RoomSidePanel, type RoomPanelTab } from "../components/RoomSidePanel";
+import { RoomTopBar } from "../components/RoomTopBar";
+import { SettingsDrawer } from "../components/SettingsDrawer";
 import { useMeetingRoom } from "../features/room/useMeetingRoom";
 
 const APP_VERSION = "0.1.0";
@@ -34,6 +35,8 @@ export function RoomPage() {
   const [snapshotError, setSnapshotError] = useState<string | null>(null);
   const [joining, setJoining] = useState(false);
   const [joinError, setJoinError] = useState<string | null>(null);
+  const [activePanel, setActivePanel] = useState<RoomPanelTab>("relay");
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const session = getSession(roomId);
   const handleSessionInvalidated = useCallback(() => {
     clearSession(roomId);
@@ -98,6 +101,9 @@ export function RoomPage() {
       ) || null
     : null;
   const roomMeetingLanguages = meeting.meetingLanguages;
+  const relayStatusLabel = meeting.brseEnabled
+    ? formatRelayStatus(meeting.interpreterStatuses[0]?.status)
+    : "Off";
 
   async function handleJoin(payload: {
     displayName: string;
@@ -195,48 +201,80 @@ export function RoomPage() {
   }
 
   return (
-    <main className="room-page">
-      <header className="room-header panel">
-        <div>
-          <span className="eyebrow">Room {roomId}</span>
-          <h1>{meeting.selfState?.display_name || "Meeting Room"}</h1>
-          <p>
-            {meeting.meetingMode === "brse_relay"
-              ? "Everyone hears original human audio. BRSE AI joins as a virtual participant and relays across languages."
-              : "Language still controls meeting interpretation behavior for this room."}
-          </p>
-          <p>
-            Meeting languages: {formatMeetingLanguagePair(roomMeetingLanguages)}
-          </p>
-          <p>Your language: {getLanguageLabel(meeting.selfState?.language || session.participant.language)}</p>
-        </div>
+    <main className={meeting.brseEnabled ? "room-page brse-on" : "room-page brse-off"}>
+      <RoomTopBar
+        roomId={roomId}
+        displayName={meeting.selfState?.display_name || session.participant.display_name}
+        meetingLanguages={roomMeetingLanguages}
+        currentLanguage={meeting.selfState?.language || session.participant.language}
+        participantCount={meeting.participants.length}
+        connectionState={meeting.connectionState}
+        brseEnabled={meeting.brseEnabled}
+        isTogglingBrse={meeting.isTogglingBrse}
+        brseToggleError={meeting.brseToggleError}
+        canToggleBrse={meeting.canToggleBrse}
+        onChangeLanguage={(language) => meeting.changeLanguage(language)}
+        onToggleBrse={(nextEnabled) => {
+          void meeting.toggleBrseMode(nextEnabled);
+        }}
+      />
 
-        <div className="room-header-actions">
-          <ConnectionBadge state={meeting.connectionState} />
+      <div className="room-alert-stack">
+        {meeting.connectionError ? (
+          <div className="banner banner-danger">{meeting.connectionError}</div>
+        ) : null}
+        {meeting.mediaError ? (
+          <div className="banner banner-warning">{meeting.mediaError}</div>
+        ) : null}
+        {meeting.screenShareError ? (
+          <div className="banner banner-warning">{meeting.screenShareError}</div>
+        ) : null}
+        {meeting.micToggleError ? (
+          <div className="banner banner-warning">{meeting.micToggleError}</div>
+        ) : null}
+        {meeting.cameraToggleError ? (
+          <div className="banner banner-warning">{meeting.cameraToggleError}</div>
+        ) : null}
+        {meeting.moderationError ? (
+          <div className="banner banner-warning">{meeting.moderationError}</div>
+        ) : null}
+        {meeting.isMutedByHost ? (
+          <div className="banner banner-danger banner-force-muted">
+            Your microphone has been muted by the host.
+          </div>
+        ) : null}
+      </div>
 
-          <label className="compact-field">
-            <span>Your Language</span>
-            <select
-              value={meeting.selfState?.language || session.participant.language}
-              disabled={roomMeetingLanguages.length !== 2}
-              onChange={(event) =>
-                meeting.changeLanguage(event.target.value as Language)
-              }
-            >
-              {(roomMeetingLanguages.length === 2
-                ? roomMeetingLanguages
-                : [session.participant.language]
-              ).map((item) => (
-                <option key={item} value={item}>
-                  {getLanguageLabel(item)}
-                </option>
-              ))}
-            </select>
-          </label>
+      <div className="room-shell">
+        <section className="room-main-column">
+          <MeetingStage
+            videos={meeting.videos}
+            participants={meeting.participants}
+            selectedScreenSharer={selectedScreenSharer}
+            selectedScreenFeed={selectedScreenFeed}
+            activeScreenShareCount={activeScreenShareParticipants.length}
+            brseEnabled={meeting.brseEnabled}
+            relayStatusLabel={relayStatusLabel}
+          />
 
-          <button
-            className="button-secondary"
-            onClick={() => {
+          <RoomControlBar
+            activePanel={activePanel}
+            isMicMuted={meeting.isMicMuted}
+            isTogglingMic={meeting.isTogglingMic}
+            isMutedByHost={meeting.isMutedByHost}
+            isCameraOff={meeting.isCameraOff}
+            isTogglingCamera={meeting.isTogglingCamera}
+            isScreenSharing={meeting.isScreenSharing}
+            isStartingScreenShare={meeting.isStartingScreenShare}
+            isStoppingScreenShare={meeting.isStoppingScreenShare}
+            isLeaving={meeting.isLeaving}
+            onToggleMic={() => {
+              void meeting.toggleMicrophoneMuted();
+            }}
+            onToggleCamera={() => {
+              void meeting.toggleCameraEnabled();
+            }}
+            onToggleScreenShare={() => {
               if (meeting.isScreenSharing) {
                 void meeting.stopScreenShare({ reason: "manual_stop" });
                 return;
@@ -244,186 +282,123 @@ export function RoomPage() {
 
               void meeting.startScreenShare();
             }}
-            disabled={
-              meeting.isStartingScreenShare
-              || meeting.isStoppingScreenShare
-              || meeting.isLeaving
-            }
-          >
-            {meeting.isStartingScreenShare
-              ? "Requesting screen permission..."
-              : meeting.isStoppingScreenShare
-                ? "Stopping share..."
-                : meeting.isScreenSharing
-                  ? "Stop sharing screen"
-                  : "Start sharing screen"}
-          </button>
-
-          <button
-            className="button-danger"
-            onClick={() => {
+            onOpenPanel={setActivePanel}
+            onOpenSettings={() => setSettingsOpen(true)}
+            onLeave={() => {
               void meeting.leaveRoom().then(() => navigate("/"));
             }}
-            disabled={meeting.isLeaving}
-          >
-            {meeting.isLeaving ? "Leaving..." : "Leave Room"}
-          </button>
-        </div>
-      </header>
-
-      {meeting.connectionError ? (
-        <div className="banner banner-danger">{meeting.connectionError}</div>
-      ) : null}
-      {meeting.mediaError ? (
-        <div className="banner banner-warning">{meeting.mediaError}</div>
-      ) : null}
-      {meeting.screenShareError ? (
-        <div className="banner banner-warning">{meeting.screenShareError}</div>
-      ) : null}
-      {meeting.moderationError ? (
-        <div className="banner banner-warning">{meeting.moderationError}</div>
-      ) : null}
-      {meeting.isMutedByHost ? (
-        <div className="banner banner-danger banner-force-muted">
-          Your microphone has been muted by the host.
-        </div>
-      ) : null}
-
-      <div className="room-layout">
-        <section className="video-stage">
-          <section className="panel screen-stage-panel">
-            <div className="panel-header">
-              <div>
-                <h3>Shared Screen Stage</h3>
-                <p>
-                  {selectedScreenSharer
-                    ? `${selectedScreenSharer.display_name} is sharing screen`
-                    : "No active screen share"}
-                </p>
-              </div>
-              <span className="panel-count">{activeScreenShareParticipants.length}</span>
-            </div>
-
-            {selectedScreenSharer ? (
-              <div className="screen-stage-frame">
-                {selectedScreenFeed?.track ? (
-                  <VideoTrackView track={selectedScreenFeed.track} />
-                ) : (
-                  <div className="screen-stage-placeholder">
-                    <strong>{selectedScreenSharer.display_name}</strong>
-                    <p>Screen stream is starting or reconnecting.</p>
-                  </div>
-                )}
-              </div>
-            ) : (
-              <div className="empty-state small">
-                <strong>No one is sharing screen</strong>
-                <p>Start sharing to present documents, code, or slides to the room.</p>
-              </div>
-            )}
-          </section>
-
-          <div className="video-grid">
-            {meeting.videos.map((feed) => (
-              <ParticipantTile
-                key={feed.participantId}
-                feed={feed}
-                isScreenSharing={Boolean(
-                  meeting.participants.find(
-                    (participant) => participant.participant_id === feed.participantId,
-                  )?.is_screen_sharing,
-                )}
-                isHost={Boolean(
-                  meeting.participants.find(
-                    (participant) => participant.participant_id === feed.participantId,
-                  )?.is_host,
-                )}
-                isMutedByHost={Boolean(
-                  meeting.participants.find(
-                    (participant) => participant.participant_id === feed.participantId,
-                  )?.muted_by_host,
-                )}
-                label={
-                  feed.isLocal
-                    ? "You"
-                    : feed.kind === "virtual_brse"
-                      ? "AI BRSE relay"
-                    : meeting.participants.find(
-                        (participant) => participant.participant_id === feed.participantId,
-                      )?.status || "Participant"
-                }
-              />
-            ))}
-          </div>
-
-          <ParticipantList
-            participants={meeting.participants}
-            selfParticipantId={meeting.selfState?.participant_id}
-            isCurrentUserHost={meeting.isCurrentUserHost}
-            onMuteParticipant={(participantId) => {
-              void meeting.muteParticipant(participantId);
-            }}
-            isMutingParticipant={meeting.isMutingParticipant}
           />
-
-          <div className="audio-sinks" aria-hidden="true">
-            {meeting.humanAudioFeeds.map((feed) => (
-              <AudioTrackSink
-                key={`human-${feed.participantId}-${feed.track.sid}`}
-                track={feed.track}
-                onOutputDeviceError={meeting.reportAudioOutputApplyError}
-              />
-            ))}
-
-            {meeting.brseAudioFeeds.map((feed) => (
-              <AudioTrackSink
-                key={`brse-${feed.trackSid}`}
-                track={feed.track}
-                onOutputDeviceError={meeting.reportAudioOutputApplyError}
-              />
-            ))}
-          </div>
         </section>
 
-        <aside className="sidebar-stack">
-          <AudioDevicePanel
-            isMicMuted={meeting.isMicMuted}
-            isTogglingMic={meeting.isTogglingMic}
-            micToggleError={meeting.micToggleError}
-            isMutedByHost={meeting.isMutedByHost}
-            onToggleMic={() => {
-              void meeting.toggleMicrophoneMuted();
-            }}
-            audioInputDevices={meeting.audioInputDevices}
-            selectedAudioInputDeviceId={meeting.selectedAudioInputDeviceId}
-            isSwitchingAudioInput={meeting.isSwitchingAudioInput}
-            audioInputError={meeting.audioInputError}
-            onSelectAudioInput={(deviceId) => {
-              void meeting.switchAudioInput(deviceId);
-            }}
-            audioOutputSupported={meeting.audioOutputSupported}
-            audioOutputDevices={meeting.audioOutputDevices}
-            selectedAudioOutputDeviceId={meeting.selectedAudioOutputDeviceId}
-            isSwitchingAudioOutput={meeting.isSwitchingAudioOutput}
-            audioOutputError={meeting.audioOutputError}
-            onSelectAudioOutput={(deviceId) => {
-              void meeting.switchAudioOutput(deviceId);
-            }}
+        <RoomSidePanel
+          activeTab={activePanel}
+          transcriptCount={meeting.transcripts.length}
+          chatCount={meeting.chatMessages.length}
+          participantCount={meeting.participants.length}
+          onTabChange={setActivePanel}
+          relay={
+            <>
+              <BrseRelayPanel
+                brseEnabled={meeting.brseEnabled}
+                statuses={meeting.interpreterStatuses}
+                transcripts={meeting.transcripts}
+                meetingLanguages={roomMeetingLanguages}
+              />
+              <TranscriptPanel
+                entries={meeting.transcripts}
+                brseEnabled={meeting.brseEnabled}
+                embedded
+              />
+            </>
+          }
+          chat={
+            <ChatPanel
+              messages={meeting.chatMessages}
+              selfParticipantId={meeting.selfState?.participant_id}
+              onSend={meeting.sendChatMessage}
+              disabled={!meeting.canSendChat}
+              error={meeting.chatError}
+              isSending={meeting.isSendingChat}
+              embedded
+            />
+          }
+          people={
+            <ParticipantList
+              participants={meeting.participants}
+              selfParticipantId={meeting.selfState?.participant_id}
+              isCurrentUserHost={meeting.isCurrentUserHost}
+              onMuteParticipant={(participantId) => {
+                void meeting.muteParticipant(participantId);
+              }}
+              isMutingParticipant={meeting.isMutingParticipant}
+              brseEnabled={meeting.brseEnabled}
+              embedded
+            />
+          }
+        />
+      </div>
+
+      <SettingsDrawer
+        open={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+      >
+        <AudioDevicePanel
+          isMicMuted={meeting.isMicMuted}
+          isTogglingMic={meeting.isTogglingMic}
+          micToggleError={meeting.micToggleError}
+          isMutedByHost={meeting.isMutedByHost}
+          onToggleMic={() => {
+            void meeting.toggleMicrophoneMuted();
+          }}
+          audioInputDevices={meeting.audioInputDevices}
+          selectedAudioInputDeviceId={meeting.selectedAudioInputDeviceId}
+          isSwitchingAudioInput={meeting.isSwitchingAudioInput}
+          audioInputError={meeting.audioInputError}
+          onSelectAudioInput={(deviceId) => {
+            void meeting.switchAudioInput(deviceId);
+          }}
+          audioOutputSupported={meeting.audioOutputSupported}
+          audioOutputDevices={meeting.audioOutputDevices}
+          selectedAudioOutputDeviceId={meeting.selectedAudioOutputDeviceId}
+          isSwitchingAudioOutput={meeting.isSwitchingAudioOutput}
+          audioOutputError={meeting.audioOutputError}
+          onSelectAudioOutput={(deviceId) => {
+            void meeting.switchAudioOutput(deviceId);
+          }}
+          embedded
+        />
+      </SettingsDrawer>
+
+      <div className="audio-sinks" aria-hidden="true">
+        {meeting.humanAudioFeeds.map((feed) => (
+          <AudioTrackSink
+            key={`human-${feed.participantId}-${feed.track.sid}`}
+            track={feed.track}
+            onOutputDeviceError={meeting.reportAudioOutputApplyError}
           />
-          <ChatPanel
-            messages={meeting.chatMessages}
-            selfParticipantId={meeting.selfState?.participant_id}
-            onSend={meeting.sendChatMessage}
-            disabled={!meeting.canSendChat}
-            error={meeting.chatError}
-            isSending={meeting.isSendingChat}
+        ))}
+
+        {meeting.brseAudioFeeds.map((feed) => (
+          <AudioTrackSink
+            key={`brse-${feed.trackSid}`}
+            track={feed.track}
+            onOutputDeviceError={meeting.reportAudioOutputApplyError}
           />
-          <InterpreterStatusPanel statuses={meeting.interpreterStatuses} />
-          <TranscriptPanel entries={meeting.transcripts} />
-        </aside>
+        ))}
       </div>
     </main>
   );
+}
+
+function formatRelayStatus(status?: string): string {
+  if (!status) {
+    return "Idle";
+  }
+
+  return status
+    .split("_")
+    .map((part) => part[0].toUpperCase() + part.slice(1))
+    .join(" ");
 }
 
 function mapRoomSnapshotError(error: ApiError): string {

@@ -1,5 +1,265 @@
 # Backend Implementation State
 
+## Turn Update: 2026-05-01 BRSE Mode Toggle Backend Support Reconcile (Kickoff)
+
+- Time: 2026-05-01T19:05:21+07:00
+- Mode: CODE-ONLY
+- Testing deferred: yes, per instruction
+
+### Objective Locked
+
+- Reconcile and complete backend/runtime support for room-level `brse_enabled: bool`.
+- Keep create/join/snapshot/WS room contract explicit for BRSE ON/OFF.
+- Ensure interpreter runtime is gated by `brse_enabled=true` and cleaned up when mode switches OFF.
+- Do not run tests, write tests, edit tests, or perform runtime verification this turn.
+
+### Mandatory Read Status
+
+- Read required backend docs:
+  - `docs/backend/API_CONTRACT.md`
+  - `docs/backend/GATEWAY_DESIGN.md`
+  - `docs/backend/INTERPRETER_DESIGN.md`
+  - `docs/backend/IMPLEMENTATION_STATE.md`
+- Read required backend/runtime source:
+  - `BE/server/models.py`
+  - `BE/server/gateway/api_rooms.py`
+  - `BE/server/gateway/ws_endpoint.py`
+  - `BE/server/gateway/event_consumer.py`
+  - `BE/server/gateway/room_service.py`
+  - `BE/server/interpreter/daemon.py`
+  - `BE/server/interpreter/room_manager.py`
+  - `BE/server/interpreter/livekit_runtime.py`
+  - `BE/server/interpreter/output_router.py`
+- Read related room state/store/runtime files:
+  - `BE/server/gateway/room_store.py`
+  - `BE/server/meeting_modes.py`
+  - `BE/server/events.py`
+  - `BE/server/interpreter/event_publisher.py`
+- Read FE contract references only:
+  - `FE/src/types/api.ts`
+  - `FE/src/types/ws.ts`
+
+### Current Findings
+
+- Worktree already contains the main backend BRSE toggle implementation across models, gateway, room store, interpreter daemon, and backend docs.
+- Current default behavior is explicit `brse_enabled=true` when create-room omits the field.
+- Live toggle is present through REST `POST /api/rooms/{room_id}/brse/enable|disable` and WS `room.brse.enable|room.brse.disable`.
+- Host model is not present in backend room state; current live-toggle permission remains active authenticated human room participant.
+
+### Batch 1: Runtime Cleanup Hardening (Completed)
+
+- Tightened `RoomInterpreterManager.stop()` cleanup for BRSE OFF/runtime termination.
+- Stop now tears down the union of all tracked speaker runtime state:
+  - audio streams
+  - audio inputs
+  - output routers
+  - realtime clients
+  - background tasks
+  - routing/transcript state
+- Stop then clears manager-level participant/routing/transcript maps before disconnecting the BRSE LiveKit participant.
+- File changed in this batch:
+  - `BE/server/interpreter/room_manager.py`
+
+### Final Sync: BRSE Mode Toggle Backend Support Reconcile
+
+- Time: 2026-05-01T19:07:54+07:00
+- Final status: backend/runtime BRSE toggle support is present and reconciled.
+- BRSE toggle model:
+  - persisted room source of truth: `brse_enabled: bool`
+  - default behavior: omitted create-room field defaults explicitly to `true`
+  - `brse_enabled=false` is normal human-only meeting mode with no BRSE virtual participant in snapshots
+- Create/join/snapshot contract:
+  - create-room accepts `brse_enabled`
+  - create-room response exposes `room.brse_enabled`
+  - join response room payload exposes `room.brse_enabled`
+  - REST snapshot and initial WS `room.snapshot` expose `room.brse_enabled`
+- Live toggle implemented:
+  - REST `POST /api/rooms/{room_id}/brse/enable`
+  - REST `POST /api/rooms/{room_id}/brse/disable`
+  - WS `room.brse.enable`
+  - WS `room.brse.disable`
+  - broadcast `room.brse_updated`
+- Permission rule:
+  - no backend host role/model exists in current `BE/server`
+  - current toggle permission is active authenticated human participant with matching session
+  - stale session, disconnected participant, missing participant, and virtual participant are rejected
+- ON -> OFF cleanup path:
+  - room state sets `brse_enabled=false`
+  - room meta clears `virtual_participants`
+  - room transcript list is cleared and snapshots suppress BRSE transcripts while OFF
+  - Gateway broadcasts `room.brse_updated`
+  - Gateway broadcasts `participant.left` for `brse_ai`
+  - Interpreter daemon terminates the room manager on `room.brse_updated`
+  - `RoomInterpreterManager.stop()` tears down clients, tasks, audio inputs, output routers, routing/transcript maps, and disconnects the BRSE LiveKit participant
+- OFF -> ON spawn path:
+  - room state sets `brse_enabled=true`
+  - room meta rebuilds `brse_ai` virtual participant
+  - Gateway broadcasts `room.brse_updated`
+  - Gateway broadcasts `participant.joined` for `brse_ai`
+  - Interpreter daemon spawns a fresh room manager from the current room snapshot
+- Files changed for this BRSE toggle work:
+  - `BE/server/meeting_modes.py`
+  - `BE/server/models.py`
+  - `BE/server/events.py`
+  - `BE/server/gateway/room_store.py`
+  - `BE/server/gateway/room_service.py`
+  - `BE/server/gateway/api_rooms.py`
+  - `BE/server/gateway/ws_endpoint.py`
+  - `BE/server/gateway/event_consumer.py`
+  - `BE/server/interpreter/daemon.py`
+  - `BE/server/interpreter/room_manager.py`
+  - `docs/backend/API_CONTRACT.md`
+  - `docs/backend/GATEWAY_DESIGN.md`
+  - `docs/backend/INTERPRETER_DESIGN.md`
+  - `docs/backend/IMPLEMENTATION_STATE.md`
+- Testing deferred per instruction:
+  - no tests written
+  - no tests changed
+  - no tests run
+  - no runtime smoke/verification run
+
+## Turn Update: 2026-05-01 BRSE Mode Toggle Backend Support (Kickoff)
+
+- Time: 2026-05-01T15:34:20+07:00
+- Mode: CODE-ONLY
+- Testing deferred: yes, per instruction
+
+### Objective Locked
+
+- Add explicit room-level `brse_enabled: bool` state so rooms can run either BRSE relay mode or normal human-only meeting mode.
+- Create-room must accept explicit `brse_enabled` input and expose the selected state in REST room responses, join response, and WS `room.snapshot`.
+- Interpreter daemon/runtime must only spawn BRSE LiveKit/OpenAI runtime when `brse_enabled = true`.
+- Prefer live toggle support in this turn if it can stay scoped to backend/runtime paths.
+
+### Mandatory Read Status
+
+- Read required backend contract/design/state files:
+  - `docs/backend/API_CONTRACT.md`
+  - `docs/backend/GATEWAY_DESIGN.md`
+  - `docs/backend/INTERPRETER_DESIGN.md`
+  - `docs/backend/IMPLEMENTATION_STATE.md`
+- Read required backend/runtime source files:
+  - `BE/server/models.py`
+  - `BE/server/gateway/api_rooms.py`
+  - `BE/server/gateway/ws_endpoint.py`
+  - `BE/server/gateway/event_consumer.py`
+  - `BE/server/gateway/room_service.py`
+  - `BE/server/interpreter/daemon.py`
+  - `BE/server/interpreter/room_manager.py`
+  - `BE/server/interpreter/livekit_runtime.py`
+  - `BE/server/interpreter/output_router.py`
+- Read related room state/store files:
+  - `BE/server/gateway/room_store.py`
+  - `BE/server/meeting_modes.py`
+  - `BE/server/events.py`
+  - `BE/server/interpreter/event_publisher.py`
+- Read FE contract reference only:
+  - `FE/src/types/api.ts`
+  - `FE/src/types/ws.ts`
+
+### Initial Implementation Choice
+
+- Default behavior selected for compatibility: `brse_enabled = true` when create-room payload omits the field.
+- OFF mode will keep normal room/create/join/leave/chat/screen-share flow but will not materialize `brse_ai`, spawn interpreter runtime, publish BRSE transcript/audio, or retain stale BRSE participant state.
+- Host permission model is not present in current backend room state; if live toggle is implemented this turn, it will use existing room-token participant auth and note the host-permission assumption.
+
+### Batch 1: Room State + Gateway Contract (Completed)
+
+- Added `brse_enabled` to persisted `RoomState`, room response models, join response room payload, REST room snapshot room payload, and initial WS `room.snapshot` via existing room serialization.
+- Create-room now accepts `brse_enabled`; omitted value explicitly defaults to `true` for backward compatibility with existing BRSE-first product behavior.
+- Create-room only materializes/publishes the virtual `brse_ai` participant when `brse_enabled = true`.
+- Room snapshot/store projection now suppresses virtual BRSE participants and recent interpreter transcripts when `brse_enabled = false`.
+- Added backend event type `room.brse_updated` and service-level toggle path scaffold.
+- Files changed so far:
+  - `BE/server/meeting_modes.py`
+  - `BE/server/models.py`
+  - `BE/server/events.py`
+  - `BE/server/gateway/room_store.py`
+  - `BE/server/gateway/room_service.py`
+  - `BE/server/gateway/api_rooms.py`
+  - `BE/server/gateway/ws_endpoint.py`
+  - `BE/server/gateway/event_consumer.py`
+
+### Batch 2: Runtime Gating + Live Toggle Path (Completed)
+
+- Interpreter daemon now gates every spawn/sync path on `snapshot.room.brse_enabled`.
+- `brse_enabled = false` prevents manager spawn on human `participant.joined` and terminates any existing room interpreter manager.
+- `room.brse_updated` live toggle event is implemented:
+  - ON -> OFF terminates `RoomInterpreterManager`, which tears down speaker clients, audio inputs, output routers, and disconnects the BRSE LiveKit participant through existing `manager.stop()` / `LiveKitRuntime.disconnect()` paths.
+  - OFF -> ON spawns a fresh manager from the current room snapshot and rematerializes the virtual BRSE participant event.
+- Gateway toggle path updates room state, broadcasts `room.brse_updated`, publishes consistent `participant.joined` / `participant.left` for `brse_ai`, and clears recent interpreter transcripts on disable.
+- Live toggle contract implemented in backend:
+  - REST: `POST /api/rooms/{room_id}/brse/enable`
+  - REST: `POST /api/rooms/{room_id}/brse/disable`
+  - WS: `room.brse.enable`
+  - WS: `room.brse.disable`
+- Permission rule for this branch: no host model is present in backend room state, so any authenticated active human room participant may toggle BRSE mode; virtual/disconnected/stale-session participants are rejected.
+
+### Batch 3: Contract Docs Sync (Completed)
+
+- Time: 2026-05-01T15:40:59+07:00
+- Updated backend contract/design docs to expose BRSE toggle semantics:
+  - `docs/backend/API_CONTRACT.md`
+  - `docs/backend/GATEWAY_DESIGN.md`
+  - `docs/backend/INTERPRETER_DESIGN.md`
+- Contract additions:
+  - create-room request/response includes `brse_enabled`
+  - get/join/WS snapshot room payload includes `brse_enabled`
+  - REST live toggle endpoints documented
+  - WS live toggle messages documented
+  - `room.brse_updated` event documented with minimum payload: `room_id`, `brse_enabled`, `timestamp`
+- Testing remains deferred; no tests or runtime smoke runs executed.
+
+### Final Sync: BRSE Mode Toggle Backend Support
+
+- Time: 2026-05-01T15:41:28+07:00
+- Final status: backend/runtime support implemented for create-time and live BRSE mode toggle.
+- BRSE toggle model selected:
+  - persisted room-level source of truth is `brse_enabled: bool`
+  - default is explicit `true` when create-room omits the field
+  - `brse_enabled=false` means normal human-only meeting mode
+- Live toggle implemented:
+  - REST `POST /api/rooms/{room_id}/brse/enable`
+  - REST `POST /api/rooms/{room_id}/brse/disable`
+  - WS `room.brse.enable`
+  - WS `room.brse.disable`
+  - broadcast event `room.brse_updated`
+- Permission assumption:
+  - no host role/model exists in current backend room state
+  - current live-toggle permission is active authenticated human participant only
+  - future host model should tighten this to host-only
+- ON -> OFF cleanup path:
+  - room state sets `brse_enabled=false`
+  - `virtual_participants` cleared from room meta/snapshot
+  - recent interpreter transcripts cleared from room state and suppressed in snapshots
+  - `room.brse_updated` broadcast
+  - `participant.left` broadcast for `brse_ai`
+  - interpreter daemon terminates the room manager, shutting down clients, audio inputs, output routers, and disconnecting the BRSE LiveKit participant
+- OFF -> ON spawn path:
+  - room state sets `brse_enabled=true`
+  - BRSE virtual participant is rebuilt in room meta/snapshot
+  - `room.brse_updated` broadcast
+  - `participant.joined` broadcast for `brse_ai`
+  - interpreter daemon spawns a fresh manager from current room snapshot
+- Files changed:
+  - `BE/server/meeting_modes.py`
+  - `BE/server/models.py`
+  - `BE/server/events.py`
+  - `BE/server/gateway/room_store.py`
+  - `BE/server/gateway/room_service.py`
+  - `BE/server/gateway/api_rooms.py`
+  - `BE/server/gateway/ws_endpoint.py`
+  - `BE/server/gateway/event_consumer.py`
+  - `BE/server/interpreter/daemon.py`
+  - `docs/backend/API_CONTRACT.md`
+  - `docs/backend/GATEWAY_DESIGN.md`
+  - `docs/backend/INTERPRETER_DESIGN.md`
+  - `docs/backend/IMPLEMENTATION_STATE.md`
+- Testing deferred per instruction:
+  - no tests written
+  - no tests run
+  - no runtime smoke run
+
 ## Turn Update: 2026-05-01 Chat End-to-End Debug Reopen (Kickoff)
 
 - Time: 2026-05-01T15:23:33+07:00

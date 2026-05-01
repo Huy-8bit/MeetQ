@@ -50,6 +50,18 @@ class RoomStore:
     async def create_room(self, room: RoomState):
         await self.client.set(self._meta_key(room.room_id), room.model_dump_json(), ex=self.ttl)
 
+    async def update_room(self, room_id: str, patch: Dict[str, Any]) -> Optional[RoomState]:
+        meta_json = await self.client.get(self._meta_key(room_id))
+        if not meta_json:
+            return None
+
+        room_data = json.loads(meta_json)
+        room_data.update(patch)
+        updated = RoomState(**room_data)
+        await self.client.set(self._meta_key(room_id), updated.model_dump_json(), ex=self.ttl)
+        await self._refresh_ttl(room_id)
+        return updated
+
     async def get_room_snapshot(self, room_id: str) -> Optional[RoomSnapshotResponse]:
         meta_json = await self.client.get(self._meta_key(room_id))
         if not meta_json:
@@ -65,15 +77,18 @@ class RoomStore:
                 continue
             participants.append(self._participant_state_to_snapshot(p_state))
 
-        participants.extend(
-            payload if isinstance(payload, ParticipantSnapshot) else ParticipantSnapshot.model_validate(payload)
-            for payload in room_state.virtual_participants
-        )
+        if room_state.brse_enabled:
+            participants.extend(
+                payload if isinstance(payload, ParticipantSnapshot) else ParticipantSnapshot.model_validate(payload)
+                for payload in room_state.virtual_participants
+            )
 
         participant_count = sum(1 for participant in participants if participant.status != "disconnected")
 
         trans_data = await self.client.lrange(self._trans_key(room_id), 0, -1)
         transcripts = [TranscriptEvent.model_validate_json(t) for t in trans_data]
+        if not room_state.brse_enabled:
+            transcripts = []
         chat_data = await self.client.lrange(self._chat_key(room_id), 0, -1)
         messages = [ChatMessage.model_validate_json(t) for t in chat_data]
 
@@ -82,6 +97,7 @@ class RoomStore:
             state=room_state.state,
             created_at=room_state.created_at,
             expires_at=room_state.expires_at,
+            brse_enabled=room_state.brse_enabled,
             participant_limit=room_state.participant_limit,
             supported_languages=room_state.supported_languages,
             meeting_languages=room_state.meeting_languages,
@@ -139,6 +155,10 @@ class RoomStore:
         pipe.rpush(key, transcript.model_dump_json())
         pipe.ltrim(key, -self.limit, -1)
         await pipe.execute()
+        await self._refresh_ttl(room_id)
+
+    async def clear_transcripts(self, room_id: str):
+        await self.client.delete(self._trans_key(room_id))
         await self._refresh_ttl(room_id)
 
     async def append_chat_message(self, room_id: str, message: ChatMessage):

@@ -12,10 +12,14 @@ import {
   createMeetingRoom,
   disconnectRoom,
   enumerateAudioDevices,
+  getLocalCameraTrack,
   getLocalMicrophoneTrack,
+  isCameraMuted,
   isMicrophoneMuted,
+  publishLocalCameraTrack,
   publishScreenShareTrack,
   publishLocalMedia,
+  setLocalCameraMuted,
   setLocalMicrophoneMuted,
   supportsAudioOutputSelection,
   switchLocalMicrophoneTrack,
@@ -52,6 +56,7 @@ import type {
   ParticipantJoinedEvent,
   ParticipantLeftEvent,
   ParticipantUpdatedEvent,
+  RoomBrseUpdatedEvent,
   RoomHostChangedEvent,
   RoomSnapshotEvent,
   ScreenShareStartedEvent,
@@ -115,7 +120,7 @@ export function useMeetingRoom({
         initialRoom?.recent_transcripts ??
         [],
       session?.participant.language ?? null,
-    ),
+    ).filter((entry) => resolveBrseEnabled(initialRoom?.room ?? session?.room ?? null) || entry.kind !== "relay"),
   );
   const [interpreterStatuses, setInterpreterStatuses] = useState<
     InterpreterStatusEntry[]
@@ -137,6 +142,9 @@ export function useMeetingRoom({
   const [isMicMuted, setIsMicMuted] = useState(false);
   const [isTogglingMic, setIsTogglingMic] = useState(false);
   const [micToggleError, setMicToggleError] = useState<string | null>(null);
+  const [isCameraOff, setIsCameraOff] = useState(true);
+  const [isTogglingCamera, setIsTogglingCamera] = useState(false);
+  const [cameraToggleError, setCameraToggleError] = useState<string | null>(null);
   const [audioInputDevices, setAudioInputDevices] = useState<AudioDeviceOption[]>([]);
   const [selectedAudioInputDeviceId, setSelectedAudioInputDeviceId] = useState("");
   const [isSwitchingAudioInput, setIsSwitchingAudioInput] = useState(false);
@@ -147,6 +155,8 @@ export function useMeetingRoom({
   const [audioOutputSupported, setAudioOutputSupported] = useState(false);
   const [audioOutputError, setAudioOutputError] = useState<string | null>(null);
   const [isLeaving, setIsLeaving] = useState(false);
+  const [isTogglingBrse, setIsTogglingBrse] = useState(false);
+  const [brseToggleError, setBrseToggleError] = useState<string | null>(null);
 
   // ─── Chat state ──────────────────────────────────────────────────────────────
   const [chatMessages, setChatMessages] = useState<RoomChatMessage[]>(() =>
@@ -188,6 +198,7 @@ export function useMeetingRoom({
   const audioRoutingRef = useRef(session?.room.audio_routing ?? roomMeta?.audio_routing);
   const roomMetaRef = useRef(roomMeta);
   const localAudioTrackRef = useRef<LocalTrack | null>(null);
+  const localVideoTrackRef = useRef<LocalVideoTrack | null>(null);
   const localScreenTrackRef = useRef<LocalVideoTrack | null>(null);
   const localScreenTrackCleanupRef = useRef<(() => void) | null>(null);
   const stoppingScreenShareRef = useRef(false);
@@ -197,6 +208,7 @@ export function useMeetingRoom({
   const isSwitchingAudioInputRef = useRef(isSwitchingAudioInput);
   const isMutedByHostRef = useRef(false);
   const pendingChatEventIdsRef = useRef<Set<string>>(new Set());
+  const brseEnabledRef = useRef(resolveBrseEnabled(initialRoom?.room ?? session?.room ?? null));
 
   useEffect(() => {
     sessionInvalidatedRef.current = onSessionInvalidated;
@@ -216,7 +228,8 @@ export function useMeetingRoom({
 
   useEffect(() => {
     roomMetaRef.current = roomMeta;
-  }, [roomMeta]);
+    brseEnabledRef.current = resolveBrseEnabled(roomMeta ?? session?.room ?? null);
+  }, [roomMeta, session?.room]);
 
   useEffect(() => {
     isScreenSharingRef.current = isScreenSharing;
@@ -250,7 +263,9 @@ export function useMeetingRoom({
     setIsSendingChat(false);
     startTransition(() => {
       setTranscripts(
-        hydrateTranscriptEntries(initialRoom.recent_transcripts, null),
+        hydrateTranscriptEntries(initialRoom.recent_transcripts, null).filter(
+          (entry) => initialRoom.room.brse_enabled !== false || entry.kind !== "relay",
+        ),
       );
     });
   }, [initialRoom, session]);
@@ -264,6 +279,7 @@ export function useMeetingRoom({
       hasSentLeaveRef.current = false;
       manualShutdownRef.current = false;
       localAudioTrackRef.current = null;
+      localVideoTrackRef.current = null;
       setSelfState(null);
       setGatewayState("idle");
       setLivekitState("idle");
@@ -281,6 +297,9 @@ export function useMeetingRoom({
       setIsMicMuted(false);
       setIsTogglingMic(false);
       setMicToggleError(null);
+      setIsCameraOff(true);
+      setIsTogglingCamera(false);
+      setCameraToggleError(null);
       setAudioInputDevices([]);
       setSelectedAudioInputDeviceId("");
       setIsSwitchingAudioInput(false);
@@ -291,6 +310,8 @@ export function useMeetingRoom({
       setAudioOutputSupported(false);
       setAudioOutputError(null);
       setIsLeaving(false);
+      setIsTogglingBrse(false);
+      setBrseToggleError(null);
       setChatMessages([]);
       setChatError(null);
       setIsSendingChat(false);
@@ -307,8 +328,11 @@ export function useMeetingRoom({
     hasLeftRef.current = false;
     hasSentLeaveRef.current = false;
     manualShutdownRef.current = false;
-    setConnectionError(null);
-    setMediaError(null);
+      setConnectionError(null);
+      setMediaError(null);
+      setCameraToggleError(null);
+      setBrseToggleError(null);
+    setIsTogglingBrse(false);
     setChatError(null);
     setIsSendingChat(false);
     pendingChatEventIdsRef.current.clear();
@@ -320,6 +344,7 @@ export function useMeetingRoom({
       state: session.room.state,
       created_at: current?.created_at || session.room.created_at,
       expires_at: current?.expires_at || session.room.expires_at,
+      brse_enabled: session.room.brse_enabled ?? current?.brse_enabled,
       participant_limit: session.room.participant_limit,
       supported_languages: session.room.supported_languages,
       meeting_languages:
@@ -344,7 +369,7 @@ export function useMeetingRoom({
         hydrateTranscriptEntries(
           session.snapshot.recent_transcripts,
           session.participant.language,
-        ),
+        ).filter((entry) => session.room.brse_enabled !== false || entry.kind !== "relay"),
       );
     });
 
@@ -373,8 +398,11 @@ export function useMeetingRoom({
       setBrseAudioFeeds(media.brseAudio);
       setScreenShares(media.screenShares);
       const currentMicTrack = getLocalMicrophoneTrack(livekitRoom);
+      const currentCameraTrack = getLocalCameraTrack(livekitRoom);
       localAudioTrackRef.current = currentMicTrack;
+      localVideoTrackRef.current = currentCameraTrack;
       setIsMicMuted(isMicrophoneMuted(currentMicTrack));
+      setIsCameraOff(isCameraMuted(currentCameraTrack));
     };
     refreshMediaRef.current = refreshMedia;
 
@@ -437,7 +465,9 @@ export function useMeetingRoom({
         try {
           await publishLocalMedia(livekitRoom);
           localAudioTrackRef.current = getLocalMicrophoneTrack(livekitRoom);
+          localVideoTrackRef.current = getLocalCameraTrack(livekitRoom);
           setIsMicMuted(isMicrophoneMuted(localAudioTrackRef.current));
+          setIsCameraOff(isCameraMuted(localVideoTrackRef.current));
           await refreshAudioDevices();
         } catch (error) {
           setMediaError(
@@ -477,6 +507,7 @@ export function useMeetingRoom({
       releaseGatewaySocket(session.sessionKey);
       gatewayRef.current = null;
       localAudioTrackRef.current = null;
+      localVideoTrackRef.current = null;
       clearLocalScreenTrack(livekitRoomRef.current);
       disconnectRoom(livekitRoomRef.current);
       livekitRoomRef.current = null;
@@ -495,6 +526,7 @@ export function useMeetingRoom({
     participantsById,
     selfState?.participant_id,
     selfState?.language,
+    roomMeta?.brse_enabled,
     roomMeta?.meeting_mode,
     roomMeta?.interpreter_mode,
     roomMeta?.audio_routing?.model,
@@ -525,6 +557,7 @@ export function useMeetingRoom({
       gatewayRef.current = null;
       gateway?.disconnectForUnload("Page lifecycle cleanup");
       localAudioTrackRef.current = null;
+      localVideoTrackRef.current = null;
       const lkRoom = livekitRoomRef.current;
       livekitRoomRef.current = null;
       clearLocalScreenTrack(lkRoom);
@@ -607,6 +640,7 @@ export function useMeetingRoom({
       gatewayRef.current = null;
       gateway?.disconnect();
       localAudioTrackRef.current = null;
+      localVideoTrackRef.current = null;
       const lkRoom = livekitRoomRef.current;
       livekitRoomRef.current = null;
       clearLocalScreenTrack(lkRoom);
@@ -755,6 +789,42 @@ export function useMeetingRoom({
     }
   }
 
+  async function toggleCameraEnabled(): Promise<void> {
+    if (isTogglingCamera) {
+      return;
+    }
+
+    const livekitRoom = livekitRoomRef.current;
+    if (!livekitRoom) {
+      setCameraToggleError("LiveKit room is not ready for camera control.");
+      return;
+    }
+
+    setIsTogglingCamera(true);
+    setCameraToggleError(null);
+    try {
+      let localTrack = localVideoTrackRef.current ?? getLocalCameraTrack(livekitRoom);
+      if (!localTrack) {
+        localTrack = await publishLocalCameraTrack(livekitRoom);
+        localVideoTrackRef.current = localTrack;
+        setIsCameraOff(false);
+        refreshMediaRef.current?.();
+        return;
+      }
+
+      const nextMuted = !isCameraMuted(localTrack);
+      await setLocalCameraMuted(localTrack, nextMuted);
+      setIsCameraOff(nextMuted);
+      refreshMediaRef.current?.();
+    } catch (error) {
+      setCameraToggleError(
+        error instanceof Error ? error.message : "Failed to update camera state.",
+      );
+    } finally {
+      setIsTogglingCamera(false);
+    }
+  }
+
   async function switchAudioInput(deviceId: string): Promise<void> {
     if (isSwitchingAudioInput || !deviceId) {
       return;
@@ -815,6 +885,46 @@ export function useMeetingRoom({
       );
     } finally {
       setIsSwitchingAudioOutput(false);
+    }
+  }
+
+  async function toggleBrseMode(nextEnabled = !brseEnabledRef.current): Promise<void> {
+    if (!session || isTogglingBrse || isLeaving) {
+      return;
+    }
+
+    if (nextEnabled === brseEnabledRef.current) {
+      return;
+    }
+
+    setIsTogglingBrse(true);
+    setBrseToggleError(null);
+
+    try {
+      const nextRoom = nextEnabled
+        ? await api.enableBrse(roomId, session.roomToken)
+        : await api.disableBrse(roomId, session.roomToken);
+
+      setRoomMeta((current) => ({
+        ...(current ?? {}),
+        ...nextRoom,
+        room_id: nextRoom.room_id || current?.room_id || roomId,
+        created_at: nextRoom.created_at || current?.created_at || session.room.created_at,
+        expires_at: nextRoom.expires_at || current?.expires_at || session.room.expires_at,
+        participant_count:
+          current?.participant_count ?? countHumanParticipants(session.snapshot.participants),
+      }));
+      brseEnabledRef.current = nextRoom.brse_enabled ?? nextEnabled;
+
+      if (!brseEnabledRef.current) {
+        clearBrseRuntimeSurfaces();
+      }
+    } catch (error) {
+      setBrseToggleError(
+        error instanceof Error ? error.message : "Failed to update BRSE mode.",
+      );
+    } finally {
+      setIsTogglingBrse(false);
     }
   }
 
@@ -954,6 +1064,9 @@ export function useMeetingRoom({
       case "screen_share.stopped":
         applyScreenShareStopped(event);
         return;
+      case "room.brse_updated":
+        applyBrseUpdated(event);
+        return;
       case "transcript.partial":
       case "transcript.final":
         applyTranscriptEvent(event);
@@ -991,6 +1104,7 @@ export function useMeetingRoom({
       state: event.payload.room.state,
       created_at: current?.created_at || new Date().toISOString(),
       expires_at: current?.expires_at || new Date().toISOString(),
+      brse_enabled: event.payload.room.brse_enabled ?? current?.brse_enabled,
       participant_limit: event.payload.room.participant_limit,
       supported_languages: event.payload.room.supported_languages,
       meeting_languages: resolveMeetingLanguages(
@@ -1005,6 +1119,10 @@ export function useMeetingRoom({
       participant_count: countHumanParticipants(event.payload.participants),
     }));
 
+    if (event.payload.room.brse_enabled === false) {
+      clearBrseRuntimeSurfaces();
+    }
+
     startTransition(() => {
       setTranscripts((current) =>
         mergeTranscriptCollections(
@@ -1012,7 +1130,7 @@ export function useMeetingRoom({
           hydrateTranscriptEntries(
             event.payload.recent_transcripts,
             event.payload.self.language,
-          ),
+          ).filter((entry) => event.payload.room.brse_enabled !== false || entry.kind !== "relay"),
         ),
       );
     });
@@ -1203,9 +1321,36 @@ export function useMeetingRoom({
     }
   }
 
+  function applyBrseUpdated(event: RoomBrseUpdatedEvent): void {
+    const nextEnabled = event.payload.brse_enabled;
+    setRoomMeta((current) =>
+      current
+        ? {
+            ...current,
+            brse_enabled: nextEnabled,
+            meeting_mode: nextEnabled ? "brse_relay" : "direct_translation",
+            interpreter_mode: nextEnabled
+              ? "brse_participant"
+              : current.interpreter_mode,
+          }
+        : current,
+    );
+    brseEnabledRef.current = nextEnabled;
+    setIsTogglingBrse(false);
+    setBrseToggleError(null);
+
+    if (!nextEnabled) {
+      clearBrseRuntimeSurfaces();
+    }
+  }
+
   function applyTranscriptEvent(
     event: TranscriptPartialEvent | TranscriptFinalEvent,
   ): void {
+    if (!brseEnabledRef.current && event.payload.kind === "relay") {
+      return;
+    }
+
     startTransition(() => {
       setTranscripts((current) =>
         upsertTranscriptEntry(current, event.payload, event.sent_at),
@@ -1214,6 +1359,10 @@ export function useMeetingRoom({
   }
 
   function applyInterpreterStatus(event: ServerEvent & { type: "interpreter.status" }): void {
+    if (!brseEnabledRef.current) {
+      return;
+    }
+
     setInterpreterStatuses((current) =>
       upsertInterpreterStatus(
         current,
@@ -1432,7 +1581,11 @@ export function useMeetingRoom({
   }
 
   const connectionState = deriveConnectionState(gatewayState, livekitState);
+  const brseEnabled = resolveBrseEnabled(roomMeta ?? session?.room ?? null);
   const activeParticipants = Object.values(participantsById)
+    .filter((participant) =>
+      brseEnabled || (participant.kind !== "virtual_brse" && !participant.is_virtual),
+    )
     .map((p) => ({
       ...p,
       is_host: p.participant_id === hostParticipantId || p.is_host,
@@ -1448,9 +1601,18 @@ export function useMeetingRoom({
     roomMeta?.supported_languages,
   );
   const isCurrentUserHost = !!(selfState && hostParticipantId && selfState.participant_id === hostParticipantId);
+  const visibleVideos = brseEnabled
+    ? videos
+    : videos.filter((feed) => feed.kind !== "virtual_brse" && !feed.isVirtual);
+  const visibleTranscripts = brseEnabled
+    ? transcripts
+    : transcripts.filter((entry) => entry.kind !== "relay");
+  const visibleInterpreterStatuses = brseEnabled ? relayStatuses : [];
+  const visibleBrseAudioFeeds = brseEnabled ? brseAudioFeeds : [];
 
   return {
     roomMeta,
+    brseEnabled,
     meetingMode:
       roomMeta?.meeting_mode ?? session?.room.meeting_mode ?? null,
     interpreterMode:
@@ -1458,14 +1620,14 @@ export function useMeetingRoom({
     meetingLanguages,
     selfState,
     participants: activeParticipants,
-    transcripts,
-    interpreterStatuses: relayStatuses,
+    transcripts: visibleTranscripts,
+    interpreterStatuses: visibleInterpreterStatuses,
     gatewayState,
     livekitState,
     connectionState,
-    videos,
+    videos: visibleVideos,
     humanAudioFeeds,
-    brseAudioFeeds,
+    brseAudioFeeds: visibleBrseAudioFeeds,
     screenShares,
     connectionError,
     mediaError,
@@ -1476,6 +1638,9 @@ export function useMeetingRoom({
     isMicMuted,
     isTogglingMic,
     micToggleError,
+    isCameraOff,
+    isTogglingCamera,
+    cameraToggleError,
     audioInputDevices,
     selectedAudioInputDeviceId,
     isSwitchingAudioInput,
@@ -1486,8 +1651,13 @@ export function useMeetingRoom({
     audioOutputSupported,
     audioOutputError,
     isLeaving,
+    isTogglingBrse,
+    brseToggleError,
+    canToggleBrse: !!session && !!selfState && !isLeaving && !isTogglingBrse,
     changeLanguage,
+    toggleBrseMode,
     toggleMicrophoneMuted,
+    toggleCameraEnabled,
     switchAudioInput,
     switchAudioOutput,
     reportAudioOutputApplyError,
@@ -1578,6 +1748,29 @@ export function useMeetingRoom({
     if (!backendSaysSharing) {
       clearLocalScreenTrack(livekitRoomRef.current);
     }
+  }
+
+  function clearBrseRuntimeSurfaces(): void {
+    setInterpreterStatuses([]);
+    setBrseAudioFeeds([]);
+    setVideos((current) =>
+      current.filter((feed) => feed.kind !== "virtual_brse" && !feed.isVirtual),
+    );
+    setParticipantsById((current) => {
+      let changed = false;
+      const next: Record<string, ParticipantSnapshot> = {};
+      for (const [participantId, participant] of Object.entries(current)) {
+        if (participant.kind === "virtual_brse" || participant.is_virtual) {
+          changed = true;
+          continue;
+        }
+        next[participantId] = participant;
+      }
+      return changed ? next : current;
+    });
+    setTranscripts((current) =>
+      current.filter((entry) => entry.kind !== "relay"),
+    );
   }
 }
 
@@ -1733,6 +1926,16 @@ function compareParticipants(
 
 function countHumanParticipants(participants: ParticipantSnapshot[]): number {
   return participants.filter((participant) => participant.kind !== "virtual_brse" && !participant.is_virtual).length;
+}
+
+function resolveBrseEnabled(
+  room: Pick<RoomSnapshotResponse["room"], "brse_enabled" | "meeting_mode"> | null,
+): boolean {
+  if (typeof room?.brse_enabled === "boolean") {
+    return room.brse_enabled;
+  }
+
+  return room?.meeting_mode === "brse_relay";
 }
 
 function mapParticipants(

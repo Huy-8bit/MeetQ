@@ -74,9 +74,58 @@ export function getLocalMicrophoneTrack(room: Room): LocalTrack | null {
   return null;
 }
 
+export function getLocalCameraTrack(room: Room): LocalVideoTrack | null {
+  for (const publication of room.localParticipant.trackPublications.values()) {
+    if (publication.source === Track.Source.Camera && publication.track) {
+      return publication.track as LocalVideoTrack;
+    }
+  }
+
+  return null;
+}
+
+export async function publishLocalCameraTrack(room: Room): Promise<LocalVideoTrack> {
+  assertMediaDevicesSupported();
+
+  const existingTrack = getLocalCameraTrack(room);
+  if (existingTrack) {
+    return existingTrack;
+  }
+
+  const tracks = await createLocalTracks({
+    audio: false,
+    video: true,
+  });
+  const videoTrack = tracks.find((track) => track.kind === Track.Kind.Video) as
+    | LocalVideoTrack
+    | undefined;
+  if (!videoTrack) {
+    tracks.forEach((track) => track.stop());
+    throw new Error("Failed to create camera track.");
+  }
+
+  try {
+    await room.localParticipant.publishTrack(videoTrack);
+  } catch (error) {
+    videoTrack.stop();
+    throw error;
+  }
+
+  return videoTrack;
+}
+
 export function isMicrophoneMuted(track: LocalTrack | null): boolean {
   if (!track) {
     return false;
+  }
+
+  const muted = (track as { isMuted?: boolean }).isMuted;
+  return muted === true;
+}
+
+export function isCameraMuted(track: LocalVideoTrack | null): boolean {
+  if (!track) {
+    return true;
   }
 
   const muted = (track as { isMuted?: boolean }).isMuted;
@@ -89,6 +138,22 @@ export async function setLocalMicrophoneMuted(
 ): Promise<void> {
   if (!track) {
     throw new Error("Local microphone track is not ready.");
+  }
+
+  if (muted) {
+    await track.mute();
+    return;
+  }
+
+  await track.unmute();
+}
+
+export async function setLocalCameraMuted(
+  track: LocalVideoTrack | null,
+  muted: boolean,
+): Promise<void> {
+  if (!track) {
+    throw new Error("Local camera track is not ready.");
   }
 
   if (muted) {
@@ -357,6 +422,7 @@ export function buildMediaSnapshot(args: {
     isVirtual: false,
     livekitIdentity: selfSnapshot?.livekit_identity ?? selfParticipantId,
     metadata: selfSnapshot?.metadata,
+    isCameraOff: !localVideoTrack || isCameraMuted(localVideoTrack),
     track: localVideoTrack,
   });
   renderedParticipantIds.add(selfParticipantId);
@@ -386,6 +452,7 @@ export function buildMediaSnapshot(args: {
       isVirtual: snapshot.is_virtual === true || kind === "virtual_brse",
       livekitIdentity: snapshot.livekit_identity ?? remoteIdentity,
       metadata: snapshot.metadata,
+      isCameraOff: !videoTrack || isTrackMuted(videoTrack),
       track: videoTrack,
     });
     renderedParticipantIds.add(snapshot.participant_id);
@@ -402,6 +469,7 @@ export function buildMediaSnapshot(args: {
     }
     const participantId = snapshot?.participant_id || participant.identity;
     const kind = resolveParticipantKind(snapshot, participant.identity, audioRouting);
+    const videoTrack = getRemoteVideoTrack(participant);
     const displayName = snapshot?.display_name
       || participant.name
       || (kind === "virtual_brse" ? "BRSE AI" : participantId);
@@ -418,7 +486,8 @@ export function buildMediaSnapshot(args: {
       isVirtual: snapshot?.is_virtual === true || kind === "virtual_brse",
       livekitIdentity: snapshot?.livekit_identity ?? participant.identity,
       metadata: snapshot?.metadata,
-      track: getRemoteVideoTrack(participant),
+      isCameraOff: !videoTrack || isTrackMuted(videoTrack),
+      track: videoTrack,
     });
   });
 
@@ -429,6 +498,14 @@ export function buildMediaSnapshot(args: {
     screenShares,
     localVideoTrack,
   };
+}
+
+function isTrackMuted(track: LocalTrack | RemoteVideoTrack | null): boolean {
+  if (!track) {
+    return true;
+  }
+
+  return (track as { isMuted?: boolean }).isMuted === true;
 }
 
 export function mapLiveKitConnectionState(

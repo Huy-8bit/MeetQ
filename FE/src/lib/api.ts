@@ -10,6 +10,7 @@ import type {
   JoinRoomRequest,
   JoinRoomResponse,
   MicTestSessionResponse,
+  RoomSummary,
   RoomSnapshotResponse,
   TranslationTestSessionResponse,
 } from "../types/api";
@@ -155,6 +156,22 @@ export const api = {
 
   stopScreenShare(roomId: string, token: string) {
     return requestJson<ScreenShareStateResponse>(`/api/rooms/${roomId}/screen-share/stop`, {
+      method: "POST",
+      headers: buildAuthHeaders(token),
+      body: JSON.stringify({}),
+    });
+  },
+
+  enableBrse(roomId: string, token: string) {
+    return requestJson<RoomSummary>(`/api/rooms/${roomId}/brse/enable`, {
+      method: "POST",
+      headers: buildAuthHeaders(token),
+      body: JSON.stringify({}),
+    });
+  },
+
+  disableBrse(roomId: string, token: string) {
+    return requestJson<RoomSummary>(`/api/rooms/${roomId}/brse/disable`, {
       method: "POST",
       headers: buildAuthHeaders(token),
       body: JSON.stringify({}),

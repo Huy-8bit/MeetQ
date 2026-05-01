@@ -156,6 +156,14 @@ export class GatewaySocket {
     this.sendEnvelope("screen_share.stop", {});
   }
 
+  enableBrse(): void {
+    this.sendEnvelope("room.brse.enable", {});
+  }
+
+  disableBrse(): void {
+    this.sendEnvelope("room.brse.disable", {});
+  }
+
   sendChatMessage(text: string): string {
     return this.sendEnvelope("chat.send", { text });
   }

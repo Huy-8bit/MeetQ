@@ -84,8 +84,30 @@ class RoomInterpreterManager:
 
     async def stop(self) -> None:
         self._closed = True
-        for speaker_id in list(self.active_streams.keys()):
+        speaker_ids = set().union(
+            self.active_streams,
+            self.active_inputs,
+            self.routers,
+            self.clients,
+            self.tasks,
+            self.speaker_sources,
+            self.speaker_targets,
+            self.speaker_audiences,
+            self.transcript_state,
+        )
+        for speaker_id in list(speaker_ids):
             await self._teardown_speaker(speaker_id, keep_participant=True, drop_stream=True)
+        self.participants.clear()
+        self.active_streams.clear()
+        self.active_inputs.clear()
+        self.routers.clear()
+        self.clients.clear()
+        self.tasks.clear()
+        self.speaker_sources.clear()
+        self.speaker_targets.clear()
+        self.speaker_audiences.clear()
+        self.transcript_state.clear()
+        self.route_failures.clear()
         await self.runtime.disconnect()
 
     def bootstrap_participants(

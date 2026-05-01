@@ -92,134 +92,136 @@ export function HomePage() {
   }
 
   return (
-    <main className="home-page">
-      <section className="hero-card">
-        <div className="hero-copy">
-          <span className="eyebrow">brseAI Meeting Platform</span>
-          <h1>Realtime multilingual meetings without a separate interpreter.</h1>
-          <p>
-            Create a room, lock the room pair up front, invite participants by
-            link, and let each person hear translated audio routed to their own
-            language.
-          </p>
-
-          <div className="hero-pills">
-            <span>Video + audio</span>
-            <span>7 meeting languages</span>
-            <span>Transcript streaming</span>
-          </div>
-        </div>
-
-        <div className="hero-actions panel">
-          <h2>Start a room</h2>
-          <p>Create an instant room, choose the meeting pair here, or jump into an existing one.</p>
-
-          <div className="field-section">
-            <div className="field-section-header">
-              <strong>Meeting languages</strong>
-              <p>Choose exactly two different languages for this room before anyone joins.</p>
+    <main className="home-page product-home">
+      <section className="landing-shell">
+        <header className="landing-header">
+          <div className="landing-brand">
+            <span className="landing-brand-mark">brseAI</span>
+            <div>
+              <strong>Multilingual meeting rooms</strong>
+              <p>Video, relay, transcript, and chat in one live room.</p>
             </div>
-
-            <div className="field-row-two">
-              <label className="field">
-                <span>Meeting language A</span>
-                <select
-                  value={firstMeetingLanguage}
-                  onChange={(event) =>
-                    handleFirstMeetingLanguageChange(event.target.value as MeetingLanguage | "")
-                  }
-                >
-                  <option value="">Select a language</option>
-                  {SUPPORTED_MEETING_LANGUAGES.map((language) => (
-                    <option key={`first-${language}`} value={language}>
-                      {getLanguageLabel(language)}
-                    </option>
-                  ))}
-                </select>
-              </label>
-
-              <label className="field">
-                <span>Meeting language B</span>
-                <select
-                  value={secondMeetingLanguage}
-                  onChange={(event) =>
-                    handleSecondMeetingLanguageChange(event.target.value as MeetingLanguage | "")
-                  }
-                >
-                  <option value="">Select a language</option>
-                  {SUPPORTED_MEETING_LANGUAGES.map((language) => (
-                    <option key={`second-${language}`} value={language}>
-                      {getLanguageLabel(language)}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            </div>
-
-            <p className="field-hint">
-              Meeting bridge: {selectedMeetingLanguages.length === 2
-                ? formatMeetingLanguageBridge(selectedMeetingLanguages)
-                : "Select two languages"}
-            </p>
-
-            {createValidationError ? <div className="inline-error">{createValidationError}</div> : null}
-            {createError ? <div className="inline-error">{createError}</div> : null}
           </div>
-
-          <button
-            className="button-primary"
-            type="button"
-            onClick={() => {
-              void handleCreateRoom();
-            }}
-            disabled={creating}
-          >
-            {creating ? "Creating..." : "Create Room"}
-          </button>
-
-          <div className="divider">
-            <span>or</span>
-          </div>
-
-          <label className="field">
-            <span>Join existing room</span>
-            <input
-              value={roomInput}
-              onChange={(event) => {
-                setRoomInput(event.target.value);
-                setJoinLookupError(null);
-              }}
-              placeholder="rm_... or room link"
-            />
-          </label>
-
-          <button className="button-secondary" type="button" onClick={handleJoinExisting}>
-            Open Room
-          </button>
-
-          {joinLookupError ? <div className="inline-error">{joinLookupError}</div> : null}
-
-          <div className="divider">
-            <span>dev</span>
-          </div>
-
-          <Link
-            to="/test"
-            className="button-secondary"
-            style={{
-              textAlign: "center",
-              textDecoration: "none",
-              display: "block",
-              padding: "14px 18px",
-              borderRadius: 16,
-              fontWeight: 700,
-            }}
-          >
+          <Link to="/test" className="utility-link">
             Mic &amp; Translation Test
           </Link>
+        </header>
+
+        <div className="landing-content">
+          <section className="landing-intro">
+            <span className="product-kicker">Meeting-first relay</span>
+            <h1>Start a multilingual room without setting up an interpreter booth.</h1>
+            <p>
+              Choose the meeting language pair, share the room, and keep video,
+              screen share, BRSE relay, transcript, and chat in one focused workspace.
+            </p>
+            <div className="landing-proof-row">
+              <span>7 languages</span>
+              <span>BRSE relay mode</span>
+              <span>Live transcript</span>
+            </div>
+          </section>
+
+          <section className="room-launch-panel">
+            <div className="launch-section launch-section-primary">
+              <div className="launch-section-header">
+                <span>Create room</span>
+                <h2>Set the meeting pair</h2>
+                <p>Both participants choose from this pair when they join.</p>
+              </div>
+
+              <div className="language-pair-picker">
+                <LanguageSelectCard
+                  label="Language A"
+                  value={firstMeetingLanguage}
+                  onChange={handleFirstMeetingLanguageChange}
+                />
+                <div className="language-bridge-glyph" aria-hidden="true">to</div>
+                <LanguageSelectCard
+                  label="Language B"
+                  value={secondMeetingLanguage}
+                  onChange={handleSecondMeetingLanguageChange}
+                />
+              </div>
+
+              <div className="meeting-bridge-preview">
+                <span>Meeting bridge</span>
+                <strong>
+                  {selectedMeetingLanguages.length === 2
+                    ? formatMeetingLanguageBridge(selectedMeetingLanguages)
+                    : "Select two languages"}
+                </strong>
+              </div>
+
+              {createValidationError ? <div className="inline-error">{createValidationError}</div> : null}
+              {createError ? <div className="inline-error">{createError}</div> : null}
+
+              <button
+                className="create-room-cta"
+                type="button"
+                onClick={() => {
+                  void handleCreateRoom();
+                }}
+                disabled={creating}
+              >
+                {creating ? "Creating room..." : "Create Room"}
+              </button>
+            </div>
+
+            <div className="launch-section launch-section-secondary">
+              <div className="launch-section-header">
+                <span>Join existing</span>
+                <h2>Open a room</h2>
+              </div>
+
+              <div className="join-existing-row">
+                <input
+                  value={roomInput}
+                  onChange={(event) => {
+                    setRoomInput(event.target.value);
+                    setJoinLookupError(null);
+                  }}
+                  placeholder="rm_... or room link"
+                />
+                <button type="button" onClick={handleJoinExisting}>
+                  Open
+                </button>
+              </div>
+
+              {joinLookupError ? <div className="inline-error">{joinLookupError}</div> : null}
+            </div>
+          </section>
         </div>
       </section>
     </main>
+  );
+}
+
+function LanguageSelectCard({
+  label,
+  value,
+  onChange,
+}: {
+  label: string;
+  value: MeetingLanguage | "";
+  onChange: (language: MeetingLanguage | "") => void;
+}) {
+  return (
+    <label className={value ? "language-select-card has-value" : "language-select-card"}>
+      <span>{label}</span>
+      <strong>{value ? getLanguageLabel(value) : "Choose language"}</strong>
+      <select
+        value={value}
+        onChange={(event) => onChange(event.target.value as MeetingLanguage | "")}
+      >
+        <option value="">Select a language</option>
+        {SUPPORTED_MEETING_LANGUAGES.map((language) => (
+          <option key={`${label}-${language}`} value={language}>
+            {getLanguageLabel(language)}
+          </option>
+        ))}
+      </select>
+    </label>
   );
 }
 

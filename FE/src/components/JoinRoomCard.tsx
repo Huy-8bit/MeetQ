@@ -33,6 +33,10 @@ export function JoinRoomCard({
   }, [language, meetingLanguages]);
 
   const languagePairUnavailable = meetingLanguages.length !== 2;
+  const humanParticipants = participants.filter(
+    (participant) => participant.kind !== "virtual_brse" && !participant.is_virtual,
+  );
+  const brseParticipantCount = participants.length - humanParticipants.length;
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -69,120 +73,125 @@ export function JoinRoomCard({
   }
 
   return (
-    <section className="join-card panel">
-      <div className="panel-header">
-        <div>
-          <h2>Join Room</h2>
-          <p>Enter a display name and choose your language from the room meeting pair.</p>
+    <section className="join-room-shell">
+      <div className="join-room-hero">
+        <span className="product-kicker">Join meeting</span>
+        <h1>{room.room_id}</h1>
+        <p>{formatMeetingLanguagePair(meetingLanguages)}</p>
+
+        <div className="join-room-meta-row">
+          <div>
+            <span>Participants</span>
+            <strong>{room.participant_count}/{room.participant_limit}</strong>
+          </div>
+          <div>
+            <span>Room state</span>
+            <strong>{room.state}</strong>
+          </div>
+          <div>
+            <span>Mode</span>
+            <strong>{room.brse_enabled === false ? "Normal" : "BRSE relay"}</strong>
+          </div>
         </div>
       </div>
 
-      <div className="room-meta-grid">
-        <div className="room-meta-item">
-          <span>Room</span>
-          <strong>{room.room_id}</strong>
+      <div className="join-room-card">
+        <div className="join-form-header">
+          <span>Your setup</span>
+          <h2>Enter the room</h2>
+          <p>Name yourself and choose the language you will speak.</p>
         </div>
-        <div className="room-meta-item">
-          <span>Participants</span>
-          <strong>
-            {room.participant_count}/{room.participant_limit}
-          </strong>
-        </div>
-        <div className="room-meta-item">
-          <span>State</span>
-          <strong>{room.state}</strong>
-        </div>
-      </div>
 
-      <form className="join-form" onSubmit={(event) => void handleSubmit(event)}>
-        <label className="field">
-          <span>Name</span>
-          <input
-            value={displayName}
-            onChange={(event) => {
-              setDisplayName(event.target.value);
-              setValidationError(null);
-            }}
-            maxLength={40}
-            placeholder="Your display name"
-            required
-          />
-        </label>
+        <form className="join-form redesigned-join-form" onSubmit={(event) => void handleSubmit(event)}>
+          <label className="join-input-field">
+            <span>Your name</span>
+            <input
+              value={displayName}
+              onChange={(event) => {
+                setDisplayName(event.target.value);
+                setValidationError(null);
+              }}
+              maxLength={40}
+              placeholder="Display name"
+              required
+            />
+          </label>
 
-        <label className="field">
-          <span>Your language</span>
-          <select
-            value={language}
-            onChange={(event) => {
-              setLanguage(event.target.value as MeetingLanguage | "");
-              setValidationError(null);
-            }}
-            disabled={languagePairUnavailable}
+          <label className="join-input-field">
+            <span>Your language</span>
+            <select
+              value={language}
+              onChange={(event) => {
+                setLanguage(event.target.value as MeetingLanguage | "");
+                setValidationError(null);
+              }}
+              disabled={languagePairUnavailable}
+            >
+              {languagePairUnavailable ? (
+                <option value={language}>Meeting language pair unavailable</option>
+              ) : (
+                <>
+                  <option value="">Choose your language</option>
+                  {meetingLanguages.map((item) => (
+                    <option key={item} value={item}>
+                      {getLanguageLabel(item)}
+                    </option>
+                  ))}
+                </>
+              )}
+            </select>
+          </label>
+
+          <div className="join-language-summary">
+            <span>Meeting languages</span>
+            <strong>{formatMeetingLanguagePair(meetingLanguages)}</strong>
+          </div>
+
+          <button
+            className="join-room-cta"
+            type="submit"
+            disabled={isSubmitting || languagePairUnavailable}
           >
-            {languagePairUnavailable ? (
-              <option value={language}>Meeting language pair unavailable</option>
+            {isSubmitting ? "Joining..." : "Join Meeting"}
+          </button>
+        </form>
+
+        {languagePairUnavailable ? (
+          <div className="inline-error">
+            Room meeting language pair is unavailable. Reload room snapshot or ask the host to recreate the room.
+          </div>
+        ) : null}
+
+        {validationError ? <div className="inline-error">{validationError}</div> : null}
+        {error ? <div className="inline-error">{error}</div> : null}
+
+        <div className="join-participant-preview">
+          <div className="join-participant-preview-header">
+            <span>Already inside</span>
+            <strong>{humanParticipants.length}</strong>
+          </div>
+          <div className="participant-preview-list">
+            {humanParticipants.length === 0 ? (
+              <p>No human participants connected yet.</p>
             ) : (
-              <>
-                <option value="">Choose your language</option>
-                {meetingLanguages.map((item) => (
-                  <option key={item} value={item}>
-                    {getLanguageLabel(item)}
-                  </option>
-                ))}
-              </>
+              humanParticipants.slice(0, 4).map((participant) => (
+                <div className="participant-preview" key={participant.participant_id}>
+                  <div>
+                    <strong>{participant.display_name}</strong>
+                    <p>{participant.status}</p>
+                  </div>
+                  <div className="participant-row-tags">
+                    <span className="language-pill">
+                      {getLanguageLabel(participant.language)}
+                    </span>
+                  </div>
+                </div>
+              ))
             )}
-          </select>
-        </label>
-
-        <p className="field-hint">
-          Meeting languages: {formatMeetingLanguagePair(meetingLanguages)}
-        </p>
-
-        <button
-          className="button-primary"
-          type="submit"
-          disabled={isSubmitting || languagePairUnavailable}
-        >
-          {isSubmitting ? "Joining..." : "Join Meeting"}
-        </button>
-      </form>
-
-      {languagePairUnavailable ? (
-        <div className="inline-error">
-          Room meeting language pair is unavailable. Reload room snapshot or ask the host to recreate the room.
-        </div>
-      ) : null}
-
-      {validationError ? <div className="inline-error">{validationError}</div> : null}
-      {error ? <div className="inline-error">{error}</div> : null}
-
-      <div className="join-card-footer">
-        <h4>Already inside</h4>
-        <div className="participant-preview-list">
-          {participants.length === 0 ? (
-            <p>No one is connected yet.</p>
-          ) : (
-            participants.map((participant) => (
-              <div className="participant-preview" key={participant.participant_id}>
-                <div>
-                  <strong>{participant.display_name}</strong>
-                  <p>
-                    {participant.kind === "virtual_brse" || participant.is_virtual
-                      ? "AI relay participant"
-                      : participant.status}
-                  </p>
-                </div>
-                <div className="participant-row-tags">
-                  {participant.kind === "virtual_brse" || participant.is_virtual ? (
-                    <span className="badge kind">BRSE AI</span>
-                  ) : null}
-                  <span className="language-pill">
-                    {getLanguageLabel(participant.language)}
-                  </span>
-                </div>
-              </div>
-            ))
-          )}
+          </div>
+          {brseParticipantCount > 0 ? (
+            <p className="join-brse-note">BRSE AI relay will join automatically when relay mode is on.</p>
+          ) : null}
         </div>
       </div>
     </section>

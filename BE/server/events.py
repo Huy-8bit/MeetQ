@@ -7,6 +7,7 @@ INTERPRETER_EVENTS_CHANNEL = "interpreter:events"
 
 class EventType:
     ROOM_CREATED = "room.created"
+    ROOM_BRSE_UPDATED = "room.brse_updated"
     PARTICIPANT_JOINED = "participant.joined"
     PARTICIPANT_UPDATED = "participant.updated"
     PARTICIPANT_LEFT = "participant.left"

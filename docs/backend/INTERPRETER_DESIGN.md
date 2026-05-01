@@ -1,5 +1,7 @@
 # Interpreter Service Design
 
+> Update note (2026-05-01): interpreter runtime is gated by room `brse_enabled`. When false, the daemon does not spawn a room runtime, does not join LiveKit as `BRSE AI`, and ignores stale interpreter output for that room. Live toggle uses `room.brse_updated`: OFF terminates the manager and disconnects BRSE runtime; ON spawns a fresh manager from the current room snapshot.
+>
 > Update note (2026-04-30): active interpreter runtime now uses BRSE participant semantics instead of per-listener translated tracks. The interpreter joins as virtual participant `BRSE AI`, subscribes to human mic audio, and publishes canonical BRSE relay audio/text back to the room. Legacy per-listener sections below remain as background context only.
 
 Interpreter Service là bridge giữa LiveKit SFU và OpenAI Realtime API.
@@ -136,6 +138,7 @@ brseai:v1:gateway:control
 Các event phải hiểu:
 
 - `room.created`
+- `room.brse_updated`
 - `participant.joined`
 - `participant.updated`
 - `participant.left`

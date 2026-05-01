@@ -7,6 +7,8 @@ interface ParticipantListProps {
   isCurrentUserHost?: boolean;
   onMuteParticipant?: (participantId: string) => void;
   isMutingParticipant?: string | null;
+  brseEnabled?: boolean;
+  embedded?: boolean;
 }
 
 export function ParticipantList({
@@ -15,13 +17,19 @@ export function ParticipantList({
   isCurrentUserHost = false,
   onMuteParticipant,
   isMutingParticipant,
+  brseEnabled = true,
+  embedded = false,
 }: ParticipantListProps) {
   return (
-    <section className="panel participant-list-panel">
+    <section className={embedded ? "participant-list-panel panel-section" : "panel participant-list-panel"}>
       <div className="panel-header">
         <div>
           <h3>Participants</h3>
-          <p>Human attendees and the virtual BRSE AI participant are tracked from gateway room state.</p>
+          <p>
+            {brseEnabled
+              ? "Human attendees and BRSE AI are tracked from room state."
+              : "Human attendees in the normal meeting."}
+          </p>
         </div>
         <span className="panel-count">{participants.length}</span>
       </div>

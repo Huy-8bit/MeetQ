@@ -1,5 +1,7 @@
 # Backend <-> Frontend API Contract
 
+> Update note (2026-05-01): rooms now expose explicit `brse_enabled`. Create-room can set it, snapshots/events expose it, and `brse_enabled=false` means a normal human-only meeting: no `brse_ai` virtual participant, no BRSE interpreter runtime, no BRSE transcript/audio output.
+>
 > Update note (2026-04-30): new rooms now default to BRSE relay semantics. FE should expect `meeting_mode=brse_relay`, `interpreter_mode=brse_participant`, a virtual participant `brse_ai`, room-wide relay transcripts with `kind=relay`, and BRSE audio as virtual participant track metadata. Older per-listener translated-audio sections below are legacy reference and are no longer the authoritative output model for BRSE rooms.
 
 Tài liệu này là contract duy nhất FE cần biết để code độc lập với BE.
@@ -222,7 +224,8 @@ Tạo room trống.
 
 ```json
 {
-  "meeting_languages": ["vi", "ja"]
+  "meeting_languages": ["vi", "ja"],
+  "brse_enabled": true
 }
 ```
 
@@ -232,6 +235,7 @@ Rules:
 2. 2 ngôn ngữ phải khác nhau.
 3. Chỉ nhận `vi | en | ja | zh | ko | fr | es`.
 4. Nếu omitted, backend mặc định `meeting_languages=["vi", "ja"]` để giữ tương thích flow cũ.
+5. `brse_enabled` optional; nếu omitted, backend mặc định `true`.
 
 ### Response JSON Schema
 
@@ -242,6 +246,7 @@ Rules:
     "state": "created",
     "created_at": "ISO-8601 UTC string",
     "expires_at": "ISO-8601 UTC string",
+    "brse_enabled": true,
     "participant_limit": 8,
     "supported_languages": ["vi", "en", "ja", "zh", "ko", "fr", "es"],
     "meeting_languages": ["vi", "ja"]
@@ -262,6 +267,7 @@ Rules:
     "state": "created",
     "created_at": "2026-04-29T13:00:00.000Z",
     "expires_at": "2026-04-30T13:00:00.000Z",
+    "brse_enabled": true,
     "participant_limit": 8,
     "supported_languages": ["vi", "en", "ja", "zh", "ko", "fr", "es"],
     "meeting_languages": ["vi", "ja"]
@@ -292,6 +298,7 @@ Lấy snapshot room khi FE load room page hoặc reconnect.
     "state": "created | active | empty",
     "created_at": "ISO-8601 UTC string",
     "expires_at": "ISO-8601 UTC string",
+    "brse_enabled": true,
     "participant_limit": 8,
     "supported_languages": ["vi", "en", "ja", "zh", "ko", "fr", "es"],
     "meeting_languages": ["vi", "ja"],
@@ -353,6 +360,7 @@ Lấy snapshot room khi FE load room page hoặc reconnect.
     "state": "active",
     "created_at": "2026-04-29T13:00:00.000Z",
     "expires_at": "2026-04-30T13:12:54.000Z",
+    "brse_enabled": true,
     "participant_limit": 8,
     "supported_languages": ["vi", "en", "ja", "zh", "ko", "fr", "es"],
     "meeting_languages": ["vi", "ja"],
@@ -421,6 +429,7 @@ Join room và nhận đủ credentials cho Gateway WS + LiveKit.
   "room": {
     "room_id": "string",
     "state": "active",
+    "brse_enabled": true,
     "participant_limit": 8,
     "supported_languages": ["vi", "en", "ja", "zh", "ko", "fr", "es"],
     "meeting_languages": ["vi", "ja"],
@@ -465,6 +474,7 @@ Join room và nhận đủ credentials cho Gateway WS + LiveKit.
   "room": {
     "room_id": "rm_8f3k2v1m",
     "state": "active",
+    "brse_enabled": true,
     "participant_limit": 8,
     "supported_languages": ["vi", "en", "ja", "zh", "ko", "fr", "es"],
     "meeting_languages": ["vi", "ja"],
@@ -538,6 +548,47 @@ Gọi endpoint này khi:
 2. trước `window.unload` nếu có thể
 
 Nếu request fail do tab đóng quá nhanh, Gateway WS disconnect grace sẽ cleanup.
+
+## `POST /api/rooms/{room_id}/brse/enable`
+
+Bật BRSE mode cho room đang chạy. Yêu cầu `Authorization: Bearer <gateway-room-jwt>`.
+
+Permission rule hiện tại: backend chưa có host model trong room state, nên mọi active human participant có room token hợp lệ được phép toggle; stale-session, disconnected participant, và virtual participant bị reject.
+
+Response là room summary đã cập nhật:
+
+```json
+{
+  "room_id": "rm_8f3k2v1m",
+  "state": "active",
+  "brse_enabled": true,
+  "participant_limit": 8,
+  "supported_languages": ["vi", "en", "ja", "zh", "ko", "fr", "es"],
+  "meeting_languages": ["vi", "ja"],
+  "meeting_mode": "brse_relay",
+  "interpreter_mode": "brse_participant",
+  "audio_routing": {}
+}
+```
+
+Side effects:
+
+1. Gateway updates room state and broadcasts `room.brse_updated`.
+2. Gateway materializes `brse_ai` with `participant.joined`.
+3. Interpreter daemon spawns BRSE runtime for the room.
+
+## `POST /api/rooms/{room_id}/brse/disable`
+
+Tắt BRSE mode cho room đang chạy. Yêu cầu `Authorization: Bearer <gateway-room-jwt>`.
+
+Response giống enable nhưng `brse_enabled=false`.
+
+Side effects:
+
+1. Gateway updates room state and broadcasts `room.brse_updated`.
+2. Gateway removes BRSE virtual participant from snapshot and broadcasts `participant.left` for `brse_ai`.
+3. Gateway clears recent BRSE interpreter transcripts from room snapshot state.
+4. Interpreter daemon stops the room manager, disconnecting the BRSE LiveKit participant and shutting down output routers.
 
 ## `GET /api/health`
 
@@ -643,6 +694,39 @@ Validation:
 
 - `payload.language` phải thuộc `room.meeting_languages` của room hiện tại (không dùng global supported set).
 
+## `room.brse.enable`
+
+WS equivalent của REST enable endpoint.
+
+```json
+{
+  "type": "room.brse.enable",
+  "event_id": "evt_...",
+  "room_id": "rm_...",
+  "sent_at": "2026-05-01T08:40:00.000Z",
+  "payload": {}
+}
+```
+
+## `room.brse.disable`
+
+WS equivalent của REST disable endpoint.
+
+```json
+{
+  "type": "room.brse.disable",
+  "event_id": "evt_...",
+  "room_id": "rm_...",
+  "sent_at": "2026-05-01T08:40:00.000Z",
+  "payload": {}
+}
+```
+
+Validation:
+
+- Room token/session phải còn active.
+- Hiện chưa có host model trong backend room state; mọi active human participant trong room được phép toggle.
+
 ## Server -> Client Messages
 
 ## `room.snapshot`
@@ -671,6 +755,7 @@ Validation:
     },
     "room": {
       "state": "created | active | empty",
+      "brse_enabled": true,
       "participant_limit": 8,
       "supported_languages": ["vi", "en", "ja", "zh", "ko", "fr", "es"],
       "meeting_languages": ["vi", "ja"],
@@ -704,6 +789,7 @@ Validation:
     },
     "room": {
       "state": "active",
+      "brse_enabled": true,
       "participant_limit": 8,
       "supported_languages": ["vi", "en", "ja", "zh", "ko", "fr", "es"],
       "meeting_languages": ["vi", "ja"],
@@ -726,6 +812,28 @@ Validation:
   }
 }
 ```
+
+## `room.brse_updated`
+
+Gateway broadcast khi room đổi BRSE mode.
+
+```json
+{
+  "type": "room.brse_updated",
+  "event_id": "evt_...",
+  "room_id": "rm_8f3k2v1m",
+  "sent_at": "2026-05-01T08:40:00.000Z",
+  "payload": {
+    "room_id": "rm_8f3k2v1m",
+    "brse_enabled": false,
+    "timestamp": "2026-05-01T08:40:00.000Z",
+    "changed_by": "pt_01hs8x4e3m",
+    "reason": "ws_disable"
+  }
+}
+```
+
+FE should treat `payload.brse_enabled` plus the next room snapshot/participant events as source of truth. When false, remove BRSE UI/runtime state and ignore stale BRSE audio/transcript references.
 
 ## `participant.joined`
 

@@ -110,6 +110,7 @@ export interface RoomSummary {
   state: RoomState;
   created_at: string;
   expires_at: string;
+  brse_enabled?: boolean;
   participant_limit: number;
   supported_languages: Language[];
   meeting_languages?: MeetingLanguage[];
@@ -120,6 +121,7 @@ export interface RoomSummary {
 
 export interface CreateRoomRequest {
   meeting_languages: [MeetingLanguage, MeetingLanguage];
+  brse_enabled?: boolean;
 }
 
 export interface CreateRoomResponse {

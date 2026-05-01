@@ -1,5 +1,7 @@
 # Gateway Service Design
 
+> Update note (2026-05-01): Gateway room state now has explicit `brse_enabled`. Create-room can set it, REST/WS snapshots expose it, and live toggle uses `room.brse_updated` plus BRSE participant join/left events. `brse_enabled=false` is normal human-only meeting mode with no BRSE runtime or virtual participant.
+>
 > Update note (2026-04-30): Gateway runtime now exposes BRSE relay mode by default. Snapshot and websocket payloads may include room-level BRSE mode fields, a virtual participant `brse_ai`, and room-wide relay transcript events. Legacy per-listener routing details below remain as historical design context only.
 
 Gateway là service FastAPI chịu trách nhiệm:
@@ -199,6 +201,7 @@ class RoomState(TypedDict):
     activated_at: str | None
     emptied_at: str | None
     expires_at: str
+    brse_enabled: bool
     participant_limit: int
     supported_languages: list[str]
     meeting_languages: list[str]  # exact 2, distinct, subset of supported_languages
@@ -346,7 +349,8 @@ Tạo room trống. Không auto-join host.
 
 ```json
 {
-  "meeting_languages": ["vi", "ja"]
+  "meeting_languages": ["vi", "ja"],
+  "brse_enabled": true
 }
 ```
 
@@ -356,6 +360,7 @@ Validation:
 2. 2 ngôn ngữ trong pair phải khác nhau.
 3. Mỗi ngôn ngữ phải thuộc `supported_languages` (`vi|en|ja|zh|ko|fr|es`).
 4. Nếu omitted, backend hiện default `meeting_languages=["vi", "ja"]` để giữ tương thích create-room flow cũ.
+5. Nếu `brse_enabled` omitted, backend default `true` để giữ tương thích BRSE-first flow hiện tại.
 
 #### Success Response `201 Created`
 
@@ -366,6 +371,7 @@ Validation:
     "state": "created",
     "created_at": "2026-04-29T13:00:00Z",
     "expires_at": "2026-04-30T13:00:00Z",
+    "brse_enabled": true,
     "participant_limit": 8,
     "supported_languages": ["vi", "en", "ja", "zh", "ko", "fr", "es"],
     "meeting_languages": ["vi", "ja"]
@@ -683,6 +689,22 @@ Cho phép participant đổi ngôn ngữ nghe/nói trong room. Đây là tín hi
 
 Nếu parse thất bại hoặc payload invalid, Gateway gửi `error` event nhưng không close socket ngay. Sau 3 invalid messages trong 30 giây, Gateway close `4400`.
 
+### `room.brse.enable` / `room.brse.disable`
+
+Client có thể toggle BRSE mode qua room websocket với room token/session hiện tại:
+
+```json
+{
+  "type": "room.brse.disable",
+  "event_id": "evt_01hs8zbrse",
+  "room_id": "rm_8f3k2v1m",
+  "sent_at": "2026-05-01T08:40:00.000Z",
+  "payload": {}
+}
+```
+
+Backend branch hiện chưa có host model trong room state; permission rule tạm thời là mọi active human participant có valid room token/session được phép toggle. Khi host model được bổ sung, path này phải đổi sang host-only.
+
 ## Server -> Client Messages
 
 ### `room.snapshot`
@@ -732,6 +754,28 @@ Gửi ngay sau connect thành công.
   }
 }
 ```
+
+### `room.brse_updated`
+
+Broadcast khi BRSE mode đổi:
+
+```json
+{
+  "type": "room.brse_updated",
+  "event_id": "evt_01hs8zbrse",
+  "room_id": "rm_8f3k2v1m",
+  "sent_at": "2026-05-01T08:40:00.000Z",
+  "payload": {
+    "room_id": "rm_8f3k2v1m",
+    "brse_enabled": false,
+    "timestamp": "2026-05-01T08:40:00.000Z",
+    "changed_by": "pt_01hs8x4e3m",
+    "reason": "ws_disable"
+  }
+}
+```
+
+When disabled, Gateway removes `brse_ai` from snapshot state, clears recent BRSE interpreter transcripts, and emits `participant.left` for `brse_ai`. Interpreter daemon consumes the same event and terminates the room runtime.
 
 ### `participant.joined`
 
@@ -1012,6 +1056,7 @@ Runtime validation error hoặc downstream failure không đủ nghiêm trọng 
 | Type | When | Payload |
 | --- | --- | --- |
 | `room.created` | sau `POST /api/rooms` | room meta cơ bản |
+| `room.brse_updated` | sau REST/WS BRSE toggle | room id, `brse_enabled`, timestamp |
 | `participant.joined` | sau `POST /join` | participant id, display name, language, livekit identity |
 | `participant.updated` | sau `set_language` | participant id, new language |
 | `participant.left` | sau `leave` hoặc grace timeout | participant id, left_at |
