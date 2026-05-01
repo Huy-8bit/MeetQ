@@ -42,7 +42,7 @@ export function upsertInterpreterStatus(
   participantsById: Record<string, ParticipantSnapshot>,
 ): InterpreterStatusEntry[] {
   const key = `${payload.speaker_id}:${payload.target_language}`;
-  const brseParticipantName = payload.brse_participant?.display_name ?? "BRSE AI";
+  const brseParticipantName = payload.brse_participant?.display_name ?? "AI Relay";
   const nextEntry: InterpreterStatusEntry = {
     key,
     speakerId: payload.speaker_id,

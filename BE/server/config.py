@@ -1,3 +1,5 @@
+from typing import Optional
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
@@ -25,6 +27,14 @@ class Settings(BaseSettings):
     realtime_output_sample_rate: int = 24000
     ws_stale_timeout_seconds: int = 90
     ws_stale_sweep_interval_seconds: int = 15
+
+    # Telegram notifications
+    telegram_notifications_enabled: bool = False
+    telegram_notify_room_created: bool = True
+    telegram_bot_token: Optional[str] = None
+    telegram_chat_id: Optional[str] = None
+    telegram_api_base_url: str = "https://api.telegram.org"
+    telegram_request_timeout_seconds: float = 3.0
     
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 

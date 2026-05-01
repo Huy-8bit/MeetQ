@@ -61,7 +61,7 @@ export function ParticipantTile({
         </div>
         <div className="participant-tile-tags">
           {isHost ? <span className="badge badge-host">Host</span> : null}
-          {isBrse ? <span className="badge kind">BRSE AI</span> : null}
+          {isBrse ? <span className="badge kind">AI relay</span> : null}
           {isScreenSharing ? <span className="badge live">Sharing screen</span> : null}
           {isMutedByHost ? <span className="badge badge-muted-by-host">Muted</span> : null}
           {feed.language ? (

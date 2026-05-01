@@ -47,7 +47,7 @@ export function RoomTopBar({
   return (
     <header className="room-topbar">
       <div className="room-topbar-main">
-        <div className="room-brand-mark">brseAI</div>
+        <div className="room-brand-mark">MQ</div>
         <div className="room-title-block">
           <div className="room-title-row">
             <h1>{displayName || "Meeting Room"}</h1>

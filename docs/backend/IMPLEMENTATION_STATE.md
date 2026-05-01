@@ -1,5 +1,139 @@
 # Backend Implementation State
 
+## Turn Update: 2026-05-02 Telegram Room-Created Notification (Kickoff)
+
+- Time: 2026-05-02T02:14:56+07:00
+- Mode: CODE-ONLY
+- Testing deferred: yes, per instruction
+
+### Objective Locked
+
+- Add backend Telegram channel notification when a meeting room is created successfully.
+- Keep Telegram as an optional side effect: missing config or Telegram/network failures must not fail room creation.
+- Keep backend/runtime room flows unchanged except for the room-created notification hook.
+
+### Mandatory Read Status
+
+- Read required docs:
+  - `docs/backend/IMPLEMENTATION_STATE.md`
+  - `docs/backend/API_CONTRACT.md`
+- Read required backend files:
+  - `BE/server/config.py`
+  - `BE/server/gateway/api_rooms.py`
+  - `BE/server/gateway/room_service.py`
+  - `BE/server/models.py`
+- Read related runtime/config files:
+  - `BE/server/src/common/logging_utils.py`
+  - `BE/server/gateway/main.py`
+  - `BE/server/gateway/dependencies.py`
+  - `BE/server/redis.py`
+  - `BE/requirements.txt`
+  - `.env.example`
+  - `BE/.env.example`
+  - `docker-compose.yml`
+- Current finding: no existing `BE/server/integrations/` folder; create a small Telegram integration under that namespace.
+
+### Initial Implementation Plan
+
+- Add Telegram env/config keys to `BE/server/config.py`.
+- Add `BE/server/integrations/telegram.py` with a small async `sendMessage` client using existing `httpx` dependency.
+- Hook notification in `RoomService.create_room` after `store.create_room` succeeds.
+- Sync `.env.example`, `BE/.env.example`, and `docker-compose.yml` for runtime usability.
+- Final state update will list changed files, hook location, failure handling strategy, and testing deferred.
+
+### Batch 1: Config, Integration Client, Create-Room Hook (Completed)
+
+- Time: 2026-05-02T02:16:23+07:00
+- Added Telegram config keys in `BE/server/config.py`:
+  - `TELEGRAM_NOTIFICATIONS_ENABLED`
+  - `TELEGRAM_NOTIFY_ROOM_CREATED`
+  - `TELEGRAM_BOT_TOKEN`
+  - `TELEGRAM_CHAT_ID`
+  - `TELEGRAM_API_BASE_URL`
+  - `TELEGRAM_REQUEST_TIMEOUT_SECONDS`
+- Added `BE/server/integrations/telegram.py`:
+  - async `TelegramNotifier` using `httpx.AsyncClient`
+  - Bot API `sendMessage`
+  - short timeout from config
+  - safe skip when disabled or missing token/chat id
+  - warning logs for HTTP/network/unexpected failures with `room_id`
+- Hooked `RoomService.create_room` in `BE/server/gateway/room_service.py`:
+  - notification scheduled only after `store.create_room` and room-created/virtual-participant publishes complete
+  - schedule uses `asyncio.create_task` so Telegram does not block room creation response
+  - task callback logs unexpected task failures
+- Testing remains deferred per CODE-ONLY instruction.
+
+### Batch 2: Env Runtime Sync (Completed)
+
+- Time: 2026-05-02T02:16:52+07:00
+- Synced Telegram env keys into:
+  - `.env.example`
+  - `BE/.env.example`
+  - `docker-compose.yml` gateway service environment
+- Actual local `.env` files were not edited.
+- Testing remains deferred per CODE-ONLY instruction.
+
+### Final Sync: Telegram Room-Created Notification
+
+- Time: 2026-05-02T02:18:05+07:00
+- Final status: backend Telegram room-created notification implemented.
+- Telegram config keys added:
+  - `TELEGRAM_NOTIFICATIONS_ENABLED=false` by default
+  - `TELEGRAM_NOTIFY_ROOM_CREATED=true` by default
+  - `TELEGRAM_BOT_TOKEN`
+  - `TELEGRAM_CHAT_ID`
+  - `TELEGRAM_API_BASE_URL=https://api.telegram.org`
+  - `TELEGRAM_REQUEST_TIMEOUT_SECONDS=3`
+- Files changed:
+  - `BE/server/config.py`
+  - `BE/server/integrations/__init__.py`
+  - `BE/server/integrations/telegram.py`
+  - `BE/server/gateway/room_service.py`
+  - `.env.example`
+  - `BE/.env.example`
+  - `docker-compose.yml`
+  - `docs/backend/IMPLEMENTATION_STATE.md`
+- Create-room hook location:
+  - `RoomService.create_room` schedules Telegram notification after `store.create_room`, `room.created` publish, and virtual BRSE participant publish have completed.
+  - The notification is scheduled immediately before returning `CreateRoomResponse`.
+- Notification content:
+  - room id
+  - meeting languages
+  - BRSE enabled flag
+  - created_at
+  - expires_at
+  - participant limit only when configured/non-empty
+  - share path
+  - creator fields are supported by the notifier but omitted by the current create-room API because creator metadata is not present on that path.
+- Failure handling strategy:
+  - disabled notifications skip without side effects
+  - enabled but missing bot token/chat id skips safely and logs one warning
+  - Telegram HTTP/network/unexpected failures are caught and logged with `room_id`
+  - room creation response does not wait for or fail because of Telegram delivery
+  - background notification tasks are tracked until completion and log unexpected task errors
+- Testing deferred per instruction:
+  - no tests run
+  - no tests written
+  - no tests changed
+  - no runtime Telegram smoke call performed
+
+### Follow-Up Fix: Legacy `src.*` Import Compatibility
+
+- Time: 2026-05-02T02:26:22+07:00
+- Runtime issue reported:
+  - Docker gateway failed on startup with `ModuleNotFoundError: No module named 'src'`
+  - Import chain: `server.gateway.main` -> `server.models` -> `server.meeting_modes` -> `src.common.lang`
+- Fix applied:
+  - added `BE/src/__init__.py` as a compatibility package
+  - the package appends `BE/server/src` to `src.__path__`
+  - existing `src.common.*`, `src.realtime.*`, and `src.fallback.*` imports can resolve without changing gateway/interpreter/CLI imports one by one
+- Files changed in this follow-up:
+  - `BE/src/__init__.py`
+  - `docs/backend/IMPLEMENTATION_STATE.md`
+- Testing deferred per instruction:
+  - no tests run
+  - no import smoke run
+
 ## Turn Update: 2026-05-01 Room Policy: 30-Min Duration + No Participant Cap (Final Sync)
 
 - Time: 2026-05-01T20:22:41+07:00

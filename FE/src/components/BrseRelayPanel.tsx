@@ -38,7 +38,7 @@ export function BrseRelayPanel({
           <p>
             {brseEnabled
               ? `${formatMeetingLanguageBridge(meetingLanguages)} relay is ready for cross-language speech.`
-              : "Human audio, chat, screen share, and participants remain active without BRSE AI relay."}
+              : "Human audio, chat, screen share, and participants remain active without AI relay."}
           </p>
         </div>
         <span className="relay-activity-badge">{activityLabel}</span>
@@ -52,7 +52,7 @@ export function BrseRelayPanel({
               <p>
                 {latestRelay
                   ? `Latest relay from ${latestRelay.sourceSpeakerName} to ${getLanguageLabel(latestRelay.relayTargetLanguage)}`
-                  : "BRSE AI is waiting for speech that needs relay."}
+                  : "AI relay is waiting for speech that needs relay."}
               </p>
             </div>
           </div>
@@ -60,7 +60,7 @@ export function BrseRelayPanel({
           {statuses.length === 0 ? (
             <div className="inline-empty-state">
               <strong>Idle</strong>
-              <p>Relay status appears here when BRSE AI starts capturing or playing speech.</p>
+              <p>Relay status appears here when AI relay starts capturing or playing speech.</p>
             </div>
           ) : (
             <div className="status-list compact">

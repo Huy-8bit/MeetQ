@@ -1,5 +1,299 @@
 # Frontend Implementation State
 
+## Turn Update: 2026-05-02 MeetQ Frontend Branding Rename (Kickoff)
+
+- Time: 2026-05-02T03:06:33+07:00
+- Mode: CODE-ONLY
+- Testing deferred: yes, per instruction; no tests, build, typecheck, or runtime verification will be run this turn
+
+### Objective Locked
+
+- Rename user-facing frontend product branding from the old `brseAI` brand to `MeetQ`.
+- Replace user-facing monogram/logo text with `MQ`.
+- Update browser title/tab branding.
+- Preserve room/create/join/meeting runtime behavior and keep BRSE/AI relay terminology only where it is feature semantics.
+
+### Mandatory Read Status
+
+- Read required docs/files:
+  - `docs/frontend/IMPLEMENTATION_STATE.md`
+  - `FE/index.html`
+  - `FE/package.json`
+  - `FE/src/App.tsx`
+  - `FE/src/main.tsx`
+  - `FE/src/pages/*`
+  - `FE/src/components/*`
+  - `FE/src/index.css`
+- `FE/public` has no files in this workspace.
+- Searched `FE/src`, `FE/index.html`, `FE/package.json`, and Vite config for title/brand/logo/old-brand strings.
+
+### Branding Strategy
+
+- Change product surfaces:
+  - browser title: `MeetQ`
+  - landing brand mark: `MQ`
+  - meeting top-bar brand mark: `MQ`
+- Keep/clarify relay feature semantics:
+  - `BRSE relay`
+  - `AI relay participant`
+  - internal `brse_*` protocol/type/runtime identifiers
+- Replace ambiguous user-facing `BRSE AI` labels with `AI relay` / `AI Relay` so they no longer read like old product branding.
+- Do not rename backend-facing or protocol identifiers.
+
+### Final Sync
+
+- Time: 2026-05-02T03:08:09+07:00
+- Final status: frontend branding rename implemented.
+
+### Branding Applied
+
+- Product name:
+  - Browser title changed from `brseAI Meeting` to `MeetQ`.
+  - Landing header product text changed to `MeetQ`.
+  - FE package metadata changed to `meetq-frontend`.
+- Monogram/logo:
+  - Landing brand mark changed from `brseAI` to `MQ`.
+  - Meeting top-bar brand mark changed from `brseAI` to `MQ`.
+- Relay/virtual participant wording:
+  - User-facing `BRSE AI` labels were normalized to `AI relay` / `AI Relay`.
+  - `BRSE relay` remains where it describes the room mode/feature.
+  - Internal protocol/runtime identifiers such as `brse_ai`, `virtual_brse`, `brse_enabled`, and `room.brse_*` were intentionally kept.
+
+### Files Modified
+
+- `FE/index.html`
+- `FE/package.json`
+- `FE/package-lock.json`
+- `FE/src/pages/HomePage.tsx`
+- `FE/src/components/RoomTopBar.tsx`
+- `FE/src/components/JoinRoomCard.tsx`
+- `FE/src/components/ParticipantList.tsx`
+- `FE/src/components/ParticipantTile.tsx`
+- `FE/src/components/BrseRelayPanel.tsx`
+- `FE/src/components/InterpreterStatusPanel.tsx`
+- `FE/src/features/room/transcripts.ts`
+- `FE/src/features/room/interpreter.ts`
+- `FE/src/lib/livekit.ts`
+- `docs/frontend/IMPLEMENTATION_STATE.md`
+
+### Search / Residuals
+
+- Searched `FE` excluding `node_modules`; no remaining `brseAI`, `brseAi`, `brseai`, `BRSE AI`, or `brse AI` strings.
+- Remaining `BRSE relay` and `brse_*` strings are feature/protocol semantics, not product branding.
+
+### Testing
+
+- Deferred per instruction:
+  - no tests run
+  - no tests written
+  - no tests changed
+  - no build/typecheck/runtime verification run
+
+---
+
+## Turn Update: 2026-05-02 Create + Join Copy Reduction Redesign (Kickoff)
+
+- Time: 2026-05-02T02:58:15+07:00
+- Mode: CODE-ONLY
+- Testing deferred: yes, per instruction; no tests, build, typecheck, or runtime verification will be run this turn
+
+### Objective Locked
+
+- Reduce copy and visual noise on the create-room landing screen and join-room screen.
+- Preserve create room, open existing room, room fetch, join, expiry, meeting language pair, BRSE mode, and participant preview runtime flows.
+- Keep full language names everywhere user-facing language choices appear.
+
+### Mandatory Read Status
+
+- Read required docs:
+  - `docs/frontend/IMPLEMENTATION_STATE.md`
+  - `docs/backend/API_CONTRACT.md`
+  - `docs/backend/IMPLEMENTATION_STATE.md`
+- Read required FE paths:
+  - `FE/src/pages/HomePage.tsx`
+  - `FE/src/pages/RoomPage.tsx`
+  - `FE/src/components/JoinRoomCard.tsx`
+  - `FE/src/types/api.ts`
+  - `FE/src/lib/api.ts`
+  - `FE/src/lib/languages.ts`
+  - `FE/src/index.css`
+- Related create/join component search completed across `FE/src/components` and `FE/src/pages`.
+
+### Initial Text Reduction Strategy
+
+- Create room:
+  - Replace marketing-style intro with one short action title.
+  - Remove long subtitle/proof text and repeated meeting bridge explanation.
+  - Keep language pair selection, compact duration/mode badges, Create Room CTA, and a small open-existing row.
+- Join room:
+  - Remove duplicate room summary panel.
+  - Keep one compact context strip for room id, full language bridge, mode, and time.
+  - Keep form copy to labels only plus the Join CTA.
+  - Make "Already inside" a compact preview, not a dashboard panel.
+
+### Final Sync
+
+- Time: 2026-05-02T03:01:46+07:00
+- Final status: create-room and join-room copy reduction redesign implemented.
+
+### Layout Strategy Implemented
+
+- Create room:
+  - Replaced the previous two-column landing composition with a single compact create-room panel.
+  - Header now has only brand + quiet `Mic test` link.
+  - Primary action surface now contains: short title, two language selectors, compact `30 min` / `BRSE relay` badges, and `Create Room`.
+  - `Open room` is a small secondary panel under the create action.
+- Join room:
+  - Replaced multi-panel join layout with one primary join card.
+  - Context is now a single compact strip: room id badge, language bridge, mode, time.
+  - Form has only `Your name`, `Your language`, and `Join Meeting`.
+  - Participant preview sits below the form as compact supporting context.
+
+### Components / Refactor
+
+- `FE/src/pages/HomePage.tsx`
+  - Added local `CreateRoomPanel`.
+  - Added local `JoinExistingRoomPanel`.
+  - Kept `LanguageSelectCard` but reduced surrounding copy.
+- `FE/src/components/JoinRoomCard.tsx`
+  - Removed `RoomMetadataList`.
+  - Added local `CompactMeta` for the single metadata strip.
+  - Kept `RoomModeBadge` and `ParticipantPreviewList`, with shorter labels/copy.
+
+### Text / Duplication Reduction
+
+- Removed from create screen:
+  - long landing headline
+  - long explanatory subtitle
+  - proof pill row
+  - repeated `Meeting bridge` preview
+  - standalone 30-minute explanation block
+- Removed from join screen:
+  - explanatory header paragraph
+  - duplicated room summary panel
+  - duplicated meeting language summary inside the form
+  - duplicated room mode / room id / time rows
+  - long empty participant explanation
+- Kept full language names through existing language helpers and select options.
+- Room policy and BRSE state are now compact badges/metadata only.
+
+### Files Modified
+
+- `FE/src/pages/HomePage.tsx`
+- `FE/src/components/JoinRoomCard.tsx`
+- `FE/src/index.css`
+- `docs/frontend/IMPLEMENTATION_STATE.md`
+
+### Testing
+
+- Deferred per instruction:
+  - no tests run
+  - no tests written
+  - no tests changed
+  - no build/typecheck/runtime verification run
+
+---
+
+## Turn Update: 2026-05-02 Join Room Product Redesign (Kickoff)
+
+- Time: 2026-05-02T02:47:45+07:00
+- Mode: CODE-ONLY
+- Testing deferred: yes, per instruction; no tests, build, typecheck, or runtime verification will be run this turn
+
+### Objective Locked
+
+- Redesign the pre-join room screen so the join form is the primary action.
+- Keep room fetch, join contract, room expiry, meeting language pair, BRSE mode, and participant preview behavior unchanged.
+- Reduce room id prominence from hero headline to compact metadata.
+- Present room metadata, meeting languages, BRSE/normal mode, and "already inside" as scan-friendly supporting context.
+
+### Mandatory Read Status
+
+- Read required docs:
+  - `docs/frontend/IMPLEMENTATION_STATE.md`
+  - `docs/backend/API_CONTRACT.md`
+  - `docs/backend/IMPLEMENTATION_STATE.md`
+- Read required FE paths:
+  - `FE/src/pages/HomePage.tsx`
+  - `FE/src/pages/RoomPage.tsx`
+  - `FE/src/components/JoinRoomCard.tsx`
+  - `FE/src/components/RoomTopBar.tsx`
+  - `FE/src/components/ParticipantList.tsx`
+  - `FE/src/types/api.ts`
+  - `FE/src/lib/api.ts`
+  - `FE/src/lib/languages.ts`
+  - `FE/src/features/room/useMeetingRoom.ts`
+  - `FE/src/index.css`
+
+### Initial Layout Strategy
+
+- Replace the current split hero/card layout with a compact pre-join product surface.
+- Put a room summary strip above the action area: room id badge, full language bridge, mode badge, participant count, expiry.
+- Make the join form the largest and most visually weighted card.
+- Move participants into a secondary preview panel with compact empty/human/virtual states.
+
+### Final Sync
+
+- Time: 2026-05-02T02:53:59+07:00
+- Final status: join room product redesign implemented in the FE runtime path.
+
+### Layout Strategy Implemented
+
+- `JoinRoomCard` no longer uses a split dark hero where `room_id` is the main headline.
+- The screen now uses a compact hierarchy:
+  - top summary: "Enter the room", short helper copy, compact room id badge
+  - context strip: meeting languages, BRSE/normal mode, participant count, time remaining
+  - primary card: join form
+  - secondary context: room summary metadata and participant preview
+- Desktop layout uses the form as the visual anchor with room metadata and participants in a narrower support column.
+- Responsive layout stacks the summary, form, metadata, and participant preview without preserving the old unbalanced split.
+
+### Components / Refactor
+
+- `FE/src/components/JoinRoomCard.tsx`
+  - Refactored presentation into local subcomponents:
+    - `RoomModeBadge`
+    - `RoomMetadataList`
+    - `ParticipantPreviewList`
+  - Kept existing props and `onJoin` payload unchanged.
+  - Kept display-name validation, meeting-language validation, expired-room block, and join submit flow unchanged.
+
+### Room Metadata Presentation
+
+- Room id is now a compact badge and metadata row, not hero text.
+- Meeting languages use full language names via `formatMeetingLanguageBridge`.
+- BRSE state is shown as `BRSE relay enabled`; BRSE off shows `Normal meeting`.
+- Metadata is presented as a scan-friendly list:
+  - Room ID
+  - Meeting languages
+  - Mode
+  - Participants
+  - Time remaining / expiry
+  - Host when available from snapshot participants
+
+### Already Inside Handling
+
+- Human participants are counted separately from virtual participants.
+- Empty human state is compact: "No human participants yet" plus a small BRSE AI note when the virtual participant exists.
+- Human participants render in a compact list with status, language, and host badge when applicable.
+- BRSE AI renders as a clearly labeled virtual relay participant and no longer dominates the pre-join screen.
+
+### Files Modified
+
+- `FE/src/components/JoinRoomCard.tsx`
+- `FE/src/index.css`
+- `docs/frontend/IMPLEMENTATION_STATE.md`
+
+### Testing
+
+- Deferred per instruction:
+  - no tests run
+  - no tests written
+  - no tests changed
+  - no build/typecheck/runtime verification run
+
+---
+
 ## Turn Update: 2026-05-01 Room Policy UI — 30-Min Duration + No Participant Cap (Completed)
 
 - Time: 2026-05-01T21:00:00+07:00

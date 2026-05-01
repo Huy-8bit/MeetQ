@@ -366,7 +366,7 @@ function pickActor(input: {
 
   const relayActor = input.relayParticipant ?? {
     participant_id: "brse_ai",
-    display_name: "BRSE AI",
+    display_name: "AI Relay",
     language: "auto" as Language,
     source_language: "auto" as Language,
     kind: "virtual_brse" as ParticipantKind,

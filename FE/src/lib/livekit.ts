@@ -472,7 +472,7 @@ export function buildMediaSnapshot(args: {
     const videoTrack = getRemoteVideoTrack(participant);
     const displayName = snapshot?.display_name
       || participant.name
-      || (kind === "virtual_brse" ? "BRSE AI" : participantId);
+      || (kind === "virtual_brse" ? "AI Relay" : participantId);
 
     collectParticipantAudio(participant, snapshot, kind, humanAudio, brseAudio);
     collectParticipantScreenShares(participant, snapshot, kind, screenShares);
@@ -573,7 +573,7 @@ function collectParticipantAudio(
     if (kind === "virtual_brse") {
       brseAudio.push({
         participantId: snapshot?.participant_id ?? DEFAULT_BRSE_PARTICIPANT_ID,
-        displayName: snapshot?.display_name || participant.name || "BRSE AI",
+        displayName: snapshot?.display_name || participant.name || "AI Relay",
         trackSid: publication.trackSid,
         track: audioTrack,
         language: snapshot?.language,

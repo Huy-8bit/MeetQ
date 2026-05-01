@@ -1,4 +1,6 @@
+import asyncio
 import json
+import logging
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
@@ -11,6 +13,7 @@ from server.events import EventType, build_envelope
 from server.gateway.auth import issue_room_token
 from server.gateway.livekit_tokens import generate_livekit_token
 from server.gateway.room_store import RoomStore
+from server.integrations.telegram import TelegramNotifier
 from server.meeting_modes import (
     BRSE_PARTICIPANT_ID,
     DEFAULT_BRSE_ENABLED,
@@ -42,6 +45,9 @@ from server.models import (
     SnapshotData,
     TranscriptEvent,
 )
+
+
+logger = logging.getLogger(__name__)
 
 
 class RoomFullError(Exception):
@@ -93,6 +99,8 @@ class RoomService:
         self.settings = settings
         self.redis = redis
         self.gateway_control_channel = settings.redis_channel_gateway_control
+        self.telegram_notifier = TelegramNotifier(settings)
+        self._notification_tasks: set[asyncio.Task] = set()
 
     def _generate_id(self, prefix: str) -> str:
         return f"{prefix}_{uuid.uuid4().hex[:12]}"
@@ -132,6 +140,39 @@ class RoomService:
     async def _publish(self, event_type: str, room_id: str, payload: Any):
         envelope = build_envelope(event_type, room_id, jsonable_encoder(payload))
         await self.redis.publish(self.gateway_control_channel, json.dumps(envelope))
+
+    def _schedule_room_created_notification(self, room: RoomState, share_url: str) -> None:
+        if not self.telegram_notifier.is_room_created_enabled():
+            return
+
+        try:
+            task = asyncio.create_task(
+                self.telegram_notifier.send_room_created(
+                    room,
+                    share_url=share_url,
+                )
+            )
+            self._notification_tasks.add(task)
+            task.add_done_callback(
+                lambda completed_task: self._on_notification_task_done(completed_task, room.room_id)
+            )
+        except Exception:
+            logger.exception(
+                "failed to schedule room-created notification: room_id=%s",
+                room.room_id,
+            )
+
+    def _on_notification_task_done(self, task: asyncio.Task, room_id: str) -> None:
+        self._notification_tasks.discard(task)
+        try:
+            task.result()
+        except asyncio.CancelledError:
+            return
+        except Exception:
+            logger.exception(
+                "room-created notification task failed unexpectedly: room_id=%s",
+                room_id,
+            )
 
     def _normalize_meeting_languages(self, meeting_languages: List[str]) -> List[MeetingLanguage]:
         if not meeting_languages:
@@ -206,11 +247,14 @@ class RoomService:
             for participant in room.virtual_participants:
                 await self._publish(EventType.PARTICIPANT_JOINED, room_id, participant)
 
+        share_url = f"/rooms/{room_id}"
+        self._schedule_room_created_notification(room, share_url)
+
         return CreateRoomResponse(
             room=self._room_response_from_state(room),
             join=CreateRoomResponseJoin(
                 api_path=f"/api/rooms/{room_id}/join",
-                share_url=f"/rooms/{room_id}",
+                share_url=share_url,
             ),
         )
 

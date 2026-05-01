@@ -12,7 +12,7 @@ export function InterpreterStatusPanel({
     <section className="panel interpreter-panel">
       <div className="panel-header">
         <div>
-          <h3>BRSE AI Status</h3>
+          <h3>AI Relay Status</h3>
           <p>Shows room-wide relay activity from the virtual BRSE participant.</p>
         </div>
       </div>
@@ -21,7 +21,7 @@ export function InterpreterStatusPanel({
         {statuses.length === 0 ? (
           <div className="empty-state small">
             <strong>No BRSE relay activity yet</strong>
-            <p>Status updates appear once BRSE AI begins listening or relaying speech.</p>
+            <p>Status updates appear once AI relay begins listening or relaying speech.</p>
           </div>
         ) : null}
 

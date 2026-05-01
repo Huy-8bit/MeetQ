@@ -27,7 +27,7 @@ export function ParticipantList({
           <h3>Participants</h3>
           <p>
             {brseEnabled
-              ? "Human attendees and BRSE AI are tracked from room state."
+              ? "Human attendees and the AI relay are tracked from room state."
               : "Human attendees in the normal meeting."}
           </p>
         </div>
@@ -64,7 +64,7 @@ export function ParticipantList({
                   <span className="badge badge-host">Host</span>
                 ) : null}
                 {isVirtual ? (
-                  <span className="badge kind">BRSE AI</span>
+                  <span className="badge kind">AI relay</span>
                 ) : null}
                 {participant.is_screen_sharing ? (
                   <span className="badge live">Sharing screen</span>

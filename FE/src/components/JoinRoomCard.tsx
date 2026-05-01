@@ -1,10 +1,10 @@
 import { useEffect, useState, type FormEvent } from "react";
 import {
-  formatMeetingLanguagePair,
+  formatMeetingLanguageBridge,
   getLanguageLabel,
 } from "../lib/languages";
-import { formatExpiresAtHuman } from "../features/room/useRoomExpiry";
-import type { MeetingLanguage, RoomSnapshotResponse } from "../types/api";
+import { formatExpiresAtHuman, useRoomExpiry } from "../features/room/useRoomExpiry";
+import type { MeetingLanguage, ParticipantSnapshot, RoomSnapshotResponse } from "../types/api";
 
 interface JoinRoomCardProps {
   room: RoomSnapshotResponse["room"];
@@ -37,11 +37,20 @@ export function JoinRoomCard({
 
   const languagePairUnavailable = meetingLanguages.length !== 2;
   const humanParticipants = participants.filter(
-    (participant) => participant.kind !== "virtual_brse" && !participant.is_virtual,
+    (participant) => isHumanParticipant(participant),
   );
-  const brseParticipantCount = participants.length - humanParticipants.length;
+  const virtualParticipants = participants.filter(
+    (participant) => !isHumanParticipant(participant),
+  );
+  const brseEnabled = room.brse_enabled !== false;
 
   const expiresLabel = formatExpiresAtHuman(room.expires_at);
+  const { remainingLabel } = useRoomExpiry(room.expires_at);
+  const expirySummary = getExpirySummary({
+    expiresLabel,
+    isExpired,
+    remainingLabel,
+  });
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -69,7 +78,7 @@ export function JoinRoomCard({
 
     if (!meetingLanguages.includes(language)) {
       setValidationError(
-        `Choose one of the room meeting languages: ${formatMeetingLanguagePair(meetingLanguages)}.`,
+        `Choose one of the room meeting languages: ${formatMeetingLanguageBridge(meetingLanguages)}.`,
       );
       return;
     }
@@ -83,140 +92,232 @@ export function JoinRoomCard({
 
   return (
     <section className="join-room-shell">
-      <div className="join-room-hero">
-        <span className="product-kicker">Join meeting</span>
-        <h1>{room.room_id}</h1>
-        <p>{formatMeetingLanguagePair(meetingLanguages)}</p>
+      <div className="join-room-card join-room-card-minimal">
+        <div className="join-room-topline">
+          <div>
+            <span className="product-kicker">Join</span>
+            <h1>Enter room</h1>
+          </div>
 
-        <div className="join-room-meta-row">
-          <div>
-            <span>Participants</span>
-            <strong>{room.participant_count}</strong>
+          <div className="join-room-id-badge" aria-label={`Room ${room.room_id}`}>
+            <span>Room</span>
+            <strong>{room.room_id}</strong>
           </div>
-          <div>
-            <span>Mode</span>
-            <strong>{room.brse_enabled === false ? "Normal" : "BRSE relay"}</strong>
-          </div>
-          {expiresLabel ? (
-            <div>
-              <span>Expires at</span>
-              <strong className={isExpired ? "expiry-label expiry-label-expired" : "expiry-label"}>
-                {isExpired ? "Expired" : expiresLabel}
-              </strong>
-            </div>
-          ) : null}
         </div>
-      </div>
 
-      {isExpired ? (
-        <div className="join-room-card">
+        <div className="join-room-context-strip">
+          <CompactMeta label="Languages" value={formatLanguageBridge(meetingLanguages)} />
+          <RoomModeBadge brseEnabled={brseEnabled} />
+          {expirySummary ? <CompactMeta label="Time" value={expirySummary} danger={isExpired} /> : null}
+        </div>
+
+        {isExpired ? (
           <div className="room-expired-state">
             <span className="room-expired-icon" aria-hidden="true">⏱</span>
-            <strong>This meeting has ended</strong>
-            <p>The room expired and is no longer accepting new participants.</p>
+            <strong>Meeting ended</strong>
+            <p>Room expired.</p>
           </div>
-        </div>
-      ) : (
-        <div className="join-room-card">
-          <div className="join-form-header">
-            <span>Your setup</span>
-            <h2>Enter the room</h2>
-            <p>Name yourself and choose the language you will speak.</p>
-          </div>
+        ) : (
+          <>
+            <div className="join-room-form-card">
+              <div className="join-form-header">
+                <h2>Join as</h2>
+              </div>
 
-          <form className="join-form redesigned-join-form" onSubmit={(event) => void handleSubmit(event)}>
-            <label className="join-input-field">
-              <span>Your name</span>
-              <input
-                value={displayName}
-                onChange={(event) => {
-                  setDisplayName(event.target.value);
-                  setValidationError(null);
-                }}
-                maxLength={40}
-                placeholder="Display name"
-                required
-              />
-            </label>
+              <form className="join-form redesigned-join-form" onSubmit={(event) => void handleSubmit(event)}>
+                <label className="join-input-field">
+                  <span>Your name</span>
+                  <input
+                    value={displayName}
+                    onChange={(event) => {
+                      setDisplayName(event.target.value);
+                      setValidationError(null);
+                    }}
+                    maxLength={40}
+                    placeholder="Display name"
+                    required
+                  />
+                </label>
 
-            <label className="join-input-field">
-              <span>Your language</span>
-              <select
-                value={language}
-                onChange={(event) => {
-                  setLanguage(event.target.value as MeetingLanguage | "");
-                  setValidationError(null);
-                }}
-                disabled={languagePairUnavailable}
-              >
-                {languagePairUnavailable ? (
-                  <option value={language}>Meeting language pair unavailable</option>
-                ) : (
-                  <>
-                    <option value="">Choose your language</option>
-                    {meetingLanguages.map((item) => (
-                      <option key={item} value={item}>
-                        {getLanguageLabel(item)}
-                      </option>
-                    ))}
-                  </>
-                )}
-              </select>
-            </label>
+                <label className="join-input-field">
+                  <span>Your language</span>
+                  <select
+                    value={language}
+                    onChange={(event) => {
+                      setLanguage(event.target.value as MeetingLanguage | "");
+                      setValidationError(null);
+                    }}
+                    disabled={languagePairUnavailable}
+                  >
+                    {languagePairUnavailable ? (
+                      <option value={language}>Meeting language pair unavailable</option>
+                    ) : (
+                      <>
+                        <option value="">Select language</option>
+                        {meetingLanguages.map((item) => (
+                          <option key={item} value={item}>
+                            {getLanguageLabel(item)}
+                          </option>
+                        ))}
+                      </>
+                    )}
+                  </select>
+                </label>
 
-            <div className="join-language-summary">
-              <span>Meeting languages</span>
-              <strong>{formatMeetingLanguagePair(meetingLanguages)}</strong>
+                <button
+                  className="join-room-cta"
+                  type="submit"
+                  disabled={isSubmitting || languagePairUnavailable}
+                >
+                  {isSubmitting ? "Joining..." : "Join Meeting"}
+                </button>
+              </form>
+
+              {languagePairUnavailable ? (
+                <div className="inline-error">
+                  Room meeting language pair is unavailable. Reload room snapshot or ask the host to recreate the room.
+                </div>
+              ) : null}
+
+              {validationError ? <div className="inline-error">{validationError}</div> : null}
+              {error ? <div className="inline-error">{error}</div> : null}
             </div>
 
-            <button
-              className="join-room-cta"
-              type="submit"
-              disabled={isSubmitting || languagePairUnavailable}
-            >
-              {isSubmitting ? "Joining..." : "Join Meeting"}
-            </button>
-          </form>
+            <ParticipantPreviewList
+              humanParticipants={humanParticipants}
+              virtualParticipants={virtualParticipants}
+            />
+          </>
+        )}
+      </div>
+    </section>
+  );
+}
 
-          {languagePairUnavailable ? (
-            <div className="inline-error">
-              Room meeting language pair is unavailable. Reload room snapshot or ask the host to recreate the room.
+function CompactMeta({
+  label,
+  value,
+  danger = false,
+}: {
+  label: string;
+  value: string;
+  danger?: boolean;
+}) {
+  return (
+    <div className={danger ? "join-room-quick-stat is-expired" : "join-room-quick-stat"}>
+      <span>{label}</span>
+      <strong>{value}</strong>
+    </div>
+  );
+}
+
+function RoomModeBadge({ brseEnabled }: { brseEnabled: boolean }) {
+  return (
+    <div className={brseEnabled ? "join-mode-badge is-brse" : "join-mode-badge"}>
+      <span>Mode</span>
+      <strong>{brseEnabled ? "BRSE relay" : "Normal"}</strong>
+    </div>
+  );
+}
+
+function ParticipantPreviewList({
+  humanParticipants,
+  virtualParticipants,
+}: {
+  humanParticipants: ParticipantSnapshot[];
+  virtualParticipants: ParticipantSnapshot[];
+}) {
+  const visibleHumans = humanParticipants.slice(0, 5);
+  const hiddenHumanCount = Math.max(0, humanParticipants.length - visibleHumans.length);
+  const brseParticipant = virtualParticipants.find(
+    (participant) => participant.kind === "virtual_brse" || participant.is_virtual,
+  );
+
+  return (
+    <section className="join-participant-preview">
+      <div className="join-panel-header">
+        <span>Already inside</span>
+        <strong>{humanParticipants.length}</strong>
+      </div>
+
+      {humanParticipants.length === 0 ? (
+        <div className="participant-empty-compact">
+          <strong>No one yet</strong>
+          {brseParticipant ? (
+            <span className="virtual-participant-chip">AI relay virtual</span>
+          ) : null}
+        </div>
+      ) : (
+        <div className="participant-preview-list">
+          {visibleHumans.map((participant) => (
+            <div className="participant-preview" key={participant.participant_id}>
+              <div>
+                <strong>{participant.display_name}</strong>
+                <p>{formatParticipantStatus(participant.status)}</p>
+              </div>
+              <div className="participant-row-tags">
+                {participant.is_host ? <span className="badge badge-host">Host</span> : null}
+                <span className="language-pill">
+                  {getLanguageLabel(participant.language)}
+                </span>
+              </div>
+            </div>
+          ))}
+
+          {hiddenHumanCount > 0 ? (
+            <div className="participant-preview participant-preview-more">
+              <strong>{hiddenHumanCount} more participant{hiddenHumanCount === 1 ? "" : "s"}</strong>
             </div>
           ) : null}
 
-          {validationError ? <div className="inline-error">{validationError}</div> : null}
-          {error ? <div className="inline-error">{error}</div> : null}
-
-          <div className="join-participant-preview">
-            <div className="join-participant-preview-header">
-              <span>Already inside</span>
-              <strong>{humanParticipants.length}</strong>
+          {brseParticipant ? (
+            <div className="participant-preview virtual-participant-preview">
+              <div>
+                <strong>{brseParticipant.display_name || "AI Relay"}</strong>
+                <p>Virtual relay participant</p>
+              </div>
+              <span className="badge kind">AI relay</span>
             </div>
-            <div className="participant-preview-list">
-              {humanParticipants.length === 0 ? (
-                <p>No human participants connected yet.</p>
-              ) : (
-                humanParticipants.slice(0, 4).map((participant) => (
-                  <div className="participant-preview" key={participant.participant_id}>
-                    <div>
-                      <strong>{participant.display_name}</strong>
-                      <p>{participant.status}</p>
-                    </div>
-                    <div className="participant-row-tags">
-                      <span className="language-pill">
-                        {getLanguageLabel(participant.language)}
-                      </span>
-                    </div>
-                  </div>
-                ))
-              )}
-            </div>
-            {brseParticipantCount > 0 ? (
-              <p className="join-brse-note">BRSE AI relay will join automatically when relay mode is on.</p>
-            ) : null}
-          </div>
+          ) : null}
         </div>
       )}
     </section>
   );
+}
+
+function isHumanParticipant(participant: ParticipantSnapshot): boolean {
+  return participant.kind !== "virtual_brse" && !participant.is_virtual;
+}
+
+function formatLanguageBridge(meetingLanguages: MeetingLanguage[]): string {
+  return meetingLanguages.length === 2
+    ? formatMeetingLanguageBridge(meetingLanguages)
+    : "Meeting languages unavailable";
+}
+
+function formatParticipantStatus(status: ParticipantSnapshot["status"]): string {
+  return status
+    .split("_")
+    .map((part) => part[0].toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function getExpirySummary({
+  expiresLabel,
+  isExpired,
+  remainingLabel,
+}: {
+  expiresLabel: string;
+  isExpired: boolean;
+  remainingLabel: string;
+}): string {
+  if (isExpired) {
+    return "Expired";
+  }
+
+  if (remainingLabel) {
+    return remainingLabel;
+  }
+
+  return expiresLabel;
 }

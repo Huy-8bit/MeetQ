@@ -2,7 +2,6 @@ import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { api, ApiError } from "../lib/api";
 import {
-  formatMeetingLanguageBridge,
   getLanguageLabel,
   isMeetingLanguage,
   SUPPORTED_MEETING_LANGUAGES,
@@ -19,10 +18,6 @@ export function HomePage() {
   const [createValidationError, setCreateValidationError] = useState<string | null>(null);
   const [createError, setCreateError] = useState<string | null>(null);
   const [joinLookupError, setJoinLookupError] = useState<string | null>(null);
-
-  const selectedMeetingLanguages = [firstMeetingLanguage, secondMeetingLanguage].filter(
-    (language): language is MeetingLanguage => isMeetingLanguage(language),
-  );
 
   function handleFirstMeetingLanguageChange(nextLanguage: MeetingLanguage | "") {
     setFirstMeetingLanguage(nextLanguage);
@@ -93,111 +88,134 @@ export function HomePage() {
 
   return (
     <main className="home-page product-home">
-      <section className="landing-shell">
+      <section className="landing-shell landing-shell-minimal">
         <header className="landing-header">
           <div className="landing-brand">
-            <span className="landing-brand-mark">brseAI</span>
-            <div>
-              <strong>Multilingual meeting rooms</strong>
-              <p>Video, relay, transcript, and chat in one live room.</p>
-            </div>
+            <span className="landing-brand-mark">MQ</span>
+            <strong>MeetQ</strong>
           </div>
           <Link to="/test" className="utility-link">
-            Mic &amp; Translation Test
+            Mic test
           </Link>
         </header>
 
-        <div className="landing-content">
-          <section className="landing-intro">
-            <span className="product-kicker">Meeting-first relay</span>
-            <h1>Start a multilingual room without setting up an interpreter booth.</h1>
-            <p>
-              Choose the meeting language pair, share the room, and keep video,
-              screen share, BRSE relay, transcript, and chat in one focused workspace.
-            </p>
-            <div className="landing-proof-row">
-              <span>7 languages</span>
-              <span>BRSE relay mode</span>
-              <span>Live transcript</span>
-            </div>
-          </section>
+        <div className="create-room-layout">
+          <CreateRoomPanel
+            firstMeetingLanguage={firstMeetingLanguage}
+            secondMeetingLanguage={secondMeetingLanguage}
+            creating={creating}
+            createValidationError={createValidationError}
+            createError={createError}
+            onFirstLanguageChange={handleFirstMeetingLanguageChange}
+            onSecondLanguageChange={handleSecondMeetingLanguageChange}
+            onCreateRoom={() => {
+              void handleCreateRoom();
+            }}
+          />
 
-          <section className="room-launch-panel">
-            <div className="launch-section launch-section-primary">
-              <div className="launch-section-header">
-                <span>Create room</span>
-                <h2>Set the meeting pair</h2>
-                <p>Both participants choose from this pair when they join.</p>
-              </div>
-
-              <div className="language-pair-picker">
-                <LanguageSelectCard
-                  label="Language A"
-                  value={firstMeetingLanguage}
-                  onChange={handleFirstMeetingLanguageChange}
-                />
-                <div className="language-bridge-glyph" aria-hidden="true">to</div>
-                <LanguageSelectCard
-                  label="Language B"
-                  value={secondMeetingLanguage}
-                  onChange={handleSecondMeetingLanguageChange}
-                />
-              </div>
-
-              <div className="meeting-bridge-preview">
-                <span>Meeting bridge</span>
-                <strong>
-                  {selectedMeetingLanguages.length === 2
-                    ? formatMeetingLanguageBridge(selectedMeetingLanguages)
-                    : "Select two languages"}
-                </strong>
-              </div>
-
-              {createValidationError ? <div className="inline-error">{createValidationError}</div> : null}
-              {createError ? <div className="inline-error">{createError}</div> : null}
-
-              <div className="create-room-policy-note">
-                Meetings last 30 minutes
-              </div>
-
-              <button
-                className="create-room-cta"
-                type="button"
-                onClick={() => {
-                  void handleCreateRoom();
-                }}
-                disabled={creating}
-              >
-                {creating ? "Creating room..." : "Create Room"}
-              </button>
-            </div>
-
-            <div className="launch-section launch-section-secondary">
-              <div className="launch-section-header">
-                <span>Join existing</span>
-                <h2>Open a room</h2>
-              </div>
-
-              <div className="join-existing-row">
-                <input
-                  value={roomInput}
-                  onChange={(event) => {
-                    setRoomInput(event.target.value);
-                    setJoinLookupError(null);
-                  }}
-                  placeholder="rm_... or room link"
-                />
-                <button type="button" onClick={handleJoinExisting}>
-                  Open
-                </button>
-              </div>
-
-              {joinLookupError ? <div className="inline-error">{joinLookupError}</div> : null}
-            </div>
-          </section>
+          <JoinExistingRoomPanel
+            roomInput={roomInput}
+            joinLookupError={joinLookupError}
+            onRoomInputChange={(value) => {
+              setRoomInput(value);
+              setJoinLookupError(null);
+            }}
+            onOpenRoom={handleJoinExisting}
+          />
         </div>
       </section>
     </main>
+  );
+}
+
+function CreateRoomPanel({
+  firstMeetingLanguage,
+  secondMeetingLanguage,
+  creating,
+  createValidationError,
+  createError,
+  onFirstLanguageChange,
+  onSecondLanguageChange,
+  onCreateRoom,
+}: {
+  firstMeetingLanguage: MeetingLanguage | "";
+  secondMeetingLanguage: MeetingLanguage | "";
+  creating: boolean;
+  createValidationError: string | null;
+  createError: string | null;
+  onFirstLanguageChange: (language: MeetingLanguage | "") => void;
+  onSecondLanguageChange: (language: MeetingLanguage | "") => void;
+  onCreateRoom: () => void;
+}) {
+  return (
+    <section className="create-room-panel">
+      <div className="create-room-topline">
+        <div>
+          <span className="product-kicker">Create</span>
+          <h1>Create room</h1>
+        </div>
+        <div className="create-room-badges" aria-label="Room defaults">
+          <span>30 min</span>
+          <span>BRSE relay</span>
+        </div>
+      </div>
+
+      <div className="language-pair-picker">
+        <LanguageSelectCard
+          label="Language A"
+          value={firstMeetingLanguage}
+          onChange={onFirstLanguageChange}
+        />
+        <div className="language-bridge-glyph" aria-hidden="true">to</div>
+        <LanguageSelectCard
+          label="Language B"
+          value={secondMeetingLanguage}
+          onChange={onSecondLanguageChange}
+        />
+      </div>
+
+      {createValidationError ? <div className="inline-error">{createValidationError}</div> : null}
+      {createError ? <div className="inline-error">{createError}</div> : null}
+
+      <button
+        className="create-room-cta"
+        type="button"
+        onClick={onCreateRoom}
+        disabled={creating}
+      >
+        {creating ? "Creating..." : "Create Room"}
+      </button>
+    </section>
+  );
+}
+
+function JoinExistingRoomPanel({
+  roomInput,
+  joinLookupError,
+  onRoomInputChange,
+  onOpenRoom,
+}: {
+  roomInput: string;
+  joinLookupError: string | null;
+  onRoomInputChange: (value: string) => void;
+  onOpenRoom: () => void;
+}) {
+  return (
+    <section className="join-existing-panel">
+      <span>Open room</span>
+      <div className="join-existing-row">
+        <input
+          value={roomInput}
+          onChange={(event) => onRoomInputChange(event.target.value)}
+          placeholder="rm_... or room link"
+        />
+        <button type="button" onClick={onOpenRoom}>
+          Open
+        </button>
+      </div>
+
+      {joinLookupError ? <div className="inline-error">{joinLookupError}</div> : null}
+    </section>
   );
 }
 
