@@ -33,6 +33,15 @@ LIVEKIT_WS_URL_INTERNAL=ws://livekit:7880
 
 `LIVEKIT_WS_URL_INTERNAL` là URL container nội bộ cho Gateway/Interpreter.
 
+Production `meetqapp.com` deploy uses:
+
+```text
+LIVEKIT_WS_URL_PUBLIC=wss://rtc.meetqapp.com
+LIVEKIT_WS_URL_INTERNAL=ws://livekit:7880
+```
+
+Local development uses `ops/livekit/livekit.yaml`; production uses `ops/livekit/livekit.prod.yaml`.
+
 ## Root `docker-compose.yml` Snippet
 
 Snippet dưới đây chỉ tập trung vào phần LiveKit + Redis + hai backend services. Nó phải nằm trong file Compose ở root project, không nằm trong `BE/`.

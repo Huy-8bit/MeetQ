@@ -1,5 +1,151 @@
 # Backend Implementation State
 
+## Turn Update: 2026-05-02 MeetQ Production Domain Deploy (Kickoff)
+
+- Time: 2026-05-02T03:20:40+07:00
+- Mode: CODE-ONLY
+- Testing deferred: yes, per instruction
+
+### Objective Locked
+
+- Configure single-server production deploy for `meetqapp.com` and LiveKit subdomain `rtc.meetqapp.com`.
+- Keep FE public access on `https://meetqapp.com`, Gateway REST/WS behind Nginx, LiveKit signaling behind `wss://rtc.meetqapp.com`, and Redis/interpreter internal only.
+- Preserve local dev behavior by isolating production compose/Nginx/LiveKit config where needed.
+
+### Mandatory Read Status
+
+- Read required docs:
+  - `docs/backend/IMPLEMENTATION_STATE.md`
+  - `docs/backend/GATEWAY_DESIGN.md`
+  - `docs/backend/LIVEKIT_SETUP.md`
+  - `docs/backend/API_CONTRACT.md`
+- Read required runtime/deploy files:
+  - `docker-compose.yml`
+  - `ops/livekit/livekit.yaml`
+  - `BE/server/config.py`
+  - `.env.example`
+  - `BE/.env.example`
+  - `BE/Dockerfile`
+  - `FE/package.json`
+  - `FE/vite.config.ts`
+  - `FE/vite.config.js`
+  - current FE API/WS URL resolution code
+- Current finding:
+  - existing root Compose is local-dev oriented and exposes Gateway `8000` plus LiveKit signaling `7880` directly.
+  - no existing production Nginx config or FE Dockerfile was present.
+  - backend currently returns relative share/WS URLs and uses `LIVEKIT_WS_URL_PUBLIC` for browser LiveKit URL.
+
+### Initial Implementation Plan
+
+- Add production Nginx config for `meetqapp.com` and `rtc.meetqapp.com`.
+- Add isolated production compose topology with `nginx`, `fe`, `gateway`, `interpreter`, `livekit`, and `redis`, exposing only Nginx plus LiveKit media ports.
+- Add FE container deploy files and make production API default same-origin while preserving local dev default.
+- Add backend public URL settings so production responses can return `https://meetqapp.com` / `wss://meetqapp.com` and LiveKit `wss://rtc.meetqapp.com`.
+- Add production LiveKit config with public media assumptions while leaving local LiveKit config intact.
+- Sync `.env.example`, `BE/.env.example`, production deploy docs, then finalize this state entry.
+
+### Final Sync: MeetQ Production Domain Deploy
+
+- Time: 2026-05-02T03:26:05+07:00
+- Final status: production deploy path configured for one-server `meetqapp.com` stack with Nginx reverse proxy.
+
+### Production Routing Strategy
+
+- Public domains:
+  - `https://meetqapp.com/` -> `fe:80`
+  - `https://meetqapp.com/api/...` -> `gateway:8000`
+  - `wss://meetqapp.com/ws/...` -> `gateway:8000`
+  - `wss://rtc.meetqapp.com` -> `livekit:7880`
+- Internal services:
+  - `gateway:8000` is internal only in production compose.
+  - `fe:80` is internal only in production compose.
+  - `redis:6379` is internal only.
+  - `interpreter` has no public port.
+  - `livekit:7880` signaling is internal and exposed only through Nginx on `rtc.meetqapp.com`.
+- Public production ports:
+  - `80/tcp`, `443/tcp` on `nginx`
+  - `7881/tcp` LiveKit ICE TCP fallback
+  - `50000-50100/udp` LiveKit WebRTC media
+
+### Files Added
+
+- `ops/nginx/meetqapp.conf`
+  - Nginx server blocks for `meetqapp.com`, `www.meetqapp.com`, and `rtc.meetqapp.com`
+  - `/api/` REST proxy to Gateway
+  - `/ws/` WebSocket proxy to Gateway with upgrade headers and long timeouts
+  - LiveKit signaling proxy on `rtc.meetqapp.com` with WebSocket upgrade headers
+  - ACME challenge path and explicit certificate mount paths
+- `docker-compose.prod.yml`
+  - production-only topology with `nginx`, `fe`, `gateway`, `interpreter`, `livekit`, and `redis`
+  - no public Gateway/FE/Redis/LiveKit-signaling ports
+  - LiveKit media ports exposed
+- `ops/livekit/livekit.prod.yaml`
+  - production LiveKit config with `use_external_ip: true`, TCP fallback `7881`, and UDP range `50000-50100`
+  - production keys supplied via `LIVEKIT_KEYS` from compose env
+- `FE/Dockerfile`, `FE/nginx.conf`, `FE/.dockerignore`
+  - build Vite app and serve static assets on internal Nginx
+- `ops/certbot/www/.gitkeep`
+  - ACME webroot mount scaffold
+- `docs/backend/DEPLOY_PRODUCTION.md`
+  - DNS, Cloudflare, firewall, SSL bootstrap, env, start command, and smoke-check notes
+
+### Files Modified
+
+- `BE/server/config.py`
+  - added `PUBLIC_APP_URL`, `PUBLIC_GATEWAY_URL`, `PUBLIC_GATEWAY_WS_URL`
+- `BE/server/gateway/room_service.py`
+  - `share_url` now uses `PUBLIC_APP_URL`
+  - join response `websocket.url` now uses public Gateway WS URL
+  - `livekit.url` continues to use `LIVEKIT_WS_URL_PUBLIC`
+- `FE/src/lib/api.ts`
+  - production default API base URL is same-origin (`window.location.origin`)
+  - local dev default remains `http://localhost:8000`
+- `FE/src/vite-env.d.ts`
+  - added `PROD` env typing
+- `.env.example`
+  - converted to production deploy template for `meetqapp.com`
+  - includes `LIVEKIT_WS_URL_PUBLIC=wss://rtc.meetqapp.com`
+  - includes `PUBLIC_APP_URL=https://meetqapp.com`
+  - includes `PUBLIC_GATEWAY_URL=https://meetqapp.com`
+  - includes `PUBLIC_GATEWAY_WS_URL=wss://meetqapp.com`
+- `BE/.env.example`
+  - added public URL keys and production comments for backend-local env usage
+- `.gitignore`
+  - keeps real `.env` files ignored while allowing `.env.example` templates to be tracked
+- `BE/.gitignore`
+  - keeps real backend `.env` files ignored while allowing `BE/.env.example` to be tracked
+- `docker-compose.yml`
+  - local-dev compose now passes public URL env defaults to Gateway without changing current public local ports
+- `ops/livekit/livekit.yaml`
+  - marked as local development config
+- `docs/backend/GATEWAY_DESIGN.md`
+  - env list synced with new public URL settings
+- `docs/backend/LIVEKIT_SETUP.md`
+  - documented production LiveKit public/internal URLs and prod config file
+- `docs/backend/API_CONTRACT.md`
+  - added production public URL assumptions for REST, Gateway WS, and LiveKit WS
+
+### Production Response URLs
+
+- Create-room response:
+  - `join.share_url = https://meetqapp.com/rooms/{room_id}` in production.
+- Join-room response:
+  - `websocket.url = wss://meetqapp.com/ws/rooms/{room_id}?token=...` in production.
+  - `livekit.url = wss://rtc.meetqapp.com` in production.
+
+### Verification
+
+- Full test suite not run, per CODE-ONLY instruction.
+- New tests not added.
+- Existing tests not modified.
+- Lightweight checks run:
+  - `docker compose --env-file .env.example -f docker-compose.prod.yml config`
+  - `docker compose -f docker-compose.yml config`
+  - Python syntax parse for `BE/server/config.py` and `BE/server/gateway/room_service.py`
+  - `git diff --check`
+- Nginx runtime syntax check deferred because local `nginx` binary is unavailable and production certificates are not present in this workspace.
+- FE typecheck attempted with no emit; it stops on existing `LocalTrack/RemoteTrack.name` type errors in `FE/src/lib/livekit.ts`, unrelated to this deploy change.
+
 ## Turn Update: 2026-05-02 Telegram Room-Created Notification (Kickoff)
 
 - Time: 2026-05-02T02:14:56+07:00

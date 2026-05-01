@@ -92,7 +92,9 @@ LIVEKIT_API_KEY=devkey
 LIVEKIT_API_SECRET=secret
 LIVEKIT_WS_URL_PUBLIC=ws://localhost:7880
 LIVEKIT_WS_URL_INTERNAL=ws://livekit:7880
-PUBLIC_BASE_URL=http://localhost:8000
+PUBLIC_APP_URL=http://localhost:3000
+PUBLIC_GATEWAY_URL=http://localhost:8000
+PUBLIC_GATEWAY_WS_URL=
 SUPPORTED_LANGUAGES=vi,en,ja,zh,ko,fr,es
 RECENT_TRANSCRIPT_LIMIT=200
 REDIS_CHANNEL_GATEWAY_CONTROL=brseai:v1:gateway:control
@@ -102,6 +104,16 @@ REDIS_CHANNEL_INTERPRETER_EVENTS=brseai:v1:interpreter:events
 `LIVEKIT_WS_URL_PUBLIC` phải là URL browser truy cập được.
 
 `LIVEKIT_WS_URL_INTERNAL` dành riêng cho Interpreter Service trong Docker network.
+
+Production `meetqapp.com` values:
+
+```text
+LIVEKIT_WS_URL_PUBLIC=wss://rtc.meetqapp.com
+LIVEKIT_WS_URL_INTERNAL=ws://livekit:7880
+PUBLIC_APP_URL=https://meetqapp.com
+PUBLIC_GATEWAY_URL=https://meetqapp.com
+PUBLIC_GATEWAY_WS_URL=wss://meetqapp.com
+```
 
 ## Identifiers
 

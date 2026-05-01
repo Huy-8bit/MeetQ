@@ -28,6 +28,7 @@ import type {
   ScreenShareFeed,
   VideoFeed,
 } from "../types/livekit";
+import { resolveLiveKitUrl } from "./urls";
 
 const BRSE_LIVEKIT_IDENTITY_PREFIX = "interp::brse_ai";
 const DEFAULT_BRSE_PARTICIPANT_ID = "brse_ai";
@@ -44,7 +45,7 @@ export function createMeetingRoom(): Room {
 }
 
 export async function connectLiveKit(room: Room, url: string, token: string) {
-  await room.connect(url, token, {
+  await room.connect(resolveLiveKitUrl(url), token, {
     autoSubscribe: true,
   });
 }
@@ -275,7 +276,7 @@ export async function publishScreenShareTrack(room: Room): Promise<{
     track: videoTrack as LocalVideoTrack,
     publication,
     trackSid: publication.trackSid,
-    trackName: publication.trackName || videoTrack.name,
+    trackName: publication.trackName || getTrackRuntimeName(videoTrack),
   };
 }
 
@@ -306,7 +307,7 @@ function assertMediaDevicesSupported(): void {
 
   if (!isSecureContextValue) {
     throw new Error(
-      "Microphone/camera is unavailable in insecure context. Use HTTPS (or localhost) for this web app.",
+      "Microphone/camera is unavailable in an insecure context. Use HTTPS for this web app.",
     );
   }
 
@@ -406,7 +407,7 @@ export function buildMediaSnapshot(args: {
         kind: selfSnapshot?.kind ?? "human",
         source: "screen_share",
         trackSid: publication.trackSid,
-        trackName: publication.trackName || publication.track.name,
+        trackName: publication.trackName || getTrackRuntimeName(publication.track),
         track: publication.track as LocalVideoTrack,
         participant: null,
       });
@@ -670,11 +671,15 @@ function collectParticipantScreenShares(
       kind,
       source: "screen_share",
       trackSid: publication.trackSid,
-      trackName: publication.trackName || publication.track.name,
+      trackName: publication.trackName || getTrackRuntimeName(publication.track),
       track: publication.track as RemoteVideoTrack,
       participant,
     });
   });
+}
+
+function getTrackRuntimeName(track: unknown): string | undefined {
+  return (track as { name?: string }).name;
 }
 
 function compareVideoFeeds(left: VideoFeed, right: VideoFeed): number {

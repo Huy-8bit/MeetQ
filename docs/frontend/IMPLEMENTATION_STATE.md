@@ -1,5 +1,311 @@
 # Frontend Implementation State
 
+## Turn Update: 2026-05-02 MeetQ CDN Frontend Multi-Origin Runtime Config (Kickoff)
+
+- Time: 2026-05-02T03:42:26+07:00
+- Mode: CODE-ONLY
+- Testing deferred: yes, per instruction; no full test suite and no new tests
+
+### Objective Locked
+
+- Update FE production config for a CDN/static-app deployment on `https://meetqapp.com`.
+- Use separate production Gateway API origin `https://api.meetqapp.com`.
+- Use separate production Gateway WebSocket origin `wss://api.meetqapp.com`.
+- Keep LiveKit production signaling on `wss://rtc.meetqapp.com`.
+- Keep invite/share links on the FE public origin `https://meetqapp.com`.
+- Preserve local dev behavior with localhost env defaults.
+
+### Mandatory Read Status
+
+- Read required docs:
+  - `docs/frontend/IMPLEMENTATION_STATE.md`
+  - `docs/backend/API_CONTRACT.md`
+  - `docs/backend/IMPLEMENTATION_STATE.md`
+- Read required FE runtime/config files:
+  - `FE/src/lib/api.ts`
+  - `FE/src/lib/ws.ts`
+  - `FE/src/lib/livekit.ts`
+  - `FE/src/lib/urls.ts`
+  - `FE/src/features/room/useMeetingRoom.ts`
+  - `FE/src/types/api.ts`
+  - `FE/src/types/ws.ts`
+  - `FE/.env.example`
+  - `FE/.env.development`
+  - `FE/.env.production`
+  - `FE/vite.config.ts`
+  - `FE/vite.config.js`
+  - `FE/vite.config.d.ts`
+  - `FE/package.json`
+- Current finding:
+  - previous FE production strategy still allowed same-origin API/WS fallback from `meetqapp.com`.
+  - current deployment requirement explicitly separates FE CDN origin from Gateway API/WS origin.
+
+### Initial Implementation Plan
+
+- Change FE URL helper defaults to distinct production app/API/WS/RTC origins.
+- Add clear env names for the multi-origin model:
+  - `VITE_APP_ORIGIN`
+  - `VITE_API_BASE_URL`
+  - `VITE_WS_BASE_URL`
+  - `VITE_LIVEKIT_WS_URL`
+- Keep old env aliases temporarily readable for compatibility, but document the new names as canonical.
+- Update FE env templates for production and local dev.
+- Re-run URL hardcode search and lightweight FE typecheck.
+- Final state update will record the CDN deployment mapping and verification status.
+
+### Final Sync
+
+- Time: 2026-05-02T03:44:07+07:00
+- Final status: FE runtime config now matches the CDN frontend + separate Gateway API/WS + separate LiveKit production topology.
+- This supersedes the immediately previous same-origin production strategy entry.
+
+### FE-on-CDN Production Mapping
+
+- App / invite origin:
+  - `https://meetqapp.com`
+  - source of truth: `VITE_APP_ORIGIN`
+  - used by invite/share URL helpers only
+- Gateway REST origin:
+  - `https://api.meetqapp.com`
+  - source of truth: `VITE_API_BASE_URL`
+  - existing FE route paths like `/api/rooms` now resolve to `https://api.meetqapp.com/api/rooms`
+- Gateway WebSocket origin:
+  - `wss://api.meetqapp.com`
+  - source of truth: `VITE_WS_BASE_URL`
+  - relative backend WS payloads like `/ws/rooms/...` now resolve to `wss://api.meetqapp.com/ws/rooms/...`
+- LiveKit signaling:
+  - `wss://rtc.meetqapp.com`
+  - source of truth: backend `join.livekit.url`, with `VITE_LIVEKIT_WS_URL` as the production-safe fallback
+
+### Runtime Resolution Strategy
+
+- `FE/src/lib/urls.ts`
+  - production defaults are now explicit:
+    - `PRODUCTION_APP_ORIGIN=https://meetqapp.com`
+    - `PRODUCTION_API_BASE_URL=https://api.meetqapp.com`
+    - `PRODUCTION_GATEWAY_WS_BASE_URL=wss://api.meetqapp.com`
+    - `PRODUCTION_LIVEKIT_WS_URL=wss://rtc.meetqapp.com`
+  - `getPublicAppOrigin()` no longer uses browser origin as production fallback.
+  - `getApiBaseUrl()` no longer falls back to app origin in production.
+  - `resolveGatewayWebSocketUrl()` no longer derives production WS from the FE CDN origin.
+  - absolute backend-returned WS URLs are still preserved as-is.
+  - old aliases remain readable for compatibility:
+    - `VITE_PUBLIC_APP_URL`
+    - `VITE_GATEWAY_WS_BASE_URL`
+- `FE/src/lib/api.ts`
+  - still calls local route paths (`/api/...`) but resolves them through the explicit API origin.
+- `FE/src/lib/ws.ts`
+  - room WebSocket connects through `resolveGatewayWebSocketUrl(...)`.
+- `FE/src/lib/livekit.ts`
+  - LiveKit connect still prioritizes backend join payload URL and only uses RTC fallback when payload is empty/relative.
+- `FE/src/features/test/useMicTest.ts`
+  - mic-test WebSocket uses the same Gateway WS resolver.
+- `FE/src/features/test/useTranslationTest.ts`
+  - translation-test WebSocket uses the same Gateway WS resolver.
+
+### Env / Config Files
+
+- `FE/.env.example`
+  - documents local dev and production multi-origin values.
+- `FE/.env.development`
+  - `VITE_APP_ORIGIN=http://localhost:3000`
+  - `VITE_API_BASE_URL=http://localhost:8000`
+  - `VITE_WS_BASE_URL=ws://localhost:8000`
+  - `VITE_LIVEKIT_WS_URL=ws://localhost:7880`
+- `FE/.env.production`
+  - `VITE_APP_ORIGIN=https://meetqapp.com`
+  - `VITE_API_BASE_URL=https://api.meetqapp.com`
+  - `VITE_WS_BASE_URL=wss://api.meetqapp.com`
+  - `VITE_LIVEKIT_WS_URL=wss://rtc.meetqapp.com`
+- `FE/src/vite-env.d.ts`
+  - added `VITE_APP_ORIGIN` and `VITE_WS_BASE_URL` typings.
+- `FE/Dockerfile`
+  - build args/env defaults now match the multi-origin production values.
+
+### Localhost Assumption Review
+
+- Production-facing same-origin assumption removed from API/WS defaults.
+- Remaining localhost references are intentional local development config only:
+  - `FE/.env.development`
+  - local-dev section of `FE/.env.example`
+  - local-dev constants in `FE/src/lib/urls.ts`
+- Search covered:
+  - `localhost`
+  - `127.0.0.1`
+  - `:3000`
+  - `:8000`
+  - `:7880`
+  - `meetqapp.com`
+  - `api.meetqapp.com`
+  - `rtc.meetqapp.com`
+  - old env aliases
+
+### CORS Assumption
+
+- FE now behaves as a cross-origin frontend for production API/WS calls.
+- Backend production must allow browser origin `https://meetqapp.com`.
+- No backend files were changed in this turn.
+
+### Verification
+
+- Full test suite not run, per CODE-ONLY instruction.
+- New tests not added.
+- Existing tests not modified.
+- Lightweight checks run:
+  - `git diff --check`
+  - `npm exec tsc -- -p tsconfig.app.json` from `FE/`
+- Typecheck status: passed.
+
+## Turn Update: 2026-05-02 MeetQ Production Domain Runtime Config (Kickoff)
+
+- Time: 2026-05-02T03:29:32+07:00
+- Mode: CODE-ONLY
+- Testing deferred: yes, per instruction; no full test suite and no new tests
+
+### Objective Locked
+
+- Make the frontend production-ready for `https://meetqapp.com`.
+- Keep Gateway REST/WS on app origin in production.
+- Use backend/join payload LiveKit URL, with production-safe support for `wss://rtc.meetqapp.com`.
+- Remove production-facing localhost assumptions while preserving local dev fallback.
+
+### Mandatory Read Status
+
+- Read required docs:
+  - `docs/frontend/IMPLEMENTATION_STATE.md`
+  - `docs/backend/API_CONTRACT.md`
+  - `docs/backend/IMPLEMENTATION_STATE.md`
+- Read required FE runtime/config files:
+  - `FE/src/lib/api.ts`
+  - `FE/src/lib/ws.ts`
+  - `FE/src/lib/livekit.ts`
+  - `FE/src/features/room/useMeetingRoom.ts`
+  - `FE/src/types/api.ts`
+  - `FE/src/types/ws.ts`
+  - `FE/vite.config.ts`
+  - `FE/vite.config.js`
+  - `FE/vite.config.d.ts`
+  - `FE/package.json`
+  - `FE/src/main.tsx`
+  - `FE/src/App.tsx`
+  - related room/create/session files:
+    - `FE/src/pages/HomePage.tsx`
+    - `FE/src/pages/RoomPage.tsx`
+    - `FE/src/state/session.tsx`
+- Current finding:
+  - no existing `FE/.env*` files are present.
+  - FE already resolves relative Gateway WS from API origin.
+  - API base now has same-origin production fallback, but URL behavior is not centralized or documented in FE env templates.
+  - LiveKit room flow uses `join.livekit.url`; no direct production LiveKit fallback should point to local ports.
+
+### Initial Implementation Plan
+
+- Add a small FE URL helper for app origin, API base, Gateway WS, LiveKit URL, and invite/share URL resolution.
+- Update API and WS code to use that helper and keep local dev fallback isolated.
+- Add FE env templates for local dev and production domain values.
+- Adjust create/join/share behavior so production invite links resolve to `https://meetqapp.com`.
+- Search FE hardcoded `localhost`, `127.0.0.1`, `:3000`, `:8000`, and `:7880`; keep only dev-only config/template references.
+- Final state update will document production URL strategy, files changed, and verification status.
+
+### Final Sync
+
+- Time: 2026-05-02T03:34:00+07:00
+- Final status: frontend production URL/runtime config is ready for `https://meetqapp.com` and `wss://rtc.meetqapp.com`.
+
+### Production Domain Strategy
+
+- App public origin:
+  - canonical production app origin is `https://meetqapp.com`
+  - production invite/share URL helper resolves room paths against `https://meetqapp.com`
+- Gateway REST:
+  - FE calls existing `/api/...` route paths through centralized `buildApiUrl(...)`
+  - production default API base resolves to app public origin, so requests go to `https://meetqapp.com/api/...`
+  - local development uses `http://localhost:8000`
+- Gateway WebSocket:
+  - room/test WS URLs now use centralized `resolveGatewayWebSocketUrl(...)`
+  - absolute backend URLs are preserved
+  - relative backend URLs resolve from the API/app origin, so production becomes `wss://meetqapp.com/ws/...`
+  - local development resolves to `ws://localhost:8000/ws/...`
+- LiveKit:
+  - room join still uses backend `join.livekit.url` as the authoritative URL
+  - LiveKit connect now passes the URL through `resolveLiveKitUrl(...)`
+  - empty/relative fallback is production-safe: `wss://rtc.meetqapp.com`
+  - local development fallback remains `ws://localhost:7880`
+
+### Files Modified / Added
+
+- `FE/src/lib/urls.ts`
+  - added centralized URL helpers:
+    - `getPublicAppOrigin`
+    - `getApiBaseUrl`
+    - `buildApiUrl`
+    - `resolveGatewayWebSocketUrl`
+    - `resolveLiveKitUrl`
+    - `resolveInviteUrl`
+    - `buildRoomInviteUrl`
+- `FE/src/lib/api.ts`
+  - API URL building now delegates to `FE/src/lib/urls.ts`
+  - preserves public exports for existing callers
+- `FE/src/lib/ws.ts`
+  - Gateway room socket now resolves URLs through `resolveGatewayWebSocketUrl`
+- `FE/src/lib/livekit.ts`
+  - `connectLiveKit` now resolves backend/fallback LiveKit URLs through `resolveLiveKitUrl`
+  - insecure-context message no longer mentions localhost in user-facing runtime copy
+  - added a small track-name cast helper so the current LiveKit SDK types pass typecheck
+- `FE/src/features/test/useMicTest.ts`
+  - mic test WebSocket resolution now uses centralized Gateway WS helper
+- `FE/src/features/test/useTranslationTest.ts`
+  - translation test WebSocket resolution now uses centralized Gateway WS helper
+- `FE/src/vite-env.d.ts`
+  - added env typing for:
+    - `VITE_PUBLIC_APP_URL`
+    - `VITE_API_BASE_URL`
+    - `VITE_GATEWAY_WS_BASE_URL`
+    - `VITE_LIVEKIT_WS_URL`
+- `FE/.env.example`
+  - documented local development and production public URL values
+- `FE/.env.development`
+  - local dev defaults:
+    - `VITE_API_BASE_URL=http://localhost:8000`
+    - `VITE_PUBLIC_APP_URL=http://localhost:3000`
+    - `VITE_LIVEKIT_WS_URL=ws://localhost:7880`
+- `FE/.env.production`
+  - production defaults:
+    - `VITE_API_BASE_URL=`
+    - `VITE_PUBLIC_APP_URL=https://meetqapp.com`
+    - `VITE_LIVEKIT_WS_URL=wss://rtc.meetqapp.com`
+- `.gitignore`
+  - whitelisted the public FE env files so production/development URL templates can be tracked.
+
+### Localhost Assumption Review
+
+- Production-facing localhost assumptions removed from runtime API/WS/LiveKit resolution paths.
+- Remaining localhost references in FE are limited to:
+  - `FE/.env.development`
+  - local-development section of `FE/.env.example`
+  - local-dev fallback constants in `FE/src/lib/urls.ts`
+- Search covered:
+  - `localhost`
+  - `127.0.0.1`
+  - `:3000`
+  - `:8000`
+  - `:7880`
+  - `ws://`
+  - `wss://`
+  - `meetqapp.com`
+  - `rtc.meetqapp.com`
+
+### Verification
+
+- Full test suite not run, per CODE-ONLY instruction.
+- New tests not added.
+- Existing tests not modified.
+- Lightweight checks run:
+  - `git diff --check`
+  - `npm exec tsc -- -p tsconfig.app.json` from `FE/`
+- Typecheck status:
+  - passes after the small LiveKit track-name type compatibility helper.
+
 ## Turn Update: 2026-05-02 MeetQ Frontend Branding Rename (Kickoff)
 
 - Time: 2026-05-02T03:06:33+07:00

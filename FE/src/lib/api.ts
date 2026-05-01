@@ -14,8 +14,9 @@ import type {
   RoomSnapshotResponse,
   TranslationTestSessionResponse,
 } from "../types/api";
+import { buildApiUrl } from "./urls";
 
-const DEFAULT_API_BASE_URL = "http://localhost:8000";
+export { buildApiUrl, getApiBaseUrl } from "./urls";
 
 export class ApiError extends Error {
   code: string;
@@ -46,18 +47,6 @@ export class ApiError extends Error {
   }
 }
 
-export function getApiBaseUrl(): string {
-  return import.meta.env.VITE_API_BASE_URL?.trim() || DEFAULT_API_BASE_URL;
-}
-
-export function buildApiUrl(pathOrUrl: string): string {
-  if (/^https?:\/\//i.test(pathOrUrl)) {
-    return pathOrUrl;
-  }
-
-  return new URL(pathOrUrl, ensureTrailingSlash(getApiBaseUrl())).toString();
-}
-
 function buildAuthHeaders(token: string): HeadersInit {
   return {
     Authorization: `Bearer ${token}`,
@@ -74,10 +63,6 @@ export function leaveRoomBestEffort(roomId: string, token: string): boolean {
     keepalive: true,
   }).catch(() => undefined);
   return true;
-}
-
-function ensureTrailingSlash(input: string): string {
-  return input.endsWith("/") ? input : `${input}/`;
 }
 
 async function requestJson<T>(

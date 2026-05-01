@@ -23,6 +23,9 @@ class Settings(BaseSettings):
     livekit_api_secret: str
     livekit_ws_url_public: str = "ws://localhost:7880"
     livekit_ws_url_internal: str = "ws://localhost:7880"
+    public_app_url: str = "http://localhost:3000"
+    public_gateway_url: str = "http://localhost:8000"
+    public_gateway_ws_url: Optional[str] = None
     realtime_input_sample_rate: int = 16000
     realtime_output_sample_rate: int = 24000
     ws_stale_timeout_seconds: int = 90

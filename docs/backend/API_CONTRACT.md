@@ -20,6 +20,7 @@ Base assumptions:
 - REST base URL local dev: `http://localhost:8000`
 - Gateway WS base URL local dev: `ws://localhost:8000`
 - LiveKit WS URL local dev: `ws://localhost:7880`
+- Production public URLs: REST `https://meetqapp.com/api/...`, Gateway WS `wss://meetqapp.com/ws/...`, LiveKit WS `wss://rtc.meetqapp.com`
 - Supported languages: `vi`, `en`, `ja`, `zh`, `ko`, `fr`, `es`
 
 ## Screen Share Contract Addendum

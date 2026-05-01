@@ -4,6 +4,7 @@ import logging
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
+from urllib.parse import urljoin, urlsplit, urlunsplit
 
 from fastapi.encoders import jsonable_encoder
 from redis.asyncio import Redis
@@ -117,6 +118,21 @@ class RoomService:
         """Room token expiry: longer TTL for JWT validity."""
         exp = datetime.now(timezone.utc) + timedelta(seconds=self.settings.room_token_ttl_seconds)
         return exp.isoformat().replace("+00:00", "Z")
+
+    def _build_public_app_url(self, path: str) -> str:
+        return self._join_url(self.settings.public_app_url, path)
+
+    def _build_public_gateway_ws_url(self, path: str) -> str:
+        base_url = self.settings.public_gateway_ws_url
+        if not base_url:
+            gateway_url = urlsplit(self.settings.public_gateway_url)
+            scheme = "wss" if gateway_url.scheme == "https" else "ws"
+            base_url = urlunsplit((scheme, gateway_url.netloc, gateway_url.path, "", ""))
+        return self._join_url(base_url, path)
+
+    @staticmethod
+    def _join_url(base_url: str, path: str) -> str:
+        return urljoin(f"{base_url.rstrip('/')}/", path.lstrip("/"))
 
     def _is_room_expired(self, room_state) -> bool:
         """Check if room meeting duration has elapsed."""
@@ -247,7 +263,7 @@ class RoomService:
             for participant in room.virtual_participants:
                 await self._publish(EventType.PARTICIPANT_JOINED, room_id, participant)
 
-        share_url = f"/rooms/{room_id}"
+        share_url = self._build_public_app_url(f"/rooms/{room_id}")
         self._schedule_room_created_notification(room, share_url)
 
         return CreateRoomResponse(
@@ -464,7 +480,7 @@ class RoomService:
                 expires_at=self._token_exp_str(),
             ),
             websocket=JoinRoomResponseWebsocket(
-                url=f"/ws/rooms/{room_id}?token={room_token}",
+                url=self._build_public_gateway_ws_url(f"/ws/rooms/{room_id}?token={room_token}"),
             ),
             livekit=JoinRoomResponseLivekit(
                 url=self.settings.livekit_ws_url_public,

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api, getApiBaseUrl } from "../../lib/api";
+import { api } from "../../lib/api";
+import { resolveGatewayWebSocketUrl } from "../../lib/urls";
 import type { MicTestServerEvent } from "../../types/ws";
 
 export type MicTestUIStatus =
@@ -184,7 +185,7 @@ export function useMicTest() {
     }));
 
     // 3. Connect WebSocket
-    const wsUrl = resolveWsUrl(sessionResp.websocket.url);
+    const wsUrl = resolveGatewayWebSocketUrl(sessionResp.websocket.url);
     const ws = new WebSocket(wsUrl);
     wsRef.current = ws;
 
@@ -356,12 +357,4 @@ function floatToPcm16(float32: Float32Array): Int16Array {
     pcm[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
   }
   return pcm;
-}
-
-function resolveWsUrl(rawUrl: string): string {
-  if (/^wss?:\/\//i.test(rawUrl)) return rawUrl;
-  const apiBase = new URL(getApiBaseUrl());
-  const wsProto = apiBase.protocol === "https:" ? "wss:" : "ws:";
-  const base = `${wsProto}//${apiBase.host}`;
-  return new URL(rawUrl, base + "/").toString();
 }

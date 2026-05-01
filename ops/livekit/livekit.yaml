@@ -1,3 +1,4 @@
+# Local development config. Production uses ops/livekit/livekit.prod.yaml.
 port: 7880
 
 rtc:

@@ -4,7 +4,7 @@ import type {
   ServerEvent,
   WsEnvelope,
 } from "../types/ws";
-import { getApiBaseUrl } from "./api";
+import { resolveGatewayWebSocketUrl } from "./urls";
 
 const PING_INTERVAL_MS = 15000;
 const RECONNECT_DELAYS_MS = [1000, 2000, 4000, 8000];
@@ -46,7 +46,7 @@ export class GatewaySocket {
 
   constructor(rawUrl: string, roomId: string) {
     this.roomId = roomId;
-    this.url = resolveWebSocketUrl(rawUrl);
+    this.url = resolveGatewayWebSocketUrl(rawUrl);
   }
 
   subscribe(
@@ -425,18 +425,6 @@ export function releaseGatewaySocket(sessionKey: string): void {
     current.socket.disconnect("Session released");
     gatewaySocketRegistry.delete(sessionKey);
   }, REGISTRY_RELEASE_DELAY_MS);
-}
-
-function resolveWebSocketUrl(rawUrl: string): string {
-  if (/^wss?:\/\//i.test(rawUrl)) {
-    return rawUrl;
-  }
-
-  const apiUrl = new URL(getApiBaseUrl());
-  const wsBase = new URL(apiUrl.toString());
-  wsBase.protocol = apiUrl.protocol === "https:" ? "wss:" : "ws:";
-
-  return new URL(rawUrl, wsBase).toString();
 }
 
 function buildClientEventId(): string {
