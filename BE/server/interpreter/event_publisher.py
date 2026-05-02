@@ -54,6 +54,8 @@ class RedisEventPublisher:
         text: str,
         created_at: str,
         fallback_used: bool = False,
+        relay_focus: Optional[Dict[str, Any]] = None,
+        overlap: Optional[Dict[str, Any]] = None,
     ) -> None:
         await self._publish(
             EventType.TRANSCRIPT_PARTIAL,
@@ -67,6 +69,8 @@ class RedisEventPublisher:
                 created_at=created_at,
                 fallback_used=fallback_used,
                 is_final=False,
+                relay_focus=relay_focus,
+                overlap=overlap,
             ),
         )
 
@@ -81,6 +85,8 @@ class RedisEventPublisher:
         text: str,
         created_at: str,
         fallback_used: bool = False,
+        relay_focus: Optional[Dict[str, Any]] = None,
+        overlap: Optional[Dict[str, Any]] = None,
     ) -> None:
         await self._publish(
             EventType.TRANSCRIPT_FINAL,
@@ -94,6 +100,8 @@ class RedisEventPublisher:
                 created_at=created_at,
                 fallback_used=fallback_used,
                 is_final=True,
+                relay_focus=relay_focus,
+                overlap=overlap,
             ),
         )
 
@@ -113,6 +121,8 @@ class RedisEventPublisher:
         audio_track_name: Optional[str] = None,
         audience_participant_ids: Optional[list[str]] = None,
         fallback_used: bool = False,
+        relay_focus: Optional[Dict[str, Any]] = None,
+        overlap: Optional[Dict[str, Any]] = None,
     ) -> None:
         await self._publish(
             EventType.TRANSCRIPT_PARTIAL,
@@ -131,6 +141,8 @@ class RedisEventPublisher:
                 audience_participant_ids=audience_participant_ids or [],
                 fallback_used=fallback_used,
                 is_final=False,
+                relay_focus=relay_focus,
+                overlap=overlap,
             ),
         )
 
@@ -151,6 +163,8 @@ class RedisEventPublisher:
         audience_participant_ids: Optional[list[str]] = None,
         fallback_used: bool = False,
         latency_ms: Optional[int] = None,
+        relay_focus: Optional[Dict[str, Any]] = None,
+        overlap: Optional[Dict[str, Any]] = None,
     ) -> None:
         payload = self._build_relay_payload(
             transcript_id=transcript_id,
@@ -167,6 +181,8 @@ class RedisEventPublisher:
             audience_participant_ids=audience_participant_ids or [],
             fallback_used=fallback_used,
             is_final=True,
+            relay_focus=relay_focus,
+            overlap=overlap,
         )
         if latency_ms is not None:
             payload["latency_ms"] = latency_ms
@@ -185,6 +201,8 @@ class RedisEventPublisher:
         audio_track_name: Optional[str] = None,
         audience_participant_ids: Optional[list[str]] = None,
         audio_track: Optional[Dict[str, Any]] = None,
+        relay_focus: Optional[Dict[str, Any]] = None,
+        overlap: Optional[Dict[str, Any]] = None,
     ) -> None:
         audience_ids = audience_participant_ids or []
         payload: Dict[str, Any] = {
@@ -202,6 +220,10 @@ class RedisEventPublisher:
             payload["source_language"] = source_language
         if audio_track_name is not None:
             payload["audio_track_name"] = audio_track_name
+        if relay_focus is not None:
+            payload["relay_focus"] = relay_focus
+        if overlap is not None:
+            payload["overlap"] = overlap
         payload["audio_output"] = self._build_audio_output(
             speaker_id=speaker_id,
             src_lang=source_language,
@@ -249,9 +271,11 @@ class RedisEventPublisher:
         created_at: str,
         fallback_used: bool,
         is_final: bool,
+        relay_focus: Optional[Dict[str, Any]] = None,
+        overlap: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         speaker_ref = self._build_speaker_ref(speaker_id, speaker_name, src_lang)
-        return {
+        payload = {
             "transcript_id": transcript_id,
             "utterance_id": utterance_id,
             "kind": "source",
@@ -270,6 +294,11 @@ class RedisEventPublisher:
             "created_at": created_at or self._now_str(),
             "relay_mode": None,
         }
+        if relay_focus is not None:
+            payload["relay_focus"] = relay_focus
+        if overlap is not None:
+            payload["overlap"] = overlap
+        return payload
 
     def _build_relay_payload(
         self,
@@ -288,6 +317,8 @@ class RedisEventPublisher:
         audience_participant_ids: list[str],
         fallback_used: bool,
         is_final: bool,
+        relay_focus: Optional[Dict[str, Any]] = None,
+        overlap: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         speaker_ref = self._build_speaker_ref(speaker_id, speaker_name, src_lang)
         audio_output = self._build_audio_output(
@@ -298,7 +329,7 @@ class RedisEventPublisher:
             audio_track_name=audio_track_name,
             audience_participant_ids=audience_participant_ids,
         )
-        return {
+        payload = {
             "transcript_id": transcript_id,
             "utterance_id": utterance_id,
             "kind": "relay",
@@ -322,6 +353,11 @@ class RedisEventPublisher:
             "created_at": created_at or self._now_str(),
             "relay_mode": INTERPRETER_MODE_BRSE_PARTICIPANT,
         }
+        if relay_focus is not None:
+            payload["relay_focus"] = relay_focus
+        if overlap is not None:
+            payload["overlap"] = overlap
+        return payload
 
     def _build_audio_output(
         self,

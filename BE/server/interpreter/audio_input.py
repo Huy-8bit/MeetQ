@@ -72,11 +72,13 @@ class LiveKitAudioInput(AudioInput):
         self._stream_close_requested = False
         self._close_stream_on_stop = True
         self._consumer_ready = False
+        self._input_enabled = True
         self._warmup_chunks = deque(maxlen=warmup_chunks)
         self._dropped_chunks = 0
         self._dropped_chunks_total = 0
         self._overflow_events_total = 0
         self._warmup_dropped_total = 0
+        self._gated_chunks_dropped_total = 0
         self._chunks_enqueued_total = 0
         self._chunks_emitted_total = 0
         self._queue_high_watermark = 0
@@ -112,6 +114,7 @@ class LiveKitAudioInput(AudioInput):
             self._sentinel_sent = False
             self._close_stream_on_stop = True
             self._consumer_ready = False
+            self._input_enabled = True
             self._queue_high_watermark = 0
             self._warmup_high_watermark = 0
             self._pump_future = asyncio.run_coroutine_threadsafe(
@@ -159,17 +162,40 @@ class LiveKitAudioInput(AudioInput):
         else:
             logger.debug("Audio consumer paused for %s", self.participant_id)
 
+    def set_input_enabled(self, enabled: bool, *, reason: Optional[str] = None) -> None:
+        with self._state_lock:
+            if self._input_enabled == enabled:
+                return
+            self._input_enabled = enabled
+            self._buffer.clear()
+            self._warmup_chunks.clear()
+            self._drain_output_queue_locked()
+
+        state_label = "enabled" if enabled else "disabled"
+        if reason:
+            logger.info(
+                "Audio input gate %s for %s reason=%s",
+                state_label,
+                self.participant_id,
+                reason,
+            )
+        else:
+            logger.info("Audio input gate %s for %s", state_label, self.participant_id)
+
     def stats_snapshot(self) -> dict[str, int | bool]:
         with self._state_lock:
             warmup_depth = len(self._warmup_chunks)
             ready = self._consumer_ready
+            input_enabled = self._input_enabled
         return {
             "ready": ready,
+            "input_enabled": input_enabled,
             "queue_depth": min(self._q.qsize(), self._queue_capacity),
             "warmup_depth": warmup_depth,
             "dropped_chunks_total": self._dropped_chunks_total,
             "overflow_events_total": self._overflow_events_total,
             "warmup_dropped_total": self._warmup_dropped_total,
+            "gated_chunks_dropped_total": self._gated_chunks_dropped_total,
             "chunks_enqueued_total": self._chunks_enqueued_total,
             "chunks_emitted_total": self._chunks_emitted_total,
             "queue_high_watermark": self._queue_high_watermark,
@@ -223,6 +249,9 @@ class LiveKitAudioInput(AudioInput):
 
     def _enqueue_chunk(self, chunk: bytes) -> None:
         with self._state_lock:
+            if not self._input_enabled:
+                self._gated_chunks_dropped_total += 1
+                return
             if not self._consumer_ready:
                 if len(self._warmup_chunks) == self._warmup_chunks.maxlen:
                     self._warmup_dropped_total += 1

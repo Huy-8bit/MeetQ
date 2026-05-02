@@ -1,5 +1,52 @@
 # Frontend Implementation State
 
+## Turn Update: 2026-05-02 Room Expiry Exit Enforcement (Kickoff)
+
+- Time: 2026-05-02T14:20:55+07:00
+- Mode: CODE-ONLY
+- Testing deferred: yes, per instruction; no full test suite and no new tests
+
+### Objective Locked
+
+- Enforce the 30-minute room expiry in the frontend runtime, not only in countdown UI.
+- When `expires_at` is reached or backend reports expiry, shut down the active room session and take the user out of the meeting screen.
+- Prevent Gateway WebSocket reconnects, LiveKit reconnects, local media, screen share, or stale callbacks from reviving an expired room.
+- Keep create/join/leave/chat/screen-share/BRSE/host flows unchanged outside the expiry path.
+
+### Mandatory Read Status
+
+- Read required docs:
+  - `docs/frontend/IMPLEMENTATION_STATE.md`
+  - `docs/backend/API_CONTRACT.md`
+  - `docs/backend/IMPLEMENTATION_STATE.md`
+- Read required FE runtime files:
+  - `FE/src/features/room/useMeetingRoom.ts`
+  - `FE/src/pages/RoomPage.tsx`
+  - `FE/src/lib/ws.ts`
+  - `FE/src/lib/api.ts`
+  - `FE/src/types/api.ts`
+  - `FE/src/types/ws.ts`
+  - related routing/join/create/landing files:
+    - `FE/src/App.tsx`
+    - `FE/src/pages/HomePage.tsx`
+    - `FE/src/components/JoinRoomCard.tsx`
+    - `FE/src/components/RoomTopBar.tsx`
+    - `FE/src/features/room/useRoomExpiry.ts`
+    - `FE/src/state/session.tsx`
+    - `FE/src/lib/livekit.ts`
+
+### Initial Expiry Exit Strategy
+
+- Add a centralized expired-room shutdown path in `useMeetingRoom`.
+- Trigger it from:
+  - local `expires_at` timer
+  - immediate stale `expires_at` detection on session/snapshot hydration
+  - `room.expired` Gateway event
+  - backend `room_expired` WebSocket error or expired close code
+- Use an `expiredShutdown` guard alongside existing manual shutdown guards so reconnect/lifecycle callbacks cannot revive an expired room.
+- UX strategy: cleanly leave the room screen and redirect to the landing page with the short message "This meeting has ended."
+- Refreshing/opening an already expired room link should stay out of meeting UI and show the existing expired join/interstitial state.
+
 ## Turn Update: 2026-05-02 MeetQ CDN Frontend Multi-Origin Runtime Config (Kickoff)
 
 - Time: 2026-05-02T03:42:26+07:00

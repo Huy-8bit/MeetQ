@@ -60,6 +60,8 @@ class InterpreterRealtimeClient(RealtimeClient):
         self.on_audio_delta: Callable[[str], None] = lambda enc: None
         self.on_audio_done: Callable[[], None] = lambda: None
         self.on_status_change: Callable[[str], None] = lambda s: None
+        self.on_speech_started: Callable[[], None] = lambda: None
+        self.on_speech_stopped: Callable[[Optional[int]], None] = lambda duration_ms: None
         self.on_error: Callable[[Dict[str, Any]], None] = lambda err: None
 
     def _current_instructions(self) -> str:
@@ -247,6 +249,7 @@ class InterpreterRealtimeClient(RealtimeClient):
             self._first_audio_delta_at = None
             self._response_audio_chunks = 0
             self._log(f"speech_started src={self.src_lang} tgt={self.tgt_lang}")
+            self.on_speech_started()
             self.on_status_change("capturing")
             if self._assistant_speaking:
                 await self._cancel_response(ws)
@@ -261,6 +264,7 @@ class InterpreterRealtimeClient(RealtimeClient):
                 self._log("speech_stopped")
             else:
                 self._log(f"speech_stopped duration_ms={duration_ms}")
+            self.on_speech_stopped(duration_ms)
 
         elif etype == "input_audio_buffer.committed":
             self._remember_conversation_item_from_event(event)

@@ -1,5 +1,154 @@
 # Backend Implementation State
 
+## Turn Update: 2026-05-02 BRSE Overlap Speech Arbitration (Kickoff)
+
+- Time: 2026-05-02T14:05:37+07:00
+- Mode: CODE-ONLY
+- Testing deferred: yes, per instruction
+
+### Objective Locked
+
+- Harden room-level BRSE interpreter runtime for overlapping speakers.
+- Reduce mixed relay/transcript output when multiple human mic tracks become active near the same time.
+- Keep single-speaker happy path unchanged and avoid frontend or gateway core redesign.
+
+### Mandatory Read Status
+
+- Read required docs:
+  - `docs/backend/IMPLEMENTATION_STATE.md`
+  - `docs/backend/INTERPRETER_DESIGN.md`
+  - `docs/backend/API_CONTRACT.md`
+- Read required runtime files:
+  - `BE/server/interpreter/room_manager.py`
+  - `BE/server/interpreter/interpreter_client.py`
+  - `BE/server/interpreter/livekit_runtime.py`
+  - `BE/server/interpreter/audio_input.py`
+  - `BE/server/interpreter/output_router.py`
+  - `BE/server/interpreter/meeting_config.py`
+  - `BE/server/interpreter/event_publisher.py`
+  - `BE/server/src/realtime/client.py`
+  - `BE/server/src/common/lang.py`
+- Path note: requested `BE/src/realtime/client.py` and `BE/src/common/lang.py` do not exist in this checkout; active files are under `BE/server/src/...`.
+- Related state/relay files inspected:
+  - `BE/server/events.py`
+  - `BE/server/gateway/event_consumer.py`
+  - `BE/server/models.py`
+  - FE status usage was skimmed only to avoid choosing a backend status shape that would obviously break runtime consumers; no FE edits planned.
+
+### Root Cause / Hypothesis
+
+- Current BRSE runtime starts an independent realtime client and output router per speaker mic track.
+- Realtime VAD can detect speech per speaker, but the room manager does not arbitrate which speaker owns room-level relay focus.
+- During overlap, multiple speaker clients can publish source transcript, relay transcript, and BRSE audio concurrently.
+- Room-level BRSE semantics therefore degrade because the virtual BRSE participant appears to relay multiple speakers at once, and mic bleed/overlap can cause models to merge or misattribute content.
+
+### Chosen Policy
+
+- Implement deterministic single-primary-speaker arbitration at room scope.
+- The first speaker whose realtime VAD reports `speech_started` claims relay focus.
+- While focus is held, later speakers are marked `blocked_due_to_overlap`; their relay input is gated and their transcript/audio callbacks are suppressed for that overlapped turn.
+- Focus is released only after the primary speaker reaches idle and a short cooldown elapses, preventing rapid flip-flop between speakers.
+- Degraded overlap behavior: relay less content but keep output attributable, serialized, and easier to understand.
+
+### Initial Implementation Plan
+
+- Add a small input gate to `LiveKitAudioInput` so the manager can temporarily drop overlapped speaker frames without tearing down LiveKit streams.
+- Add speech-start/speech-stop callbacks to `InterpreterRealtimeClient` for room-level arbitration while keeping existing status callbacks.
+- Add room-level speaker lifecycle/focus state in `RoomInterpreterManager`: `idle`, `listening`, `speaking`, `cooling_down`, `blocked_due_to_overlap`.
+- Suppress non-focus transcript/audio publication and clear queued router output for blocked speakers.
+- Enrich interpreter status/transcript payloads with relay focus/overlap metadata for observability.
+- Add prompt guardrail instructing a runtime to relay only its assigned speaker and ignore overlapping bleed.
+- Final state update will list changed files, policy behavior, and deferred verification.
+
+### Final Sync: BRSE Overlap Speech Arbitration
+
+- Time: 2026-05-02T14:11:46+07:00
+- Final status: backend/runtime overlap handling implemented with deterministic room-level relay focus.
+
+### Arbitration Policy Implemented
+
+- Policy name: `single_primary_speaker_serialized`.
+- First speaker whose realtime VAD reports `speech_started` claims room relay focus.
+- The focus speaker is the only speaker allowed to publish source transcript, relay transcript, and BRSE audio for that turn.
+- Later speakers that start while focus is held are marked `blocked_due_to_overlap`.
+- Blocked speakers have their `LiveKitAudioInput` gate disabled, queued router output cleared, transcript state dropped, and text/audio callbacks suppressed.
+- Focus is released only after the primary speaker reaches realtime `idle` and a short `0.85s` cooldown elapses.
+- Blocked speakers are re-enabled after focus release and can claim focus on their next detected speech turn.
+
+### Speaker State Model
+
+- Added room-manager lifecycle states:
+  - `idle`
+  - `listening`
+  - `speaking`
+  - `cooling_down`
+  - `blocked_due_to_overlap`
+- State owner is `RoomInterpreterManager`; realtime clients remain per-speaker, but publish permission is now room-arbitrated.
+- Runtime focus metadata tracks:
+  - `relay_focus_speaker_id`
+  - `relay_focus_generation`
+  - `relay_focus_started_at`
+  - `relay_focus_cooldown_until`
+  - blocked speaker ids/generations and overlap start timestamps.
+
+### Event / Observability Changes
+
+- `interpreter.status` can now emit `status=blocked_due_to_overlap` for suppressed overlap speakers.
+- `interpreter.status`, `transcript.partial`, and `transcript.final` can include optional:
+  - `relay_focus.policy`
+  - `relay_focus.active_speaker_id`
+  - `relay_focus.speaker_state`
+  - `relay_focus.blocked_speaker_ids`
+  - `relay_focus.suppressed_speaker_count`
+  - `relay_focus.cooldown_ms`
+  - `overlap.detected`
+  - `overlap.primary_speaker_id`
+  - `overlap.speaker_blocked`
+  - `overlap.overlap_window_ms`
+- Added logs for:
+  - relay focus claimed/released
+  - speaker lifecycle transitions
+  - overlap detected
+  - blocked overlap turn finished
+  - audio input gate enabled/disabled
+
+### Files Modified
+
+- `BE/server/interpreter/room_manager.py`
+  - added room-level relay focus arbitration
+  - added speaker lifecycle state
+  - suppresses non-focus transcript/audio callbacks
+  - publishes overlap/focus metadata
+- `BE/server/interpreter/audio_input.py`
+  - added input gate to drop frames for temporarily blocked speakers
+  - added gate stats to audio input snapshot
+- `BE/server/interpreter/interpreter_client.py`
+  - added speech-start/speech-stop callbacks from realtime VAD events
+- `BE/server/interpreter/event_publisher.py`
+  - added optional `relay_focus` and `overlap` metadata on transcript/status payloads
+- `BE/server/interpreter/meeting_config.py`
+  - added prompt guardrail to relay only the assigned speaker and ignore overlap bleed
+- `docs/backend/API_CONTRACT.md`
+  - documented `blocked_due_to_overlap` status and optional overlap metadata
+- `docs/backend/IMPLEMENTATION_STATE.md`
+  - updated this implementation state.
+
+### Degraded Behavior Chosen
+
+- The runtime intentionally prefers fewer, cleaner relay outputs over attempting to translate every overlapping speaker at once.
+- During overlap, secondary speakers are temporarily suppressed instead of being translated concurrently.
+- This should reduce wrong-speaker relay, mixed transcripts, and overlapping BRSE audio from the virtual participant.
+- Single-speaker path remains the same: input gate defaults enabled, focus is claimed on normal speech, and transcript/audio publish normally.
+
+### Verification
+
+- Full test suite not run, per CODE-ONLY instruction.
+- New tests not added.
+- Existing tests not modified.
+- Lightweight checks run:
+  - `python -m py_compile BE/server/interpreter/audio_input.py BE/server/interpreter/interpreter_client.py BE/server/interpreter/meeting_config.py BE/server/interpreter/event_publisher.py BE/server/interpreter/room_manager.py`
+  - `git diff --check`
+
 ## Turn Update: 2026-05-02 MeetQ Production Domain Deploy (Kickoff)
 
 - Time: 2026-05-02T03:20:40+07:00

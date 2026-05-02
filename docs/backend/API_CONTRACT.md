@@ -1130,7 +1130,32 @@ Valid `status`:
 - `translating`
 - `playing`
 - `fallback_text_only`
+- `blocked_due_to_overlap`
 - `error`
+
+Optional overlap metadata can appear on `interpreter.status`, `transcript.partial`, and `transcript.final`:
+
+```json
+{
+  "relay_focus": {
+    "policy": "single_primary_speaker_serialized",
+    "active_speaker_id": "pt_primary",
+    "speaker_state": "speaking | cooling_down | blocked_due_to_overlap | listening | idle",
+    "is_active_relay_speaker": true,
+    "blocked_speaker_ids": ["pt_overlap"],
+    "suppressed_speaker_count": 1,
+    "cooldown_ms": 420
+  },
+  "overlap": {
+    "detected": true,
+    "speaker_blocked": false,
+    "primary_speaker_id": "pt_primary",
+    "blocked_speaker_ids": ["pt_overlap"],
+    "suppressed_speaker_count": 1,
+    "overlap_window_ms": 310
+  }
+}
+```
 
 ## `pong`
 
