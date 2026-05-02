@@ -76,6 +76,17 @@
   - The filmstrip remains full-width and fixed-height below the share surface.
 - Testing still deferred per instruction.
 
+### Follow-Up Hard 16:9 Fit
+
+- Time: 2026-05-02T15:13:24+07:00
+- Issue observed: stretching the browser horizontally could still produce a share surface wider than the available stage height, causing the visible video area to look clipped.
+- Fix:
+  - Added a measured `StageMediaSurface` around screen share rendering.
+  - The surface uses `ResizeObserver` to read the actual available stage slot and computes the largest rectangle that fits inside it at exactly 16:9.
+  - `.screen-share-frame` no longer relies on a fixed height clamp for desktop sizing; runtime style sets exact 16:9 width/height from the measured slot.
+  - The screen-share video remains `object-fit: contain`, so the full shared screen stays visible inside the hard 16:9 frame.
+- Testing still deferred per instruction.
+
 ## Turn Update: 2026-05-02 Room Expiry Exit Enforcement (Kickoff)
 
 - Time: 2026-05-02T14:20:55+07:00

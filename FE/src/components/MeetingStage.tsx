@@ -1,7 +1,10 @@
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { ParticipantSnapshot } from "../types/api";
 import type { ScreenShareFeed, VideoFeed } from "../types/livekit";
 import { ParticipantTile } from "./ParticipantTile";
 import { VideoTrackView } from "./MediaElements";
+
+const SCREEN_SHARE_ASPECT_RATIO = 16 / 9;
 
 interface MeetingStageProps {
   videos: VideoFeed[];
@@ -82,7 +85,7 @@ function SharedScreenStage({
 }) {
   return (
     <div className="screen-share-stage">
-      <div className="screen-share-frame">
+      <StageMediaSurface>
         {selectedScreenFeed?.track ? (
           <VideoTrackView
             track={selectedScreenFeed.track}
@@ -95,7 +98,7 @@ function SharedScreenStage({
             <p>Screen stream is connecting.</p>
           </div>
         )}
-      </div>
+      </StageMediaSurface>
 
       <ParticipantFilmstrip
         videos={videos}
@@ -103,6 +106,94 @@ function SharedScreenStage({
         brseEnabled={brseEnabled}
         relayStatusLabel={relayStatusLabel}
       />
+    </div>
+  );
+}
+
+function StageMediaSurface({ children }: { children: ReactNode }) {
+  const slotRef = useRef<HTMLDivElement | null>(null);
+  const [frameSize, setFrameSize] = useState<{
+    width: number;
+    height: number;
+  } | null>(null);
+
+  useEffect(() => {
+    const slot = slotRef.current;
+    if (!slot) {
+      return;
+    }
+
+    let animationFrame = 0;
+
+    const updateFrameSize = () => {
+      window.cancelAnimationFrame(animationFrame);
+      animationFrame = window.requestAnimationFrame(() => {
+        const availableWidth = slot.clientWidth;
+        const availableHeight = slot.clientHeight;
+        if (availableWidth <= 0 || availableHeight <= 0) {
+          return;
+        }
+
+        let width = availableWidth;
+        let height = width / SCREEN_SHARE_ASPECT_RATIO;
+        if (height > availableHeight) {
+          height = availableHeight;
+          width = height * SCREEN_SHARE_ASPECT_RATIO;
+        }
+
+        const nextSize = {
+          width: Math.floor(width),
+          height: Math.floor(height),
+        };
+
+        setFrameSize((current) => {
+          if (
+            current
+            && current.width === nextSize.width
+            && current.height === nextSize.height
+          ) {
+            return current;
+          }
+
+          return nextSize;
+        });
+      });
+    };
+
+    updateFrameSize();
+
+    if (typeof ResizeObserver === "undefined") {
+      window.addEventListener("resize", updateFrameSize);
+      return () => {
+        window.cancelAnimationFrame(animationFrame);
+        window.removeEventListener("resize", updateFrameSize);
+      };
+    }
+
+    const observer = new ResizeObserver(updateFrameSize);
+    observer.observe(slot);
+
+    return () => {
+      window.cancelAnimationFrame(animationFrame);
+      observer.disconnect();
+    };
+  }, []);
+
+  return (
+    <div className="screen-share-surface-slot" ref={slotRef}>
+      <div
+        className="screen-share-frame"
+        style={
+          frameSize
+            ? {
+                width: `${frameSize.width}px`,
+                height: `${frameSize.height}px`,
+              }
+            : undefined
+        }
+      >
+        {children}
+      </div>
     </div>
   );
 }
