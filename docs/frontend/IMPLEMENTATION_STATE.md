@@ -64,6 +64,18 @@
 - New tests not added.
 - Existing tests not modified.
 
+### Follow-Up Crop Fix
+
+- Time: 2026-05-02T15:04:20+07:00
+- Issue observed: the bounded stage prevented page expansion, but the shared source could still appear vertically cropped when the available stage was much wider than it was tall.
+- Cause: the frame used a fixed clamped height while still stretching to the full stage width, creating an ultrawide render box where any `cover` fallback looked cropped.
+- Fix:
+  - `VideoTrackView` now supports explicit `fit="contain"` and optional class names.
+  - Screen share rendering passes `fit="contain"` with `screen-share-video`.
+  - `.screen-share-frame` now keeps a 16:9 media surface and centers it, shrinking width when height is constrained instead of cropping the video.
+  - The filmstrip remains full-width and fixed-height below the share surface.
+- Testing still deferred per instruction.
+
 ## Turn Update: 2026-05-02 Room Expiry Exit Enforcement (Kickoff)
 
 - Time: 2026-05-02T14:20:55+07:00

@@ -113,6 +113,17 @@
   - `python -m py_compile BE/server/interpreter/meeting_config.py BE/server/interpreter/interpreter_client.py BE/server/interpreter/room_manager.py BE/server/interpreter/translation_test_client.py`
   - `git diff --check -- BE/server/interpreter/meeting_config.py BE/server/interpreter/interpreter_client.py BE/server/interpreter/room_manager.py`
 
+### Hotfix: Realtime Response Modalities Parameter
+
+- Time: 2026-05-02T15:06:07+07:00
+- Production log showed Realtime rejected manual source-transcript relay creation with:
+  - `unknown_parameter`
+  - `response.output_modalities`
+- Fixed `response.create` payload to use `response.modalities`, matching the Realtime websocket shape used elsewhere in this backend session config.
+- Lightweight checks rerun:
+  - `python -m py_compile BE/server/interpreter/interpreter_client.py BE/server/interpreter/meeting_config.py BE/server/interpreter/room_manager.py`
+  - `git diff --check -- BE/server/interpreter/interpreter_client.py BE/server/interpreter/meeting_config.py BE/server/interpreter/room_manager.py docs/backend/IMPLEMENTATION_STATE.md`
+
 ## Turn Update: 2026-05-02 BRSE Overlap Speech Arbitration (Kickoff)
 
 - Time: 2026-05-02T14:05:37+07:00

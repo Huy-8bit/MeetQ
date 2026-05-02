@@ -598,7 +598,7 @@ class InterpreterRealtimeClient(RealtimeClient):
             "type": "response.create",
             "response": {
                 "conversation": "none",
-                "output_modalities": modalities,
+                "modalities": modalities,
                 "instructions": instructions,
                 "input": [
                     {

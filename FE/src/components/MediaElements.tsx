@@ -14,13 +14,25 @@ import {
 interface VideoTrackViewProps {
   track: LocalVideoTrack | RemoteVideoTrack | null;
   mirrored?: boolean;
+  fit?: "cover" | "contain";
+  className?: string;
 }
 
 export function VideoTrackView({
   track,
   mirrored = false,
+  fit = "cover",
+  className,
 }: VideoTrackViewProps) {
   const ref = useRef<HTMLVideoElement | null>(null);
+  const videoClassName = [
+    "media-video",
+    mirrored ? "media-video-mirrored" : "",
+    fit === "contain" ? "media-video-contain" : "",
+    className ?? "",
+  ]
+    .filter(Boolean)
+    .join(" ");
 
   useEffect(() => {
     const element = ref.current;
@@ -43,7 +55,7 @@ export function VideoTrackView({
       autoPlay
       playsInline
       muted
-      className={mirrored ? "media-video media-video-mirrored" : "media-video"}
+      className={videoClassName}
     />
   );
 }

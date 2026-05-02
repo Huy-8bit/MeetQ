@@ -84,7 +84,11 @@ function SharedScreenStage({
     <div className="screen-share-stage">
       <div className="screen-share-frame">
         {selectedScreenFeed?.track ? (
-          <VideoTrackView track={selectedScreenFeed.track} />
+          <VideoTrackView
+            track={selectedScreenFeed.track}
+            fit="contain"
+            className="screen-share-video"
+          />
         ) : (
           <div className="screen-stage-placeholder">
             <strong>{selectedScreenSharer.display_name}</strong>

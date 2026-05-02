@@ -600,6 +600,10 @@ button {
   object-fit: cover;
 }
 
+.media-video-contain {
+  object-fit: contain;
+}
+
 .media-video-mirrored {
   transform: scaleX(-1);
 }
@@ -1643,13 +1647,19 @@ button {
   grid-template-rows: minmax(0, 1fr) auto;
   gap: 12px;
   overflow: hidden;
+  justify-items: center;
 }
 
 .screen-share-frame {
   min-width: 0;
-  min-height: 320px;
+  min-height: min(320px, 100%);
   height: min(var(--screen-share-frame-height), 100%);
+  width: auto;
+  max-width: 100%;
   max-height: 100%;
+  aspect-ratio: 16 / 9;
+  justify-self: center;
+  align-self: center;
   display: grid;
   place-items: center;
   border-radius: 18px;
@@ -1666,7 +1676,7 @@ button {
   height: 100%;
   max-width: 100%;
   max-height: 100%;
-  object-fit: contain;
+  object-fit: contain !important;
   background: #05070b;
 }
 
@@ -1692,7 +1702,9 @@ button {
 }
 
 .stage-video-strip {
+  justify-self: stretch;
   min-width: 0;
+  width: 100%;
   height: var(--stage-filmstrip-height);
   max-height: var(--stage-filmstrip-height);
   display: grid;
