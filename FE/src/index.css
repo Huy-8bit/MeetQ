@@ -1247,11 +1247,15 @@ button {
 /* ─── Redesigned Room Meeting Experience ───────────────────────────────────── */
 
 .room-page {
+  --screen-share-frame-height: clamp(340px, 58vh, 700px);
+  --stage-filmstrip-height: 150px;
   min-height: 100vh;
+  height: 100vh;
   padding: 14px;
   display: grid;
   grid-template-rows: auto auto minmax(0, 1fr);
   gap: 12px;
+  overflow: hidden;
   color: #e7eef7;
   background:
     linear-gradient(180deg, rgba(12, 18, 28, 0.94), rgba(7, 11, 18, 0.98)),
@@ -1506,8 +1510,11 @@ button {
 }
 
 .room-alert-stack {
+  min-height: 0;
+  max-height: min(18vh, 160px);
   display: grid;
   gap: 8px;
+  overflow-y: auto;
 }
 
 .room-page .banner {
@@ -1532,6 +1539,8 @@ button {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(360px, 420px);
   gap: 12px;
+  align-items: stretch;
+  overflow: hidden;
 }
 
 .room-main-column {
@@ -1540,27 +1549,37 @@ button {
   display: grid;
   grid-template-rows: minmax(0, 1fr) auto;
   gap: 12px;
+  overflow: hidden;
 }
 
 .meeting-stage {
+  min-width: 0;
   min-height: 0;
+  max-height: 100%;
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
   gap: 12px;
   padding: 14px;
+  overflow: hidden;
   border-radius: 24px;
   border: 1px solid rgba(148, 163, 184, 0.18);
   background:
     linear-gradient(180deg, rgba(15, 23, 42, 0.92), rgba(7, 10, 16, 0.96)),
     #0f172a;
   box-shadow: 0 28px 80px rgba(0, 0, 0, 0.34);
+  transition: border-color 160ms ease, background-color 160ms ease;
 }
 
 .stage-status-row {
+  min-width: 0;
   display: flex;
   justify-content: space-between;
   align-items: flex-start;
   gap: 14px;
+}
+
+.stage-status-row > div:first-child {
+  min-width: 0;
 }
 
 .stage-kicker,
@@ -1579,6 +1598,8 @@ button {
   color: #f8fafc;
   font-size: clamp(1.35rem, 2vw, 1.9rem);
   line-height: 1.1;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .stage-state-pills {
@@ -1599,11 +1620,14 @@ button {
 }
 
 .stage-video-grid {
+  min-width: 0;
   min-height: 0;
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
   gap: 12px;
   align-content: stretch;
+  overflow-y: auto;
+  padding-right: 2px;
 }
 
 .stage-video-grid.is-few {
@@ -1611,32 +1635,44 @@ button {
 }
 
 .screen-share-stage {
+  min-width: 0;
   min-height: 0;
+  height: 100%;
+  max-height: 100%;
   display: grid;
   grid-template-rows: minmax(0, 1fr) auto;
   gap: 12px;
+  overflow: hidden;
 }
 
 .screen-share-frame {
+  min-width: 0;
   min-height: 320px;
+  height: min(var(--screen-share-frame-height), 100%);
+  max-height: 100%;
+  display: grid;
+  place-items: center;
   border-radius: 18px;
   overflow: hidden;
   border: 1px solid rgba(148, 163, 184, 0.22);
   background:
     linear-gradient(135deg, rgba(15, 23, 42, 0.4), rgba(0, 0, 0, 0.72)),
     #05070b;
+  contain: layout paint;
 }
 
 .screen-share-frame .media-video {
   width: 100%;
   height: 100%;
+  max-width: 100%;
+  max-height: 100%;
   object-fit: contain;
   background: #05070b;
 }
 
 .screen-stage-placeholder {
   width: 100%;
-  min-height: 320px;
+  min-height: 0;
   height: 100%;
   display: grid;
   place-items: center;
@@ -1656,16 +1692,21 @@ button {
 }
 
 .stage-video-strip {
+  min-width: 0;
+  height: var(--stage-filmstrip-height);
+  max-height: var(--stage-filmstrip-height);
   display: grid;
   grid-auto-flow: column;
-  grid-auto-columns: minmax(190px, 240px);
+  grid-auto-columns: minmax(190px, 230px);
   gap: 10px;
   overflow-x: auto;
+  overflow-y: hidden;
   padding-bottom: 3px;
 }
 
 .stage-empty-state {
-  min-height: 360px;
+  min-width: 0;
+  min-height: min(360px, 100%);
   display: grid;
   place-content: center;
   text-align: center;
@@ -1677,6 +1718,9 @@ button {
 
 .room-page .participant-tile {
   min-width: 0;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
   overflow: hidden;
   border-radius: 18px;
   border: 1px solid rgba(148, 163, 184, 0.16);
@@ -1692,10 +1736,43 @@ button {
 }
 
 .room-page .participant-media-frame {
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
   aspect-ratio: 16 / 10;
   background:
     radial-gradient(circle at top left, rgba(45, 212, 191, 0.12), transparent 32%),
     linear-gradient(145deg, #111827, #020617);
+}
+
+.stage-video-strip .participant-tile {
+  height: calc(var(--stage-filmstrip-height) - 4px);
+}
+
+.stage-video-strip .participant-media-frame {
+  height: 86px;
+  aspect-ratio: auto;
+}
+
+.stage-video-strip .participant-tile-footer {
+  min-height: 56px;
+  overflow: hidden;
+}
+
+.stage-video-strip .participant-tile-footer > div:first-child {
+  min-width: 0;
+}
+
+.stage-video-strip .participant-tile-footer strong,
+.stage-video-strip .participant-tile-footer p {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.stage-video-strip .participant-tile-tags {
+  display: none;
 }
 
 .room-page .participant-fallback {
@@ -2174,8 +2251,30 @@ button {
 }
 
 @media (max-width: 1180px) {
+  .room-page {
+    height: auto;
+    min-height: 100vh;
+    overflow: visible;
+  }
+
+  .room-alert-stack {
+    max-height: none;
+    overflow: visible;
+  }
+
   .room-shell {
     grid-template-columns: 1fr;
+    overflow: visible;
+  }
+
+  .room-main-column,
+  .meeting-stage {
+    overflow: hidden;
+  }
+
+  .screen-share-frame {
+    height: min(clamp(300px, 56vw, 620px), 68vh);
+    max-height: 68vh;
   }
 
   .room-side-panel {
@@ -2266,6 +2365,20 @@ button {
   .screen-stage-placeholder,
   .stage-empty-state {
     min-height: 260px;
+  }
+
+  .stage-video-strip {
+    height: 136px;
+    max-height: 136px;
+    grid-auto-columns: minmax(168px, 206px);
+  }
+
+  .stage-video-strip .participant-tile {
+    height: 132px;
+  }
+
+  .stage-video-strip .participant-media-frame {
+    height: 76px;
   }
 }
 

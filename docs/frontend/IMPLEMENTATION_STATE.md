@@ -1,5 +1,69 @@
 # Frontend Implementation State
 
+## Turn Update: 2026-05-02 Screen Share Stage Layout Fix (Kickoff)
+
+- Time: 2026-05-02T14:51:23+07:00
+- Mode: CODE-ONLY
+- Testing deferred: yes, per instruction; no full test suite and no new tests
+
+### Objective Locked
+
+- Fix the meeting screen-share presentation so large shared monitors/windows cannot resize the outer meeting layout.
+- Keep LiveKit track handling, start/stop share flow, participant state, BRSE, chat, relay, settings, and backend runtime paths unchanged.
+- Make the shared screen stage size predictable on desktop and keep side panel, video tiles, and controls usable while sharing.
+
+### Initial Root Cause
+
+- The active screen-share branch uses `.screen-share-frame` with only a `min-height` and no firm height/max-height boundary.
+- The screen-share branch sits in flexible grid rows, so the stage can grow with available/intrinsic child sizing instead of staying bounded.
+- The video element already uses `object-fit: contain`, but its parent does not consistently constrain block size or overflow, allowing large source resolutions to affect surrounding layout.
+
+### Planned Layout Strategy
+
+- Add explicit desktop-first sizing tokens for the meeting shell and shared stage.
+- Make the screen-share stage a bounded grid container with a stable media surface height.
+- Keep shared video at `width: 100%`, `height: 100%`, `object-fit: contain`, and clamp overflow at the frame/stage boundaries.
+- Convert participant tiles under a share into a controlled filmstrip so they cannot stretch the share stage or side panel.
+
+### Final Sync
+
+- Time: 2026-05-02T14:55:16+07:00
+- Final status: screen share now renders inside a bounded meeting stage instead of allowing large shared sources to expand the room layout.
+
+### Root Cause Confirmed
+
+- The screen-share frame had only a minimum height and inherited flexible grid sizing from the surrounding stage.
+- The outer room shell did not fully constrain overflow on desktop, so the share branch could push the stage/page rather than fitting into a predictable viewport region.
+- `object-fit: contain` was present on the share video, but it was not enough without a fixed parent media surface.
+
+### Files Modified
+
+- `FE/src/components/MeetingStage.tsx`
+  - split the screen-share branch into `SharedScreenStage`, `ParticipantGrid`, and `ParticipantFilmstrip`.
+  - kept track rendering and selected sharer/feed logic unchanged.
+- `FE/src/index.css`
+  - added desktop viewport-bound layout constraints for `.room-page`, `.room-shell`, `.room-main-column`, and `.meeting-stage`.
+  - gave `.screen-share-frame` a predictable clamp-based height and hard overflow boundary.
+  - kept shared media on `object-fit: contain` with full-width/full-height rendering inside the bounded frame.
+  - converted participant tiles during screen share into a fixed-height horizontal filmstrip.
+- `docs/frontend/IMPLEMENTATION_STATE.md`
+  - documented root cause, sizing strategy, fit/overflow strategy, modified files, and deferred testing.
+
+### Sizing / Fit / Overflow Strategy
+
+- Desktop meeting page is viewport-bound with internal scrolling/overflow at the alert stack, side panel, stage grid, and filmstrip boundaries.
+- Shared screen frame uses `--screen-share-frame-height: clamp(340px, 58vh, 700px)`, capped to available stage height, with `overflow: hidden` and layout containment.
+- Shared video remains `object-fit: contain`, so 4:3, 16:9, and ultrawide sources fit inside the frame without changing the outer layout.
+- Participant tiles under an active share use a fixed-height horizontal strip; labels truncate and badges are hidden in the strip to prevent tile content from resizing the stage.
+- Below desktop breakpoint, the room page can scroll vertically while the share frame remains clamped and bounded.
+
+### Verification
+
+- Testing deferred per instruction.
+- Full test suite not run.
+- New tests not added.
+- Existing tests not modified.
+
 ## Turn Update: 2026-05-02 Room Expiry Exit Enforcement (Kickoff)
 
 - Time: 2026-05-02T14:20:55+07:00
@@ -46,6 +110,64 @@
 - Use an `expiredShutdown` guard alongside existing manual shutdown guards so reconnect/lifecycle callbacks cannot revive an expired room.
 - UX strategy: cleanly leave the room screen and redirect to the landing page with the short message "This meeting has ended."
 - Refreshing/opening an already expired room link should stay out of meeting UI and show the existing expired join/interstitial state.
+
+### Final Sync
+
+- Time: 2026-05-02T14:27:33+07:00
+- Final status: frontend now enforces room expiry as a runtime shutdown path instead of a countdown-only UI state.
+
+### Expiry Exit Strategy Implemented
+
+- Active meeting expiry exits the room screen.
+- `RoomPage` redirects to `/` with landing state notice:
+  - `This meeting has ended.`
+- Expired room links without an active session remain out of meeting UI and use the existing expired join/interstitial state.
+- Join attempts against expired rooms are still blocked locally when `expires_at` is stale and by backend `410 room_expired`.
+
+### Expiry Triggers
+
+- Local timer from authoritative `expires_at` in the live room/session metadata.
+- Immediate expired `expires_at` check on active session hydration.
+- Expired `expires_at` from Gateway `room.snapshot`.
+- Gateway `room.expired` event.
+- Gateway `error` event with `code=room_expired`.
+- WebSocket close code `4410` now treated as fatal room expiry.
+- Focus/pageshow/visibility checks re-run the local expiry guard after tab sleep/background throttling.
+
+### Cleanup Path On Expiry
+
+- Centralized shutdown function: `shutdownExpiredRoomSession(...)` in `FE/src/features/room/useMeetingRoom.ts`.
+- Sets `expiredShutdownRef` and `manualShutdownRef` so stale Gateway/LiveKit callbacks cannot revive room state.
+- Stops Gateway reconnect by intentionally disconnecting the retained Gateway socket.
+- Disconnects LiveKit and stops/unpublishes local microphone, camera, and screen-share tracks through the existing LiveKit cleanup helpers.
+- Sends best-effort screen-share stop before teardown when a local share is active.
+- Clears local meeting runtime state: participants, self state, transcripts, chat sends, media feeds, interpreter status, device state, host/moderation state, and transient errors.
+- Invalidates the stored room session after cleanup so reload/re-render cannot re-enter the expired session.
+
+### Files Modified
+
+- `FE/src/features/room/useMeetingRoom.ts`
+  - added `expiredShutdownRef`, `RoomExpiredDetails`, local expiry enforcement, backend expiry handling, and centralized expired-session cleanup.
+  - hardened async Gateway/LiveKit/media lifecycle checks against expired shutdown.
+  - guarded chat, BRSE toggle, language change, media, screen share, and moderation actions after expiry.
+- `FE/src/lib/ws.ts`
+  - treats Gateway close code `4410` as fatal so room expiry reaches the hook.
+- `FE/src/pages/RoomPage.tsx`
+  - passes `onRoomExpired` callback that clears the session and redirects to landing.
+- `FE/src/pages/HomePage.tsx`
+  - displays the short landing notice after expiry redirect.
+- `docs/frontend/IMPLEMENTATION_STATE.md`
+  - documented this implementation and verification status.
+
+### Verification
+
+- Full test suite not run, per CODE-ONLY instruction.
+- New tests not added.
+- Existing tests not modified.
+- Lightweight checks run:
+  - `npm exec tsc -- -p tsconfig.app.json` from `FE/`
+  - `git diff --check`
+- Both checks passed.
 
 ## Turn Update: 2026-05-02 MeetQ CDN Frontend Multi-Origin Runtime Config (Kickoff)
 

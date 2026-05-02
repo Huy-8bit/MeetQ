@@ -49,12 +49,19 @@ class InterpreterRealtimeClient(RealtimeClient):
         self._conversation_item_id_set: set[str] = set()
         self._cancelled_response_ids: set[str] = set()
         self._suppress_response_output = False
+        self._active_input_item_id: Optional[str] = None
+        self._pending_response_source_id: Optional[str] = None
+        self._active_response_source_id: Optional[str] = None
         self._current_response_had_text = False
         self._using_audio_transcript_text = False
         self._text_done_emitted = False
         self._audio_transcript_text_parts: list[str] = []
         self.on_input_transcript_delta: Callable[[str], None] = lambda t: None
         self.on_transcript_complete: Callable[[str], None] = lambda t: None
+        self.on_input_audio_committed: Callable[[Optional[str]], None] = lambda item_id: None
+        self.approve_transcript_for_relay: Callable[[str, Optional[str]], Optional[str]] = (
+            lambda _text, item_id: item_id or "validated_source_transcript"
+        )
         self.on_text_delta: Callable[[str], None] = lambda t: None
         self.on_text_done: Callable[[str], None] = lambda t: None
         self.on_audio_delta: Callable[[str], None] = lambda enc: None
@@ -99,6 +106,9 @@ class InterpreterRealtimeClient(RealtimeClient):
         self._conversation_item_id_set.clear()
         self._cancelled_response_ids.clear()
         self._suppress_response_output = False
+        self._active_input_item_id = None
+        self._pending_response_source_id = None
+        self._active_response_source_id = None
         self._current_response_had_text = False
         self._using_audio_transcript_text = False
         self._text_done_emitted = False
@@ -248,6 +258,9 @@ class InterpreterRealtimeClient(RealtimeClient):
             self._first_text_delta_at = None
             self._first_audio_delta_at = None
             self._response_audio_chunks = 0
+            self._active_input_item_id = None
+            self._pending_response_source_id = None
+            self._active_response_source_id = None
             self._log(f"speech_started src={self.src_lang} tgt={self.tgt_lang}")
             self.on_speech_started()
             self.on_status_change("capturing")
@@ -270,7 +283,11 @@ class InterpreterRealtimeClient(RealtimeClient):
             self._remember_conversation_item_from_event(event)
             now = time.monotonic()
             self._utterance_committed_at = now
+            item_id = self._input_item_id_from_event(event)
+            self._active_input_item_id = item_id
             metric_bits = []
+            if item_id:
+                metric_bits.append(f"item_id={item_id}")
             if self._speech_started_at is not None:
                 metric_bits.append(
                     f"from_speech_started_ms={int((now - self._speech_started_at) * 1000)}"
@@ -280,17 +297,27 @@ class InterpreterRealtimeClient(RealtimeClient):
                     f"from_speech_stopped_ms={int((now - self._speech_stopped_at) * 1000)}"
                 )
             self._log("input_audio_buffer.committed " + " ".join(metric_bits))
+            self.on_input_audio_committed(item_id)
 
         elif etype == "conversation.item.input_audio_transcription.delta":
             delta = event.get("delta", "")
-            if delta:
+            if delta and self._input_transcription_event_is_current(event):
                 self.on_input_transcript_delta(delta)
 
         elif etype == "conversation.item.input_audio_transcription.completed":
+            item_id = self._input_item_id_from_event(event)
+            if not self._input_transcription_event_is_current(event):
+                self._log(
+                    "dropping_stale_input_transcript_completed "
+                    f"item_id={item_id or 'n/a'} active_item_id={self._active_input_item_id or 'n/a'}"
+                )
+                return
             transcript = event.get("transcript", "").strip()
             if transcript:
                 self._stat_transcripts += 1
                 latency_bits = [f"chars={len(transcript)}"]
+                if item_id:
+                    latency_bits.append(f"item_id={item_id}")
                 if self._speech_started_at is not None:
                     latency_bits.append(
                         f"from_speech_started_ms={int((time.monotonic() - self._speech_started_at) * 1000)}"
@@ -306,9 +333,64 @@ class InterpreterRealtimeClient(RealtimeClient):
                 if not self._deterministic_routing:
                     await self._handle_input_transcript_with_audio(ws, transcript)
                 self.on_transcript_complete(transcript)
+                relay_source_id = self.approve_transcript_for_relay(transcript, item_id)
+                if relay_source_id:
+                    await self._create_response_from_source_transcript(
+                        ws,
+                        transcript,
+                        relay_source_id=relay_source_id,
+                    )
+                else:
+                    self._suppress_response_output = True
+                    self._pending_response_source_id = None
+                    self._active_response_source_id = None
+                    self._log(
+                        "input_transcript_rejected_for_relay "
+                        f"item_id={item_id or 'n/a'} chars={len(transcript)}"
+                    )
+                    self.on_status_change("idle")
+                    await self._prune_conversation(ws)
+            else:
+                self._suppress_response_output = True
+                self._pending_response_source_id = None
+                self._active_response_source_id = None
+                self._log(
+                    "empty_input_transcript_suppressed "
+                    f"item_id={item_id or 'n/a'}"
+                )
+                self.on_status_change("idle")
+                await self._prune_conversation(ws)
+
+        elif etype == "conversation.item.input_audio_transcription.failed":
+            item_id = self._input_item_id_from_event(event)
+            if not self._input_transcription_event_is_current(event):
+                return
+            error = event.get("error") or {}
+            self._suppress_response_output = True
+            self._pending_response_source_id = None
+            self._active_response_source_id = None
+            self._log(
+                "input_transcription_failed_suppressed "
+                f"item_id={item_id or 'n/a'} error={error}"
+            )
+            self.on_status_change("idle")
+            await self._prune_conversation(ws)
 
         elif etype == "response.created":
             self._current_response_id = event.get("response", {}).get("id")
+            response_source_id = self._response_source_id_from_event(event)
+            if not self._response_source_is_expected(response_source_id):
+                self._log(
+                    "suppressing_response_without_valid_source "
+                    f"id={self._current_response_id or 'n/a'} "
+                    f"source_id={response_source_id or 'n/a'} "
+                    f"pending_source_id={self._pending_response_source_id or 'n/a'}"
+                )
+                if self._current_response_id:
+                    self._cancelled_response_ids.add(self._current_response_id)
+                self._suppress_response_output = True
+                await self._cancel_response(ws)
+                return
             if self._current_response_id in self._cancelled_response_ids:
                 self._suppress_response_output = True
                 logger.debug(
@@ -318,6 +400,10 @@ class InterpreterRealtimeClient(RealtimeClient):
                 return
             else:
                 self._suppress_response_output = False
+            self._active_response_source_id = (
+                response_source_id or self._pending_response_source_id
+            )
+            self._pending_response_source_id = None
             self.on_status_change("translating")
             self._assistant_speaking = True
             self._response_started_at = time.monotonic()
@@ -438,10 +524,16 @@ class InterpreterRealtimeClient(RealtimeClient):
             if response_id:
                 self._cancelled_response_ids.discard(response_id)
             if dropped_response:
+                self._assistant_speaking = False
+                self._current_response_id = None
+                self._active_response_source_id = None
+                self._pending_response_source_id = None
                 await self._prune_conversation(ws)
                 return
             self._assistant_speaking = False
             self._current_response_id = None
+            self._active_response_source_id = None
+            self._pending_response_source_id = None
             metric_bits = [
                 f"translations={self._stat_translations}",
                 f"audio_chunks={self._response_audio_chunks}",
@@ -481,6 +573,60 @@ class InterpreterRealtimeClient(RealtimeClient):
         finally:
             self.enable_speaker = original_enable_speaker
 
+    async def _create_response_from_source_transcript(
+        self,
+        ws,
+        transcript: str,
+        *,
+        relay_source_id: str,
+    ) -> None:
+        source_text = transcript.strip()
+        if not source_text:
+            return
+
+        self._pending_response_source_id = relay_source_id
+        self._active_response_source_id = None
+        self._suppress_response_output = False
+        modalities = ["text", "audio"] if self.request_audio_output else ["text"]
+        instructions = (
+            self._current_instructions()
+            + " Relay the following validated source transcript only. "
+            "Do not use prior audio or conversation context. "
+            "If this text is not sufficient for a faithful relay, output nothing."
+        )
+        payload = {
+            "type": "response.create",
+            "response": {
+                "conversation": "none",
+                "output_modalities": modalities,
+                "instructions": instructions,
+                "input": [
+                    {
+                        "type": "message",
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "input_text",
+                                "text": source_text,
+                            }
+                        ],
+                    }
+                ],
+                "metadata": {
+                    "source": "validated_input_transcript",
+                    "relay_source_id": relay_source_id,
+                    "source_language": self.src_lang,
+                    "target_language": self.tgt_lang,
+                },
+            },
+        }
+        await ws.send(json.dumps(payload))
+        self._log(
+            "response.create_from_validated_transcript "
+            f"source_id={relay_source_id} chars={len(source_text)} "
+            f"modalities={','.join(modalities)}"
+        )
+
     async def update_routing(self, src_lang: str, tgt_lang: str) -> None:
         self.src_lang = src_lang
         self.tgt_lang = tgt_lang
@@ -515,6 +661,8 @@ class InterpreterRealtimeClient(RealtimeClient):
         if response_id:
             self._cancelled_response_ids.add(response_id)
         self._suppress_response_output = True
+        self._pending_response_source_id = None
+        self._active_response_source_id = None
         self._log(f"barge_in_or_route_change cancelling response id={response_id}")
         try:
             await ws.send(json.dumps({"type": "response.cancel"}))
@@ -534,6 +682,13 @@ class InterpreterRealtimeClient(RealtimeClient):
             return True
         if self._current_response_id is None:
             logger.debug("Dropping response event without active response type=%s id=%s", etype, response_id)
+            return True
+        if self._active_response_source_id is None:
+            logger.debug(
+                "Dropping response event without validated source type=%s id=%s",
+                etype,
+                response_id,
+            )
             return True
         if response_id and self._current_response_id and response_id != self._current_response_id:
             logger.debug(
@@ -555,6 +710,47 @@ class InterpreterRealtimeClient(RealtimeClient):
             if isinstance(nested_id, str) and nested_id:
                 return nested_id
         return None
+
+    def current_response_source_id(self) -> Optional[str]:
+        return self._active_response_source_id
+
+    def _input_item_id_from_event(self, event: Dict[str, Any]) -> Optional[str]:
+        item_id = event.get("item_id")
+        if isinstance(item_id, str) and item_id:
+            return item_id
+        item = event.get("item")
+        if isinstance(item, dict):
+            nested_id = item.get("id")
+            if isinstance(nested_id, str) and nested_id:
+                return nested_id
+        return None
+
+    def _input_transcription_event_is_current(self, event: Dict[str, Any]) -> bool:
+        item_id = self._input_item_id_from_event(event)
+        active_item_id = self._active_input_item_id
+        if item_id is None:
+            return self._speech_stopped_at is not None
+        return active_item_id == item_id
+
+    def _response_source_id_from_event(self, event: Dict[str, Any]) -> Optional[str]:
+        response = event.get("response")
+        if not isinstance(response, dict):
+            return None
+        metadata = response.get("metadata")
+        if not isinstance(metadata, dict):
+            return None
+        relay_source_id = metadata.get("relay_source_id")
+        if isinstance(relay_source_id, str) and relay_source_id:
+            return relay_source_id
+        return None
+
+    def _response_source_is_expected(self, response_source_id: Optional[str]) -> bool:
+        pending_source_id = self._pending_response_source_id
+        if pending_source_id is None:
+            return False
+        if response_source_id is None:
+            return True
+        return response_source_id == pending_source_id
 
     def _ms_since(self, started_at: Optional[float], now: Optional[float] = None) -> str:
         if started_at is None:

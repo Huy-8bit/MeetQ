@@ -84,6 +84,7 @@ interface UseMeetingRoomArgs {
   initialRoom: RoomSnapshotResponse | null;
   session: RoomSession | null;
   onSessionInvalidated: () => void;
+  onRoomExpired?: (details: RoomExpiredDetails) => void;
 }
 
 interface SelfState {
@@ -93,11 +94,26 @@ interface SelfState {
   language: Language;
 }
 
+type RoomExpiredSource =
+  | "local_timer"
+  | "initial_state"
+  | "snapshot"
+  | "gateway_event"
+  | "gateway_error"
+  | "gateway_close";
+
+export interface RoomExpiredDetails {
+  source: RoomExpiredSource;
+  expiredAt?: string | null;
+  message?: string;
+}
+
 export function useMeetingRoom({
   roomId,
   initialRoom,
   session,
   onSessionInvalidated,
+  onRoomExpired,
 }: UseMeetingRoomArgs) {
   const [roomMeta, setRoomMeta] = useState<RoomSnapshotResponse["room"] | null>(
     initialRoom?.room ?? null,
@@ -197,7 +213,9 @@ export function useMeetingRoom({
   const hasLeftRef = useRef(false);
   const hasSentLeaveRef = useRef(false);
   const manualShutdownRef = useRef(false);
+  const expiredShutdownRef = useRef(false);
   const sessionInvalidatedRef = useRef(onSessionInvalidated);
+  const roomExpiredCallbackRef = useRef(onRoomExpired);
   const refreshMediaRef = useRef<(() => void) | null>(null);
   const audioRoutingRef = useRef(session?.room.audio_routing ?? roomMeta?.audio_routing);
   const roomMetaRef = useRef(roomMeta);
@@ -217,6 +235,10 @@ export function useMeetingRoom({
   useEffect(() => {
     sessionInvalidatedRef.current = onSessionInvalidated;
   }, [onSessionInvalidated]);
+
+  useEffect(() => {
+    roomExpiredCallbackRef.current = onRoomExpired;
+  }, [onRoomExpired]);
 
   useEffect(() => {
     participantsRef.current = participantsById;
@@ -282,6 +304,7 @@ export function useMeetingRoom({
     if (!session) {
       hasSentLeaveRef.current = false;
       manualShutdownRef.current = false;
+      expiredShutdownRef.current = false;
       localAudioTrackRef.current = null;
       localVideoTrackRef.current = null;
       setSelfState(null);
@@ -333,10 +356,11 @@ export function useMeetingRoom({
     hasLeftRef.current = false;
     hasSentLeaveRef.current = false;
     manualShutdownRef.current = false;
-      setConnectionError(null);
-      setMediaError(null);
-      setCameraToggleError(null);
-      setBrseToggleError(null);
+    expiredShutdownRef.current = false;
+    setConnectionError(null);
+    setMediaError(null);
+    setCameraToggleError(null);
+    setBrseToggleError(null);
     setIsTogglingBrse(false);
     setChatError(null);
     setIsSendingChat(false);
@@ -344,6 +368,18 @@ export function useMeetingRoom({
     setAudioOutputSupported(supportsAudioOutputSelection());
     setGatewayState("connecting");
     setLivekitState("connecting");
+
+    const initialExpiresAt =
+      initialRoom?.room.room_id === session.roomId ? initialRoom.room.expires_at : null;
+    const sessionExpiresAt = initialExpiresAt ?? session.room.expires_at;
+    if (isExpiredAt(sessionExpiresAt)) {
+      shutdownExpiredRoomSession({
+        source: "initial_state",
+        expiredAt: sessionExpiresAt,
+      });
+      return;
+    }
+
     setRoomMeta((current) => ({
       room_id: current?.room_id || session.roomId,
       state: session.room.state,
@@ -423,19 +459,32 @@ export function useMeetingRoom({
           return;
         }
 
-        if (manualShutdownRef.current) {
+        if (manualShutdownRef.current || expiredShutdownRef.current) {
           return;
         }
 
         handleGatewayEvent(event);
       },
       onStateChange: (state) => {
-        if (!disposed) {
+        if (!disposed && !expiredShutdownRef.current) {
           setGatewayState(state);
         }
       },
       onFatalClose: (code, reason) => {
         if (disposed || manualShutdownRef.current) {
+          return;
+        }
+
+        if (code === 4410) {
+          const currentRoomMeta = roomMetaRef.current;
+          shutdownExpiredRoomSession({
+            source: "gateway_close",
+            expiredAt:
+              currentRoomMeta?.room_id === session.roomId
+                ? currentRoomMeta.expires_at
+                : session.room.expires_at,
+            message: reason || "This meeting has ended.",
+          });
           return;
         }
 
@@ -449,43 +498,64 @@ export function useMeetingRoom({
     const livekitRoom = createMeetingRoom();
     livekitRoomRef.current = livekitRoom;
     const unbindRoom = bindRoomRefresh(livekitRoom, refreshMedia, (state) => {
-      if (!disposed) {
+      if (!disposed && !expiredShutdownRef.current) {
         setLivekitState(state);
       }
     });
     void (async () => {
       try {
         await gateway.connect();
-        if (disposed) {
+        if (disposed || manualShutdownRef.current || expiredShutdownRef.current) {
           return;
         }
 
         await connectLiveKit(livekitRoom, session.livekit.url, session.livekit.token);
-        if (disposed) {
+        if (disposed || manualShutdownRef.current || expiredShutdownRef.current) {
           return;
         }
 
         refreshMedia();
 
         try {
-          await publishLocalMedia(livekitRoom);
+          const localTracks = await publishLocalMedia(livekitRoom);
+          if (disposed || manualShutdownRef.current || expiredShutdownRef.current) {
+            localTracks.forEach((track) => track.stop());
+            disconnectRoom(livekitRoom);
+            return;
+          }
+
           localAudioTrackRef.current = getLocalMicrophoneTrack(livekitRoom);
           localVideoTrackRef.current = getLocalCameraTrack(livekitRoom);
           setIsMicMuted(isMicrophoneMuted(localAudioTrackRef.current));
           setIsCameraOff(isCameraMuted(localVideoTrackRef.current));
           await refreshAudioDevices();
+          if (disposed || manualShutdownRef.current || expiredShutdownRef.current) {
+            return;
+          }
         } catch (error) {
+          if (disposed || manualShutdownRef.current || expiredShutdownRef.current) {
+            return;
+          }
+
           setMediaError(
             error instanceof Error
               ? error.message
               : "Microphone or camera permission was denied.",
           );
           await refreshAudioDevices();
+          if (disposed || manualShutdownRef.current || expiredShutdownRef.current) {
+            return;
+          }
         }
 
         refreshMedia();
       } catch (error) {
-        if (disposed || error instanceof GatewaySocketCancelledError) {
+        if (
+          disposed
+          || manualShutdownRef.current
+          || expiredShutdownRef.current
+          || error instanceof GatewaySocketCancelledError
+        ) {
           return;
         }
 
@@ -524,6 +594,55 @@ export function useMeetingRoom({
     livekitUrl,
     livekitToken,
   ]);
+
+  useEffect(() => {
+    if (!session || typeof window === "undefined") {
+      return;
+    }
+
+    const roomMetaExpiresAt =
+      roomMeta?.room_id === session.roomId ? roomMeta.expires_at : null;
+    const expiresAt = roomMetaExpiresAt ?? session.room.expires_at;
+    const expiresAtMs = parseExpiresAtMs(expiresAt);
+    if (expiresAtMs === null) {
+      return;
+    }
+
+    const enforceExpiry = () => {
+      if (expiredShutdownRef.current || manualShutdownRef.current) {
+        return;
+      }
+
+      if (Date.now() >= expiresAtMs) {
+        shutdownExpiredRoomSession({
+          source: "local_timer",
+          expiredAt: expiresAt,
+        });
+      }
+    };
+
+    enforceExpiry();
+    if (expiredShutdownRef.current) {
+      return;
+    }
+
+    const delayMs = Math.max(0, expiresAtMs - Date.now());
+    const expiryTimer = window.setTimeout(
+      enforceExpiry,
+      Math.min(delayMs, 2_147_483_647),
+    );
+
+    window.addEventListener("focus", enforceExpiry);
+    window.addEventListener("pageshow", enforceExpiry);
+    document.addEventListener("visibilitychange", enforceExpiry);
+
+    return () => {
+      window.clearTimeout(expiryTimer);
+      window.removeEventListener("focus", enforceExpiry);
+      window.removeEventListener("pageshow", enforceExpiry);
+      document.removeEventListener("visibilitychange", enforceExpiry);
+    };
+  }, [session, sessionKey, roomMeta?.expires_at]);
 
   useEffect(() => {
     refreshMediaRef.current?.();
@@ -616,6 +735,10 @@ export function useMeetingRoom({
       return;
     }
 
+    if (expiredShutdownRef.current) {
+      return;
+    }
+
     setIsLeaving(true);
     manualShutdownRef.current = true;
 
@@ -656,7 +779,14 @@ export function useMeetingRoom({
   }
 
   async function startScreenShare(): Promise<void> {
-    if (!session || isStartingScreenShare || isStoppingScreenShare || isScreenSharing) {
+    if (
+      !session
+      || expiredShutdownRef.current
+      || isRoomExpired
+      || isStartingScreenShare
+      || isStoppingScreenShare
+      || isScreenSharing
+    ) {
       return;
     }
 
@@ -716,6 +846,10 @@ export function useMeetingRoom({
     notifyBackend?: boolean;
     signalWsFallback?: boolean;
   }): Promise<void> {
+    if (expiredShutdownRef.current) {
+      return;
+    }
+
     if (stoppingScreenShareRef.current) {
       return;
     }
@@ -769,7 +903,7 @@ export function useMeetingRoom({
   }
 
   async function toggleMicrophoneMuted(): Promise<void> {
-    if (isTogglingMic) {
+    if (isTogglingMic || expiredShutdownRef.current || isRoomExpired) {
       return;
     }
 
@@ -795,7 +929,7 @@ export function useMeetingRoom({
   }
 
   async function toggleCameraEnabled(): Promise<void> {
-    if (isTogglingCamera) {
+    if (isTogglingCamera || expiredShutdownRef.current || isRoomExpired) {
       return;
     }
 
@@ -831,7 +965,7 @@ export function useMeetingRoom({
   }
 
   async function switchAudioInput(deviceId: string): Promise<void> {
-    if (isSwitchingAudioInput || !deviceId) {
+    if (isSwitchingAudioInput || !deviceId || expiredShutdownRef.current || isRoomExpired) {
       return;
     }
 
@@ -870,7 +1004,7 @@ export function useMeetingRoom({
   }
 
   async function switchAudioOutput(deviceId: string): Promise<void> {
-    if (isSwitchingAudioOutput || !deviceId) {
+    if (isSwitchingAudioOutput || !deviceId || expiredShutdownRef.current || isRoomExpired) {
       return;
     }
 
@@ -894,7 +1028,7 @@ export function useMeetingRoom({
   }
 
   async function toggleBrseMode(nextEnabled = !brseEnabledRef.current): Promise<void> {
-    if (!session || isTogglingBrse || isLeaving) {
+    if (!session || expiredShutdownRef.current || isRoomExpired || isTogglingBrse || isLeaving) {
       return;
     }
 
@@ -998,6 +1132,10 @@ export function useMeetingRoom({
   }
 
   function changeLanguage(nextLanguage: Language): void {
+    if (expiredShutdownRef.current || isRoomExpired) {
+      return;
+    }
+
     const currentSelf = selfRef.current;
     if (!currentSelf || currentSelf.language === nextLanguage) {
       return;
@@ -1103,7 +1241,114 @@ export function useMeetingRoom({
     }
   }
 
+  function shutdownExpiredRoomSession(details: RoomExpiredDetails): void {
+    if (expiredShutdownRef.current) {
+      return;
+    }
+
+    expiredShutdownRef.current = true;
+    manualShutdownRef.current = true;
+    hasLeftRef.current = true;
+    hasSentLeaveRef.current = true;
+    pendingLanguageRef.current = null;
+    pendingChatEventIdsRef.current.clear();
+
+    setIsRoomExpired(true);
+    setConnectionError(details.message ?? "This meeting has ended.");
+    setRoomMeta((current) =>
+      current
+        ? {
+            ...current,
+            state: "empty",
+            expires_at: details.expiredAt ?? current.expires_at,
+            participant_count: 0,
+          }
+        : current,
+    );
+
+    if (isScreenSharingRef.current || localScreenTrackRef.current) {
+      try {
+        gatewayRef.current?.sendScreenShareStop();
+      } catch {
+        // Gateway may already be closing on expiry.
+      }
+
+      if (session) {
+        void api.stopScreenShare(roomId, session.roomToken).catch(() => undefined);
+      }
+    }
+
+    const gateway = gatewayRef.current;
+    gatewayRef.current = null;
+    gateway?.disconnect("Room expired");
+
+    const livekitRoom = livekitRoomRef.current;
+    livekitRoomRef.current = null;
+    clearLocalScreenTrack(livekitRoom);
+    disconnectRoom(livekitRoom);
+
+    localAudioTrackRef.current = null;
+    localVideoTrackRef.current = null;
+    refreshMediaRef.current = null;
+    localScreenTrackCleanupRef.current = null;
+    stoppingScreenShareRef.current = false;
+
+    setGatewayState("disconnected");
+    setLivekitState("disconnected");
+    setVideos([]);
+    setHumanAudioFeeds([]);
+    setBrseAudioFeeds([]);
+    setScreenShares([]);
+    setInterpreterStatuses([]);
+    setSelfState(null);
+    setParticipantsById({});
+    setTranscripts([]);
+    setChatMessages([]);
+    setChatError(null);
+    setIsSendingChat(false);
+    setMediaError(null);
+    setScreenShareError(null);
+    setIsScreenSharing(false);
+    setIsStartingScreenShare(false);
+    setIsStoppingScreenShare(false);
+    setIsMicMuted(false);
+    setIsTogglingMic(false);
+    setMicToggleError(null);
+    setIsCameraOff(true);
+    setIsTogglingCamera(false);
+    setCameraToggleError(null);
+    setAudioInputDevices([]);
+    setSelectedAudioInputDeviceId("");
+    setIsSwitchingAudioInput(false);
+    setAudioInputError(null);
+    setAudioOutputDevices([]);
+    setSelectedAudioOutputDeviceId("default");
+    setAudioOutputSupported(false);
+    setIsSwitchingAudioOutput(false);
+    setAudioOutputError(null);
+    setIsLeaving(false);
+    setIsTogglingBrse(false);
+    setBrseToggleError(null);
+    setHostParticipantId(null);
+    setIsMutedByHost(false);
+    setIsMutingParticipant(null);
+    setModerationError(null);
+    void setRoomAudioOutputDevice("").catch(() => undefined);
+
+    sessionInvalidatedRef.current();
+    roomExpiredCallbackRef.current?.(details);
+  }
+
   function applyRoomSnapshot(event: RoomSnapshotEvent): void {
+    const snapshotExpiresAt = event.payload.room.expires_at ?? roomMetaRef.current?.expires_at ?? null;
+    if (isExpiredAt(snapshotExpiresAt)) {
+      shutdownExpiredRoomSession({
+        source: "snapshot",
+        expiredAt: snapshotExpiresAt,
+      });
+      return;
+    }
+
     setSelfState(event.payload.self);
     setParticipantsById(mapParticipants(event.payload.participants));
     syncLocalScreenShareState(event.payload.participants, event.payload.self.participant_id);
@@ -1352,11 +1597,12 @@ export function useMeetingRoom({
     }
   }
 
-  function applyRoomExpired(_event: RoomExpiredEvent): void {
-    setIsRoomExpired(true);
-    setRoomMeta((current) =>
-      current ? { ...current, state: "empty" } : current,
-    );
+  function applyRoomExpired(event: RoomExpiredEvent): void {
+    shutdownExpiredRoomSession({
+      source: "gateway_event",
+      expiredAt: event.payload.expired_at,
+      message: "This meeting has ended.",
+    });
   }
 
   function applyTranscriptEvent(
@@ -1403,6 +1649,19 @@ export function useMeetingRoom({
       rollbackLanguage();
     }
 
+    if (event.payload.code === "room_expired") {
+      const currentRoomMeta = roomMetaRef.current;
+      shutdownExpiredRoomSession({
+        source: "gateway_error",
+        expiredAt:
+          currentRoomMeta?.room_id === (session?.roomId ?? roomId)
+            ? currentRoomMeta.expires_at
+            : session?.room.expires_at ?? event.sent_at,
+        message: event.payload.message || "This meeting has ended.",
+      });
+      return;
+    }
+
     if (event.payload.code === "invalid_language") {
       const meetingLanguages = resolveMeetingLanguages(
         roomMetaRef.current?.meeting_languages,
@@ -1437,7 +1696,7 @@ export function useMeetingRoom({
 
   async function sendChatMessage(text: string): Promise<boolean> {
     const trimmed = text.trim();
-    if (!trimmed || isSendingChat) {
+    if (!trimmed || isSendingChat || expiredShutdownRef.current || isRoomExpired) {
       return false;
     }
 
@@ -1547,6 +1806,7 @@ export function useMeetingRoom({
   async function muteParticipant(targetParticipantId: string): Promise<void> {
     if (isMutingParticipant) return;
     if (!session) return;
+    if (expiredShutdownRef.current || isRoomExpired) return;
 
     setIsMutingParticipant(targetParticipantId);
     setModerationError(null);
@@ -1615,6 +1875,10 @@ export function useMeetingRoom({
     roomMeta?.meeting_languages,
     roomMeta?.supported_languages,
   );
+  const effectiveExpiresAt =
+    roomMeta?.room_id === (session?.roomId ?? roomId)
+      ? roomMeta.expires_at
+      : session?.room.expires_at ?? null;
   const isCurrentUserHost = !!(selfState && hostParticipantId && selfState.participant_id === hostParticipantId);
   const visibleVideos = brseEnabled
     ? videos
@@ -1633,7 +1897,7 @@ export function useMeetingRoom({
     interpreterMode:
       roomMeta?.interpreter_mode ?? session?.room.interpreter_mode ?? null,
     meetingLanguages,
-    expiresAt: roomMeta?.expires_at ?? session?.room.expires_at ?? null,
+    expiresAt: effectiveExpiresAt,
     isRoomExpired,
     selfState,
     participants: activeParticipants,
@@ -1670,7 +1934,13 @@ export function useMeetingRoom({
     isLeaving,
     isTogglingBrse,
     brseToggleError,
-    canToggleBrse: !!session && !!selfState && !isLeaving && !isTogglingBrse,
+    canToggleBrse:
+      !!session
+      && !!selfState
+      && !isLeaving
+      && !isTogglingBrse
+      && !isRoomExpired
+      && !expiredShutdownRef.current,
     changeLanguage,
     toggleBrseMode,
     toggleMicrophoneMuted,
@@ -1685,7 +1955,12 @@ export function useMeetingRoom({
     chatMessages,
     chatError,
     isSendingChat,
-    canSendChat: !!selfState && gatewayState === "connected" && !isLeaving,
+    canSendChat:
+      !!selfState
+      && gatewayState === "connected"
+      && !isLeaving
+      && !isRoomExpired
+      && !expiredShutdownRef.current,
     sendChatMessage,
     // Host
     hostParticipantId,
@@ -1955,6 +2230,20 @@ function resolveBrseEnabled(
   return room?.meeting_mode === "brse_relay";
 }
 
+function parseExpiresAtMs(expiresAt: string | null | undefined): number | null {
+  if (!expiresAt) {
+    return null;
+  }
+
+  const parsed = new Date(expiresAt).getTime();
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function isExpiredAt(expiresAt: string | null | undefined): boolean {
+  const expiresAtMs = parseExpiresAtMs(expiresAt);
+  return expiresAtMs !== null && Date.now() >= expiresAtMs;
+}
+
 function mapParticipants(
   participants: ParticipantSnapshot[],
 ): Record<string, ParticipantSnapshot> {
@@ -1998,6 +2287,9 @@ function deriveConnectionState(
 }
 
 function formatFatalCloseMessage(code: number, reason: string): string {
+  if (code === 4410) {
+    return "This meeting has ended.";
+  }
   if (code === 4404) {
     return "Room no longer exists.";
   }

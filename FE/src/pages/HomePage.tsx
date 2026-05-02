@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import { api, ApiError } from "../lib/api";
 import {
   getLanguageLabel,
@@ -11,6 +11,7 @@ import type { MeetingLanguage } from "../types/api";
 
 export function HomePage() {
   const navigate = useNavigate();
+  const location = useLocation();
   const [roomInput, setRoomInput] = useState("");
   const [firstMeetingLanguage, setFirstMeetingLanguage] = useState<MeetingLanguage | "">("");
   const [secondMeetingLanguage, setSecondMeetingLanguage] = useState<MeetingLanguage | "">("");
@@ -18,6 +19,7 @@ export function HomePage() {
   const [createValidationError, setCreateValidationError] = useState<string | null>(null);
   const [createError, setCreateError] = useState<string | null>(null);
   const [joinLookupError, setJoinLookupError] = useState<string | null>(null);
+  const landingNotice = getLandingNotice(location.state);
 
   function handleFirstMeetingLanguageChange(nextLanguage: MeetingLanguage | "") {
     setFirstMeetingLanguage(nextLanguage);
@@ -99,6 +101,12 @@ export function HomePage() {
           </Link>
         </header>
 
+        {landingNotice ? (
+          <div className="banner banner-warning" role="status">
+            {landingNotice}
+          </div>
+        ) : null}
+
         <div className="create-room-layout">
           <CreateRoomPanel
             firstMeetingLanguage={firstMeetingLanguage}
@@ -126,6 +134,15 @@ export function HomePage() {
       </section>
     </main>
   );
+}
+
+function getLandingNotice(state: unknown): string | null {
+  if (!state || typeof state !== "object") {
+    return null;
+  }
+
+  const notice = (state as { notice?: unknown }).notice;
+  return typeof notice === "string" ? notice : null;
 }
 
 function CreateRoomPanel({

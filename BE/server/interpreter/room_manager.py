@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -37,6 +38,57 @@ _SUPPORTED_LANGS_MESSAGE = ", ".join(SUPPORTED_MEETING_LANGUAGES)
 _INPUT_QUEUE_MAXSIZE = INTERPRETER_INPUT_QUEUE_MAXSIZE
 _INPUT_WARMUP_CHUNKS = INTERPRETER_INPUT_WARMUP_CHUNKS
 _OVERLAP_FOCUS_COOLDOWN_SECONDS = 0.85
+_SOURCE_MIN_FINAL_MEANINGFUL_CHARS = 4
+_SOURCE_MIN_FINAL_MEANINGFUL_TOKENS = 1
+_SOURCE_MIN_PARTIAL_MEANINGFUL_CHARS = 8
+_SOURCE_MIN_PARTIAL_MEANINGFUL_TOKENS = 2
+_SOURCE_MIN_SPEECH_DURATION_MS = 420
+_SOURCE_TOKEN_RE = re.compile(
+    r"[A-Za-zÀ-ÖØ-öø-ÿ0-9]+|[\u3040-\u30ff\u3400-\u9fff\uf900-\ufaff\uac00-\ud7af]+"
+)
+_SOURCE_NOISE_ONLY_RE = re.compile(
+    r"^[\s\[\]\(\)\{\}\"'`*_.:,;!?。！？、-]*"
+    r"(?:background\s+noise|noise|silence|silent|inaudible|unintelligible|"
+    r"music|typing|keyboard|cough(?:ing)?|laugh(?:s|ter|ing)?|breath(?:ing)?|"
+    r"no\s+speech|speech\s+unclear)"
+    r"[\s\[\]\(\)\{\}\"'`*_.:,;!?。！？、-]*$",
+    re.IGNORECASE,
+)
+_SOURCE_FILLER_TOKENS = {
+    "a",
+    "ah",
+    "aha",
+    "eh",
+    "er",
+    "erm",
+    "hm",
+    "hmm",
+    "hmmm",
+    "mm",
+    "mmm",
+    "mhm",
+    "oh",
+    "uh",
+    "uhh",
+    "um",
+    "umm",
+    "ờ",
+    "ừ",
+    "ừm",
+    "à",
+    "ờm",
+    "àh",
+    "ừh",
+    "え",
+    "えー",
+    "えっと",
+    "あの",
+    "음",
+    "어",
+    "嗯",
+    "啊",
+    "呃",
+}
 
 
 @dataclass(frozen=True)
@@ -71,6 +123,7 @@ class _SpeakerArbitrationState:
     blocked_since: Optional[float] = None
     last_speech_started_at: Optional[float] = None
     last_speech_stopped_at: Optional[float] = None
+    last_speech_duration_ms: Optional[int] = None
 
 
 class RoomInterpreterManager:
@@ -582,6 +635,8 @@ class RoomInterpreterManager:
             self._release_relay_focus(reason="stale_focus")
 
         if self.relay_focus_speaker_id in (None, speaker_id):
+            state = self._speaker_state(speaker_id)
+            state.last_speech_duration_ms = None
             self._claim_relay_focus(
                 speaker_id=speaker_id,
                 generation=generation,
@@ -613,6 +668,7 @@ class RoomInterpreterManager:
     ) -> None:
         state = self._speaker_state(speaker_id)
         state.last_speech_stopped_at = time.monotonic()
+        state.last_speech_duration_ms = duration_ms
         if state.generation is None:
             state.generation = generation
 
@@ -1023,8 +1079,35 @@ class RoomInterpreterManager:
                 )
             return publishable
 
-        def on_input_transcript_delta(delta: str) -> None:
-            if not delta or not is_publishable_callback("source_partial"):
+        def relay_state_for_response(kind: str) -> Optional[Dict[str, Any]]:
+            if not is_publishable_callback(kind):
+                return None
+            state = self.transcript_state.get(speaker_id)
+            if state is None:
+                logger.debug(
+                    "Suppressing BRSE %s without source transcript state room=%s speaker=%s generation=%d",
+                    kind,
+                    self.room_id,
+                    speaker_id,
+                    generation,
+                )
+                router.clear_queue()
+                return None
+            if not self._source_state_can_relay(
+                speaker_id=speaker_id,
+                state=state,
+                generation=generation,
+                src_lang=src_lang,
+                target_lang=target_lang,
+                response_source_id=client.current_response_source_id(),
+                kind=kind,
+            ):
+                router.clear_queue()
+                return None
+            return state
+
+        def on_input_audio_committed(item_id: Optional[str]) -> None:
+            if not is_publishable_callback("source_commit"):
                 return
             state = self._ensure_transcript_state(
                 speaker_id=speaker_id,
@@ -1032,6 +1115,28 @@ class RoomInterpreterManager:
                 target_lang=target_lang,
                 generation=generation,
             )
+            state["source_item_id"] = item_id
+            state["source_committed"] = True
+            state["source_final"] = False
+            state["source_valid"] = False
+            state["source_rejected_reason"] = None
+            state["source_signal"] = {}
+            state["source_text"] = ""
+            state["brse_text"] = ""
+            state["speech_duration_ms"] = self._speaker_state(speaker_id).last_speech_duration_ms
+
+        def on_input_transcript_delta(delta: str) -> None:
+            if not delta or not is_publishable_callback("source_partial"):
+                return
+            state = self.transcript_state.get(speaker_id)
+            if state is None or not state.get("source_committed"):
+                logger.debug(
+                    "Dropping BRSE source partial before committed input room=%s speaker=%s generation=%d",
+                    self.room_id,
+                    speaker_id,
+                    generation,
+                )
+                return
             state["source_text"] = f"{state['source_text']}{delta}"
             asyncio.create_task(
                 self._publish_source_partial(
@@ -1044,23 +1149,42 @@ class RoomInterpreterManager:
         def on_transcript_complete(text: str) -> None:
             if not is_publishable_callback("source_final"):
                 return
-            state = self._ensure_transcript_state(
-                speaker_id=speaker_id,
-                src_lang=src_lang,
-                target_lang=target_lang,
-                generation=generation,
+            state = self.transcript_state.get(speaker_id)
+            if state is None or not state.get("source_committed"):
+                logger.warning(
+                    "Dropping BRSE source final without committed source room=%s speaker=%s "
+                    "route=%s->%s generation=%d",
+                    self.room_id,
+                    speaker_id,
+                    src_lang,
+                    target_lang,
+                    generation,
+                )
+                return
+            if state.get("speech_duration_ms") is None:
+                state["speech_duration_ms"] = self._speaker_state(speaker_id).last_speech_duration_ms
+            source_ok, reason, normalized_text, signal = self._assess_source_transcript(
+                text,
+                duration_ms=state.get("speech_duration_ms"),
+                final=True,
             )
-            state["source_text"] = text
-            if text:
+            state["source_text"] = normalized_text
+            state["source_final"] = True
+            state["source_valid"] = source_ok
+            state["source_rejected_reason"] = None if source_ok else reason
+            state["source_signal"] = signal
+            if source_ok:
                 logger.info(
                     "BRSE source transcript completed room=%s speaker=%s utterance=%s "
-                    "route=%s->%s chars=%d generation=%d",
+                    "route=%s->%s chars=%d tokens=%s duration_ms=%s generation=%d",
                     self.room_id,
                     speaker_id,
                     state["utterance_id"],
                     src_lang,
                     target_lang,
-                    len(text),
+                    len(normalized_text),
+                    signal.get("meaningful_tokens"),
+                    state.get("speech_duration_ms"),
                     generation,
                 )
                 asyncio.create_task(
@@ -1070,16 +1194,58 @@ class RoomInterpreterManager:
                         generation,
                     )
                 )
+            else:
+                router.clear_queue()
+                logger.info(
+                    "Suppressing BRSE source transcript room=%s speaker=%s utterance=%s "
+                    "route=%s->%s reason=%s signal=%s generation=%d text=%r",
+                    self.room_id,
+                    speaker_id,
+                    state["utterance_id"],
+                    src_lang,
+                    target_lang,
+                    reason,
+                    signal,
+                    generation,
+                    normalized_text,
+                )
 
-        def on_text_delta(delta: str) -> None:
-            if not delta or not is_publishable_callback("relay_partial"):
-                return
-            state = self._ensure_transcript_state(
+        def approve_transcript_for_relay(text: str, item_id: Optional[str]) -> Optional[str]:
+            if not is_publishable_callback("source_approval"):
+                return None
+            state = self.transcript_state.get(speaker_id)
+            if state is None:
+                return None
+            state_item_id = state.get("source_item_id")
+            if item_id is not None and state_item_id is not None and item_id != state_item_id:
+                logger.debug(
+                    "Rejecting BRSE source approval due to item mismatch room=%s speaker=%s "
+                    "item_id=%s state_item_id=%s generation=%d",
+                    self.room_id,
+                    speaker_id,
+                    item_id,
+                    state_item_id,
+                    generation,
+                )
+                return None
+            if not self._source_state_can_relay(
                 speaker_id=speaker_id,
+                state=state,
+                generation=generation,
                 src_lang=src_lang,
                 target_lang=target_lang,
-                generation=generation,
-            )
+                response_source_id=state.get("utterance_id"),
+                kind="source_approval",
+            ):
+                return None
+            return str(state["utterance_id"])
+
+        def on_text_delta(delta: str) -> None:
+            if not delta:
+                return
+            state = relay_state_for_response("relay_partial")
+            if state is None:
+                return
             state["brse_text"] = f"{state['brse_text']}{delta}"
             asyncio.create_task(
                 self._publish_partial(
@@ -1090,21 +1256,9 @@ class RoomInterpreterManager:
             )
 
         def on_text_done(text: str) -> None:
-            if not is_publishable_callback("relay_final"):
+            state = relay_state_for_response("relay_final")
+            if state is None:
                 return
-            state = self.transcript_state.get(speaker_id)
-            if (
-                state is None
-                or state.get("generation") != generation
-                or state.get("src_lang") != src_lang
-                or state.get("target_lang") != target_lang
-            ):
-                state = self._ensure_transcript_state(
-                    speaker_id=speaker_id,
-                    src_lang=src_lang,
-                    target_lang=target_lang,
-                    generation=generation,
-                )
             final_text = text or state["brse_text"].strip()
             state["brse_text"] = final_text
             if final_text:
@@ -1117,11 +1271,15 @@ class RoomInterpreterManager:
                 )
 
         def on_audio_delta(encoded: str) -> None:
-            if not encoded or not is_publishable_callback("audio_delta"):
+            if not encoded:
+                return
+            state = relay_state_for_response("audio_delta")
+            if state is None:
                 return
             asyncio.create_task(
                 self._capture_audio_delta(
                     speaker_id=speaker_id,
+                    utterance_id=state["utterance_id"],
                     generation=generation,
                     router=router,
                     encoded=encoded,
@@ -1129,11 +1287,13 @@ class RoomInterpreterManager:
             )
 
         def on_audio_done() -> None:
-            if not is_publishable_callback("audio_done"):
+            state = relay_state_for_response("audio_done")
+            if state is None:
                 return
             asyncio.create_task(
                 self._flush_audio(
                     speaker_id=speaker_id,
+                    utterance_id=state["utterance_id"],
                     generation=generation,
                     router=router,
                 )
@@ -1230,8 +1390,10 @@ class RoomInterpreterManager:
                 )
             )
 
+        client.on_input_audio_committed = on_input_audio_committed
         client.on_input_transcript_delta = on_input_transcript_delta
         client.on_transcript_complete = on_transcript_complete
+        client.approve_transcript_for_relay = approve_transcript_for_relay
         client.on_text_delta = on_text_delta
         client.on_text_done = on_text_done
         client.on_audio_delta = on_audio_delta
@@ -1245,11 +1407,16 @@ class RoomInterpreterManager:
         self,
         *,
         speaker_id: str,
+        utterance_id: str,
         generation: int,
         router: OutputRouter,
         encoded: str,
     ) -> None:
         if not self._runtime_generation_matches(speaker_id, generation, router):
+            return
+        state = self._transcript_state_for_publish(speaker_id, utterance_id, generation)
+        if state is None or not self._source_state_is_valid_for_output(state):
+            router.clear_queue()
             return
         ok = await router.capture_base64_audio(encoded)
         if not ok:
@@ -1264,12 +1431,193 @@ class RoomInterpreterManager:
         self,
         *,
         speaker_id: str,
+        utterance_id: str,
         generation: int,
         router: OutputRouter,
     ) -> None:
         if not self._runtime_generation_matches(speaker_id, generation, router):
             return
+        state = self._transcript_state_for_publish(speaker_id, utterance_id, generation)
+        if state is None or not self._source_state_is_valid_for_output(state):
+            router.clear_queue()
+            return
         await router.flush()
+
+    def _source_state_can_relay(
+        self,
+        *,
+        speaker_id: str,
+        state: Dict[str, Any],
+        generation: int,
+        src_lang: str,
+        target_lang: str,
+        response_source_id: Optional[str],
+        kind: str,
+    ) -> bool:
+        if state.get("generation") != generation:
+            return self._log_source_gate_drop(
+                speaker_id=speaker_id,
+                state=state,
+                kind=kind,
+                reason="generation_mismatch",
+            )
+        if state.get("src_lang") != src_lang or state.get("target_lang") != target_lang:
+            return self._log_source_gate_drop(
+                speaker_id=speaker_id,
+                state=state,
+                kind=kind,
+                reason="route_mismatch",
+            )
+        if self.relay_focus_speaker_id != speaker_id or self.relay_focus_generation != generation:
+            return self._log_source_gate_drop(
+                speaker_id=speaker_id,
+                state=state,
+                kind=kind,
+                reason="relay_focus_mismatch",
+            )
+        if not self._relay_route_is_still_valid(
+            speaker_id=speaker_id,
+            src_lang=src_lang,
+            target_lang=target_lang,
+        ):
+            return self._log_source_gate_drop(
+                speaker_id=speaker_id,
+                state=state,
+                kind=kind,
+                reason="route_not_current",
+            )
+        if not self._source_state_is_valid_for_output(state):
+            return self._log_source_gate_drop(
+                speaker_id=speaker_id,
+                state=state,
+                kind=kind,
+                reason=str(state.get("source_rejected_reason") or "source_not_validated"),
+            )
+        if response_source_id != state.get("utterance_id"):
+            return self._log_source_gate_drop(
+                speaker_id=speaker_id,
+                state=state,
+                kind=kind,
+                reason="response_utterance_mismatch",
+                response_source_id=response_source_id,
+            )
+        return True
+
+    def _source_state_is_valid_for_output(self, state: Dict[str, Any]) -> bool:
+        return bool(
+            state.get("source_committed")
+            and state.get("source_final")
+            and state.get("source_valid")
+            and state.get("source_text")
+        )
+
+    def _relay_route_is_still_valid(
+        self,
+        *,
+        speaker_id: str,
+        src_lang: str,
+        target_lang: str,
+    ) -> bool:
+        if not self._meeting_languages_ready:
+            return False
+        speaker = self.participants.get(speaker_id)
+        if speaker is None or not self._is_active_human_participant(speaker):
+            return False
+        if speaker.get("language") != src_lang:
+            return False
+        if src_lang not in self.meeting_languages or target_lang not in self.meeting_languages:
+            return False
+        if src_lang == target_lang:
+            return False
+        relay_map = build_relay_language_map(self.meeting_languages)
+        return relay_target_language(src_lang, relay_map) == target_lang
+
+    def _log_source_gate_drop(
+        self,
+        *,
+        speaker_id: str,
+        state: Dict[str, Any],
+        kind: str,
+        reason: str,
+        response_source_id: Optional[str] = None,
+    ) -> bool:
+        logger.debug(
+            "Suppressing BRSE %s before publish room=%s speaker=%s utterance=%s "
+            "reason=%s response_source_id=%s source_valid=%s source_final=%s generation=%s",
+            kind,
+            self.room_id,
+            speaker_id,
+            state.get("utterance_id"),
+            reason,
+            response_source_id,
+            state.get("source_valid"),
+            state.get("source_final"),
+            state.get("generation"),
+        )
+        return False
+
+    def _assess_source_transcript(
+        self,
+        text: str,
+        *,
+        duration_ms: Optional[int],
+        final: bool,
+    ) -> tuple[bool, str, str, Dict[str, Any]]:
+        normalized = self._normalize_source_text(text)
+        tokens = _SOURCE_TOKEN_RE.findall(normalized)
+        meaningful_tokens = [
+            token
+            for token in tokens
+            if token.lower() not in _SOURCE_FILLER_TOKENS
+        ]
+        meaningful_chars = sum(1 for char in normalized if char.isalnum())
+        signal = {
+            "chars": len(normalized),
+            "meaningful_chars": meaningful_chars,
+            "tokens": len(tokens),
+            "meaningful_tokens": len(meaningful_tokens),
+            "duration_ms": duration_ms,
+            "final": final,
+        }
+
+        if not normalized:
+            return False, "empty_transcript", normalized, signal
+        if _SOURCE_NOISE_ONLY_RE.match(normalized):
+            return False, "noise_only_transcript", normalized, signal
+        if meaningful_chars == 0:
+            return False, "punctuation_only_transcript", normalized, signal
+
+        collapsed_meaningful = "".join(char.lower() for char in normalized if char.isalnum())
+        if len(collapsed_meaningful) <= 3 and len(set(collapsed_meaningful)) <= 1:
+            return False, "repetitive_low_signal_transcript", normalized, signal
+
+        if not meaningful_tokens:
+            return False, "filler_only_transcript", normalized, signal
+
+        min_chars = (
+            _SOURCE_MIN_FINAL_MEANINGFUL_CHARS
+            if final
+            else _SOURCE_MIN_PARTIAL_MEANINGFUL_CHARS
+        )
+        min_tokens = (
+            _SOURCE_MIN_FINAL_MEANINGFUL_TOKENS
+            if final
+            else _SOURCE_MIN_PARTIAL_MEANINGFUL_TOKENS
+        )
+        if meaningful_chars < min_chars:
+            return False, "too_short_transcript", normalized, signal
+        if len(meaningful_tokens) < min_tokens:
+            longest_token = max((len(token) for token in meaningful_tokens), default=0)
+            if longest_token < min_chars:
+                return False, "too_few_meaningful_tokens", normalized, signal
+
+        if final and duration_ms is not None and duration_ms < _SOURCE_MIN_SPEECH_DURATION_MS:
+            return False, "speech_too_short", normalized, signal
+
+        return True, "ok", normalized, signal
+
+    def _normalize_source_text(self, text: str) -> str:
+        return re.sub(r"\s+", " ", (text or "").strip())
 
     async def _publish_source_partial(
         self,
@@ -1280,6 +1628,13 @@ class RoomInterpreterManager:
         state = self._transcript_state_for_publish(speaker_id, utterance_id, generation)
         if state is None or not state["source_text"]:
             return
+        partial_ok, _reason, normalized_text, _signal = self._assess_source_transcript(
+            state["source_text"],
+            duration_ms=state.get("speech_duration_ms"),
+            final=False,
+        )
+        if not partial_ok:
+            return
 
         await self.publisher.publish_source_transcript_partial(
             transcript_id=state["source_transcript_id"],
@@ -1287,7 +1642,7 @@ class RoomInterpreterManager:
             speaker_id=speaker_id,
             speaker_name=self._speaker_name(speaker_id),
             src_lang=state["src_lang"],
-            text=state["source_text"],
+            text=normalized_text,
             created_at=state["created_at"],
             relay_focus=self._relay_focus_payload(speaker_id),
             overlap=self._overlap_payload(speaker_id),
@@ -1300,7 +1655,7 @@ class RoomInterpreterManager:
         generation: int,
     ) -> None:
         state = self._transcript_state_for_publish(speaker_id, utterance_id, generation)
-        if state is None or not state["source_text"]:
+        if state is None or not state["source_text"] or not state.get("source_valid"):
             return
 
         await self.publisher.publish_source_transcript_final(
@@ -1327,6 +1682,9 @@ class RoomInterpreterManager:
         if state is None or target_lang is None or router is None:
             return
         if not self._runtime_generation_matches(speaker_id, generation, router):
+            return
+        if not self._source_state_is_valid_for_output(state) or not state["brse_text"]:
+            router.clear_queue()
             return
 
         await self.publisher.publish_relay_transcript_partial(
@@ -1358,6 +1716,9 @@ class RoomInterpreterManager:
         if state is None or target_lang is None or router is None or not state["brse_text"]:
             return
         if not self._runtime_generation_matches(speaker_id, generation, router):
+            return
+        if not self._source_state_is_valid_for_output(state):
+            router.clear_queue()
             return
 
         latency_ms = int(max(0.0, time.monotonic() - state["started_at"]) * 1000)
@@ -1502,6 +1863,13 @@ class RoomInterpreterManager:
             "relay_transcript_id": f"{utterance_id}::relay::{target_lang}",
             "source_text": "",
             "brse_text": "",
+            "source_item_id": None,
+            "source_committed": False,
+            "source_final": False,
+            "source_valid": False,
+            "source_rejected_reason": None,
+            "source_signal": {},
+            "speech_duration_ms": self._speaker_state(speaker_id).last_speech_duration_ms,
             "started_at": time.monotonic(),
             "created_at": self._now_str(),
             "src_lang": src_lang,

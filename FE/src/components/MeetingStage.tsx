@@ -45,51 +45,124 @@ export function MeetingStage({
       </div>
 
       {hasScreenShare ? (
-        <div className="screen-share-stage">
-          <div className="screen-share-frame">
-            {selectedScreenFeed?.track ? (
-              <VideoTrackView track={selectedScreenFeed.track} />
-            ) : (
-              <div className="screen-stage-placeholder">
-                <strong>{selectedScreenSharer.display_name}</strong>
-                <p>Screen stream is connecting.</p>
-              </div>
-            )}
-          </div>
-
-          <div className="stage-video-strip">
-            {videos.map((feed) => (
-              <StageTile
-                key={feed.participantId}
-                feed={feed}
-                participant={participantById.get(feed.participantId)}
-                brseEnabled={brseEnabled}
-                relayStatusLabel={relayStatusLabel}
-              />
-            ))}
-          </div>
-        </div>
+        <SharedScreenStage
+          videos={videos}
+          participantById={participantById}
+          selectedScreenSharer={selectedScreenSharer}
+          selectedScreenFeed={selectedScreenFeed}
+          brseEnabled={brseEnabled}
+          relayStatusLabel={relayStatusLabel}
+        />
       ) : (
-        <div className={videos.length <= 2 ? "stage-video-grid is-few" : "stage-video-grid"}>
-          {videos.length === 0 ? (
-            <div className="stage-empty-state">
-              <strong>No camera feeds yet</strong>
-              <p>Participants appear here after their room media connects.</p>
-            </div>
-          ) : (
-            videos.map((feed) => (
-              <StageTile
-                key={feed.participantId}
-                feed={feed}
-                participant={participantById.get(feed.participantId)}
-                brseEnabled={brseEnabled}
-                relayStatusLabel={relayStatusLabel}
-              />
-            ))
-          )}
-        </div>
+        <ParticipantGrid
+          videos={videos}
+          participantById={participantById}
+          brseEnabled={brseEnabled}
+          relayStatusLabel={relayStatusLabel}
+        />
       )}
     </section>
+  );
+}
+
+function SharedScreenStage({
+  videos,
+  participantById,
+  selectedScreenSharer,
+  selectedScreenFeed,
+  brseEnabled,
+  relayStatusLabel,
+}: {
+  videos: VideoFeed[];
+  participantById: Map<string, ParticipantSnapshot>;
+  selectedScreenSharer: ParticipantSnapshot;
+  selectedScreenFeed: ScreenShareFeed | null;
+  brseEnabled: boolean;
+  relayStatusLabel: string;
+}) {
+  return (
+    <div className="screen-share-stage">
+      <div className="screen-share-frame">
+        {selectedScreenFeed?.track ? (
+          <VideoTrackView track={selectedScreenFeed.track} />
+        ) : (
+          <div className="screen-stage-placeholder">
+            <strong>{selectedScreenSharer.display_name}</strong>
+            <p>Screen stream is connecting.</p>
+          </div>
+        )}
+      </div>
+
+      <ParticipantFilmstrip
+        videos={videos}
+        participantById={participantById}
+        brseEnabled={brseEnabled}
+        relayStatusLabel={relayStatusLabel}
+      />
+    </div>
+  );
+}
+
+function ParticipantGrid({
+  videos,
+  participantById,
+  brseEnabled,
+  relayStatusLabel,
+}: {
+  videos: VideoFeed[];
+  participantById: Map<string, ParticipantSnapshot>;
+  brseEnabled: boolean;
+  relayStatusLabel: string;
+}) {
+  return (
+    <div className={videos.length <= 2 ? "stage-video-grid is-few" : "stage-video-grid"}>
+      {videos.length === 0 ? (
+        <div className="stage-empty-state">
+          <strong>No camera feeds yet</strong>
+          <p>Participants appear here after their room media connects.</p>
+        </div>
+      ) : (
+        videos.map((feed) => (
+          <StageTile
+            key={feed.participantId}
+            feed={feed}
+            participant={participantById.get(feed.participantId)}
+            brseEnabled={brseEnabled}
+            relayStatusLabel={relayStatusLabel}
+          />
+        ))
+      )}
+    </div>
+  );
+}
+
+function ParticipantFilmstrip({
+  videos,
+  participantById,
+  brseEnabled,
+  relayStatusLabel,
+}: {
+  videos: VideoFeed[];
+  participantById: Map<string, ParticipantSnapshot>;
+  brseEnabled: boolean;
+  relayStatusLabel: string;
+}) {
+  if (videos.length === 0) {
+    return null;
+  }
+
+  return (
+    <div className="stage-video-strip" aria-label="Participant video strip">
+      {videos.map((feed) => (
+        <StageTile
+          key={feed.participantId}
+          feed={feed}
+          participant={participantById.get(feed.participantId)}
+          brseEnabled={brseEnabled}
+          relayStatusLabel={relayStatusLabel}
+        />
+      ))}
+    </div>
   );
 }
 

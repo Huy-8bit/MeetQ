@@ -43,6 +43,13 @@ export function RoomPage() {
   const handleSessionInvalidated = useCallback(() => {
     clearSession(roomId);
   }, [clearSession, roomId]);
+  const handleRoomExpired = useCallback(() => {
+    clearSession(roomId);
+    navigate("/", {
+      replace: true,
+      state: { notice: "This meeting has ended." },
+    });
+  }, [clearSession, navigate, roomId]);
 
   useEffect(() => {
     if (!roomId) {
@@ -100,6 +107,7 @@ export function RoomPage() {
     initialRoom: roomSnapshot,
     session,
     onSessionInvalidated: handleSessionInvalidated,
+    onRoomExpired: handleRoomExpired,
   });
 
   // expiresAt comes from the live meeting state (updated via WS snapshots) or fallback to REST snapshot

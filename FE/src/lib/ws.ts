@@ -432,5 +432,5 @@ function buildClientEventId(): string {
 }
 
 function isFatalCloseCode(code: number): boolean {
-  return code === 4401 || code === 4403 || code === 4404;
+  return code === 4401 || code === 4403 || code === 4404 || code === 4410;
 }

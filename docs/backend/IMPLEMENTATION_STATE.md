@@ -1,5 +1,118 @@
 # Backend Implementation State
 
+## Turn Update: 2026-05-02 BRSE Source-Transcript-First Anti-Hallucination Runtime
+
+- Time: 2026-05-02T14:57:10+07:00
+- Mode: CODE-ONLY
+- Testing deferred: yes, per instruction
+
+### Objective Locked
+
+- Stop BRSE/AI relay from speaking on silence, noise, vague speech, partial ASR fragments, or model self-generated responses.
+- Make completed source transcript the required source of truth before any BRSE relay text/audio can publish.
+- Prefer slower or suppressed relay over hallucinated, guessed, stale, or wrong-speaker output.
+
+### Mandatory Read Status
+
+- Read required docs:
+  - `docs/backend/IMPLEMENTATION_STATE.md`
+  - `docs/backend/INTERPRETER_DESIGN.md`
+  - `docs/backend/API_CONTRACT.md`
+- Read required runtime files:
+  - `BE/server/interpreter/meeting_config.py`
+  - `BE/server/interpreter/interpreter_client.py`
+  - `BE/server/interpreter/room_manager.py`
+  - `BE/server/interpreter/output_router.py`
+  - `BE/server/interpreter/audio_input.py`
+  - `BE/server/interpreter/livekit_runtime.py`
+  - `BE/server/interpreter/event_publisher.py`
+  - `BE/server/src/realtime/client.py`
+  - `BE/server/src/common/lang.py`
+- Path note: requested `BE/src/realtime/client.py` and `BE/src/common/lang.py` do not exist in this checkout; active files are under `BE/server/src/...`.
+
+### Policy Implemented
+
+- Policy name: `source_transcript_first_strict`.
+- Realtime VAD no longer auto-creates model responses:
+  - `turn_detection.create_response=false`
+  - `turn_detection.interrupt_response=false`
+- BRSE relay response is now created manually only after:
+  - input audio is committed,
+  - source transcription completes,
+  - transcript passes low-signal/meaningfulness gates,
+  - speaker route still matches room language pair,
+  - speaker still owns current relay focus/generation,
+  - response source id matches the active utterance.
+- Model response is now generated from the validated transcript text via out-of-band `response.create(conversation="none")`, not from loose audio context.
+
+### Runtime Gates Added
+
+- Source transcript guard:
+  - rejects empty transcript,
+  - rejects punctuation-only transcript,
+  - rejects filler-only transcript,
+  - rejects known noise-only ASR outputs,
+  - rejects repetitive low-signal fragments,
+  - rejects too-short transcript,
+  - rejects too-short speech duration when available.
+- Publish guard before source transcript events:
+  - source partial is emitted only after committed input and a meaningful partial threshold.
+  - source final is emitted only when completed transcript passes final source validation.
+- Publish guard before relay text/audio:
+  - relay partial/final requires `source_committed && source_final && source_valid`.
+  - audio delta/flush requires the same valid source state.
+  - relay output requires matching utterance id from the active response source.
+  - relay output requires current speaker generation, current route, and room relay focus.
+- Stale response guard:
+  - response events without a pending validated source are cancelled/dropped.
+  - response events with mismatched response/source ids are dropped.
+  - response arriving after utterance reset, speaker mismatch, route change, or focus change cannot publish text/audio.
+- Silence/no-speech handling:
+  - empty or failed input transcription now suppresses response, prunes conversation items, returns status to idle, and releases focus through existing cooldown.
+
+### Prompt / VAD Changes
+
+- Prompt now explicitly says:
+  - relay only from completed, validated source transcript,
+  - never speak on silence/noise/VAD-only events/incomplete transcript,
+  - when uncertain, say nothing,
+  - do not guess missing words,
+  - do not complete fragments,
+  - do not fill gaps or infer meeting context.
+- VAD is less aggressive for noisy rooms:
+  - `threshold`: `0.40` -> `0.58`
+  - `silence_duration_ms`: `840` -> `1000`
+  - `prefix_padding_ms`: `320` -> `300`
+
+### Files Modified
+
+- `BE/server/interpreter/meeting_config.py`
+  - disabled auto responses in VAD config,
+  - raised VAD activation certainty,
+  - strengthened anti-hallucination/source-transcript-first instructions.
+- `BE/server/interpreter/interpreter_client.py`
+  - tracks active input item id and active response source id,
+  - suppresses stale input transcription events,
+  - handles empty/failed transcription as no-relay,
+  - creates out-of-band response only from approved source transcript,
+  - cancels/drops any response created without a validated source.
+- `BE/server/interpreter/room_manager.py`
+  - added meaningfulness/noise/filler source transcript filter,
+  - opens utterance only after committed input,
+  - approves relay only from valid source final,
+  - gates relay text/audio by utterance id, generation, focus, speaker route, and source validity.
+- `docs/backend/IMPLEMENTATION_STATE.md`
+  - updated this implementation state.
+
+### Verification
+
+- Full test suite not run, per CODE-ONLY instruction.
+- New tests not added.
+- Existing tests not modified.
+- Lightweight checks run:
+  - `python -m py_compile BE/server/interpreter/meeting_config.py BE/server/interpreter/interpreter_client.py BE/server/interpreter/room_manager.py BE/server/interpreter/translation_test_client.py`
+  - `git diff --check -- BE/server/interpreter/meeting_config.py BE/server/interpreter/interpreter_client.py BE/server/interpreter/room_manager.py`
+
 ## Turn Update: 2026-05-02 BRSE Overlap Speech Arbitration (Kickoff)
 
 - Time: 2026-05-02T14:05:37+07:00
