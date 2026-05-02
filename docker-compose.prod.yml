@@ -55,7 +55,7 @@ services:
     working_dir: /app
     environment:
       OPENAI_API_KEY: ${OPENAI_API_KEY:-replace-with-openai-api-key}
-      OPENAI_REALTIME_MODEL: ${OPENAI_REALTIME_MODEL:-gpt-realtime-1.5}
+      OPENAI_REALTIME_MODEL: ${OPENAI_REALTIME_MODEL:-gpt-realtime-mini}
       REDIS_URL: redis://redis:6379/0
       ROOM_JWT_SECRET: ${ROOM_JWT_SECRET:-replace-with-room-jwt-secret}
       ROOM_TOKEN_TTL_SECONDS: ${ROOM_TOKEN_TTL_SECONDS:-86400}
@@ -89,7 +89,7 @@ services:
     working_dir: /app
     environment:
       OPENAI_API_KEY: ${OPENAI_API_KEY:-replace-with-openai-api-key}
-      OPENAI_REALTIME_MODEL: ${OPENAI_REALTIME_MODEL:-gpt-realtime-1.5}
+      OPENAI_REALTIME_MODEL: ${OPENAI_REALTIME_MODEL:-gpt-realtime-mini}
       REDIS_URL: redis://redis:6379/0
       ROOM_JWT_SECRET: ${ROOM_JWT_SECRET:-replace-with-room-jwt-secret}
       ROOM_TOKEN_TTL_SECONDS: ${ROOM_TOKEN_TTL_SECONDS:-86400}

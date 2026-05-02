@@ -5,7 +5,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     # OpenAI
     openai_api_key: str
-    openai_realtime_model: str = "gpt-realtime-1.5"
+    openai_realtime_model: str = "gpt-realtime-mini"
     
     # Redis
     redis_url: str = "redis://localhost:6379"

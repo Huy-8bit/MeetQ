@@ -1,5 +1,52 @@
 # Backend Implementation State
 
+## Turn Update: 2026-05-02 BRSE Realtime Mini Default
+
+- Time: 2026-05-02T15:21:40+07:00
+- Mode: CODE-ONLY
+- Testing deferred: full test suite not run, per instruction
+
+### Objective
+
+- Reduce BRSE relay operating cost by trying `gpt-realtime-mini` as the default realtime model.
+- Keep production rollback fast through the existing `OPENAI_REALTIME_MODEL` environment override.
+- Keep the current source-transcript-first anti-hallucination relay pipeline unchanged.
+
+### Runtime Model Change
+
+- Default realtime model changed from `gpt-realtime-1.5` to `gpt-realtime-mini`.
+- `OPENAI_REALTIME_MODEL` remains the override path for gateway, interpreter, CLI, and translation-test runtime paths.
+- Docker compose defaults now use `gpt-realtime-mini` when `OPENAI_REALTIME_MODEL` is unset.
+- Env examples and backend README now document `gpt-realtime-mini` as the default.
+
+### Cost / Quality / Rollback
+
+- Reason: evaluate lower-cost realtime inference for BRSE relay while preserving the current runtime contract.
+- Expected cost impact: lower default BRSE relay spend for deployments that do not explicitly set `OPENAI_REALTIME_MODEL`.
+- Quality risk: translation and voice relay quality may be slightly lower than `gpt-realtime-1.5`; monitor transcript accuracy, latency, and user reports after rollout.
+- Rollback: set `OPENAI_REALTIME_MODEL=gpt-realtime-1.5` in deployment env and restart affected gateway/interpreter services.
+
+### Files Modified
+
+- `.env.example`
+- `BE/.env.example`
+- `docker-compose.yml`
+- `docker-compose.prod.yml`
+- `BE/README.md`
+- `BE/server/config.py`
+- `BE/server/src/realtime/client.py`
+- `BE/server/interpreter/translation_test_client.py`
+- `docs/backend/IMPLEMENTATION_STATE.md`
+
+### Verification
+
+- Full test suite not run, per CODE-ONLY instruction.
+- New tests not added.
+- Existing tests not modified.
+- Lightweight checks run:
+  - `python -m py_compile BE/server/config.py BE/server/src/realtime/client.py BE/server/interpreter/translation_test_client.py`
+  - `git diff --check`
+
 ## Turn Update: 2026-05-02 BRSE Source-Transcript-First Anti-Hallucination Runtime
 
 - Time: 2026-05-02T14:57:10+07:00

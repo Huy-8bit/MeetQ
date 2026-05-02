@@ -133,7 +133,7 @@ class TranslationTestClient:
         api_key: str,
         src_lang: str,
         tgt_lang: str,
-        model: str = "gpt-realtime-1.5",
+        model: str = "gpt-realtime-mini",
     ) -> None:
         self._api_key = api_key
         self._src_lang = src_lang
