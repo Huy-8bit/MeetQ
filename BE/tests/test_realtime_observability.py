@@ -23,7 +23,7 @@ _ROOT = Path(__file__).resolve().parent.parent
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-from src.realtime.client import RealtimeClient, SPEAKER_SAMPLE_RATE
+from server.brain.realtime.client import RealtimeClient, SPEAKER_SAMPLE_RATE
 
 
 # ---------------------------------------------------------------------------
@@ -93,7 +93,7 @@ class TestSpeakerDisabledWarning:
         """No DISABLED warning when enable_speaker=True."""
         c = _make_client(enable_speaker=True)
 
-        with patch("src.realtime.client.SpeakerPlayer") as MockPlayer:
+        with patch("server.brain.realtime.client.SpeakerPlayer") as MockPlayer:
             MockPlayer.return_value.start = MagicMock()
             MockPlayer.return_value.stop = MagicMock()
 
@@ -289,7 +289,7 @@ class TestLockedModeStallHint:
         # Short text that will return None from detect_lang (< 5 ASCII words, no ja/vi markers)
         short_text = "hi"  # 2 chars, detect_lang returns None
 
-        with patch("src.realtime.client.detect_lang", return_value=None):
+        with patch("server.brain.realtime.client.detect_lang", return_value=None):
             for _ in range(3):
                 await c._handle_input_transcript(ws, short_text)
 
@@ -303,7 +303,7 @@ class TestLockedModeStallHint:
         c = _make_client(src_lang="auto", tgt_lang="auto", meeting_mode="locked")
         ws = _fake_ws()
 
-        with patch("src.realtime.client.detect_lang", return_value=None):
+        with patch("server.brain.realtime.client.detect_lang", return_value=None):
             for _ in range(6):
                 await c._handle_input_transcript(ws, "hi")
 
@@ -316,7 +316,7 @@ class TestLockedModeStallHint:
         c = _make_client(src_lang="auto", tgt_lang="auto", meeting_mode="locked")
         ws = _fake_ws()
 
-        with patch("src.realtime.client.detect_lang", return_value=None):
+        with patch("server.brain.realtime.client.detect_lang", return_value=None):
             await c._handle_input_transcript(ws, "hi")
             await c._handle_input_transcript(ws, "hi")
 
@@ -328,7 +328,7 @@ class TestLockedModeStallHint:
         c = _make_client(src_lang="auto", tgt_lang="auto", meeting_mode="locked")
         ws = _fake_ws()
 
-        with patch("src.realtime.client.detect_lang", return_value="en"):
+        with patch("server.brain.realtime.client.detect_lang", return_value="en"):
             await c._handle_input_transcript(ws, "Hello world this is a test")
 
         assert c._stat_detect_failed == 0
@@ -340,7 +340,7 @@ class TestLockedModeStallHint:
         c._routing_locked = True
         ws = _fake_ws()
 
-        with patch("src.realtime.client.detect_lang", return_value=None) as mock_detect:
+        with patch("server.brain.realtime.client.detect_lang", return_value=None) as mock_detect:
             for _ in range(5):
                 await c._handle_input_transcript(ws, "hi")
 
@@ -355,7 +355,7 @@ class TestLockedModeStallHint:
         c = _make_client(src_lang="vi", tgt_lang="en", meeting_mode="locked")
         ws = _fake_ws()
 
-        with patch("src.realtime.client.detect_lang", return_value=None) as mock_detect:
+        with patch("server.brain.realtime.client.detect_lang", return_value=None) as mock_detect:
             for _ in range(5):
                 await c._handle_input_transcript(ws, "hi")
 
@@ -376,7 +376,7 @@ class TestDetectionLockFlow:
         assert not c._routing_locked
         ws = _fake_ws()
 
-        with patch("src.realtime.client.detect_lang", return_value="vi"):
+        with patch("server.brain.realtime.client.detect_lang", return_value="vi"):
             await c._handle_input_transcript(ws, "Xin chào bạn")
 
         assert c._routing_locked is True
@@ -392,14 +392,14 @@ class TestDetectionLockFlow:
         ws = _fake_ws()
 
         # Lock on first detection
-        with patch("src.realtime.client.detect_lang", return_value="vi"):
+        with patch("server.brain.realtime.client.detect_lang", return_value="vi"):
             await c._handle_input_transcript(ws, "Xin chào")
 
         assert c._routing_locked is True
         ws.send.reset_mock()
 
         # Second transcript — should be ignored (routing locked)
-        with patch("src.realtime.client.detect_lang", return_value="en"):
+        with patch("server.brain.realtime.client.detect_lang", return_value="en"):
             await c._handle_input_transcript(ws, "Hello world")
 
         ws.send.assert_not_called()

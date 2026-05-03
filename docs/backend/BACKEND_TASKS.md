@@ -135,9 +135,9 @@ Tạo layer auth cho Gateway WS/leave API và token issuer cho browser LiveKit c
 
 **Files**
 
-- `BE/server/gateway/__init__.py` `[NEW]`
-- `BE/server/gateway/auth.py` `[NEW]`
-- `BE/server/gateway/livekit_tokens.py` `[NEW]`
+- `BE/server/service/gateway/__init__.py` `[NEW]`
+- `BE/server/service/gateway/auth.py` `[NEW]`
+- `BE/server/service/gateway/livekit_tokens.py` `[NEW]`
 - `BE/tests/test_gateway_auth.py` `[NEW]`
 
 **Input / Output**
@@ -175,7 +175,7 @@ Implement Redis persistence layer cho room meta, participant state, transcript h
 
 **Files**
 
-- `BE/server/gateway/room_store.py` `[NEW]`
+- `BE/server/service/gateway/room_store.py` `[NEW]`
 - `BE/tests/test_gateway_room_store.py` `[NEW]`
 
 **Input / Output**
@@ -215,7 +215,7 @@ Tách use-case layer khỏi route layer.
 
 **Files**
 
-- `BE/server/gateway/room_service.py` `[NEW]`
+- `BE/server/service/gateway/room_service.py` `[NEW]`
 
 **Input / Output**
 
@@ -254,10 +254,10 @@ Expose public REST contract exactly như `API_CONTRACT.md`.
 
 **Files**
 
-- `BE/server/gateway/api_health.py` `[NEW]`
-- `BE/server/gateway/api_rooms.py` `[NEW]`
-- `BE/server/gateway/dependencies.py` `[NEW]`
-- `BE/server/gateway/main.py` `[NEW]`
+- `BE/server/service/gateway/api_health.py` `[NEW]`
+- `BE/server/service/gateway/api_rooms.py` `[NEW]`
+- `BE/server/service/gateway/dependencies.py` `[NEW]`
+- `BE/server/service/gateway/main.py` `[NEW]`
 - `BE/tests/test_gateway_api.py` `[NEW]`
 
 **Input / Output**
@@ -294,8 +294,8 @@ Implement room-scoped socket registry, auth handshake, heartbeat, and client mes
 
 **Files**
 
-- `BE/server/gateway/ws_hub.py` `[NEW]`
-- `BE/server/gateway/ws_endpoint.py` `[NEW]`
+- `BE/server/service/gateway/ws_hub.py` `[NEW]`
+- `BE/server/service/gateway/ws_endpoint.py` `[NEW]`
 - `BE/tests/test_gateway_ws.py` `[NEW]`
 
 **Input / Output**
@@ -337,8 +337,8 @@ Consume Redis pub/sub events từ Interpreter và map thành:
 
 **Files**
 
-- `BE/server/gateway/app_state.py` `[NEW]`
-- `BE/server/gateway/event_consumer.py` `[NEW]`
+- `BE/server/service/gateway/app_state.py` `[NEW]`
+- `BE/server/service/gateway/event_consumer.py` `[NEW]`
 
 **Input / Output**
 
@@ -686,7 +686,7 @@ Input:
 Output:
 
 - documented commands cho:
-  - `uvicorn server.gateway.main:app --host 0.0.0.0 --port 8000`
+  - `uvicorn server.service.gateway.main:app --host 0.0.0.0 --port 8000`
   - `python -m server.interpreter.main`
 - documented expectation về `LIVEKIT_WS_URL_PUBLIC` vs `LIVEKIT_WS_URL_INTERNAL`
 

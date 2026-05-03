@@ -1,210 +1,196 @@
 # BE File Structure
 
-Phạm vi của tài liệu này là **toàn bộ source-controlled file** cần tồn tại trong `BE/` sau khi backend meeting platform hoàn tất.
+Phạm vi tài liệu này là cấu trúc backend hiện tại sau refactor boundary `brain` vs `service`.
 
-Quy ước trạng thái:
+Refactor này là **behavior-preserving**:
 
-- `[KEEP]` giữ nguyên file hiện có, không sửa nội dung.
-- `[MODIFY]` giữ file hiện có nhưng cập nhật nội dung.
-- `[NEW]` file mới cần tạo.
-- `[REMOVE]` file/local artifact không được tồn tại trong target tree.
+- Không đổi REST API routes, WebSocket event names, room snapshot shape, BRSE toggle semantics, LiveKit connect flow, Redis channel contract, hay Telegram notification flow.
+- `brain` chỉ chứa code AI/model-facing.
+- `service` chứa backend orchestration/application logic điều phối room, LiveKit media, Redis control, và brain clients.
 
-Ngoài scope của cây bên dưới:
+## Boundary Rule
 
-- Runtime-local: `.env`, `.venv/`, `__pycache__/`, `.pytest_cache/`, `logs/*.log`, `recordings/*.wav`
-- Root-level infra ngoài `BE/`: `docker-compose.yml`, `livekit.yaml`, nginx config
+- `brain`: module trực tiếp build prompt, cấu hình model session, gọi OpenAI/realtime model, xử lý model events, hoặc áp chính sách chống hallucination trong model-response path.
+- `service`: module điều phối backend application/runtime lifecycle, bao gồm Gateway HTTP/WS transport, room-level coordination, participant/session flow, Redis event IO, LiveKit media bridge, và integration giữa Gateway state với Brain.
+- `shared`: helper generic không thuộc AI domain.
 
 ## Target Tree
 
 ```text
 BE/
-├── .dockerignore                                   [MODIFY]
-├── .env.example                                    [MODIFY]
-├── .gitignore                                      [MODIFY]
-├── Dockerfile                                      [MODIFY]
-├── README.md                                       [MODIFY]
-├── main.py                                         [KEEP]
-├── requirements.txt                                [MODIFY]
+├── Dockerfile
+├── README.md
+├── main.py
+├── requirements.txt
 ├── logs/
-│   └── .gitkeep                                    [KEEP]
+│   └── .gitkeep
 ├── recordings/
-│   └── .gitkeep                                    [KEEP]
-├── src/
-│   ├── __init__.py                                 [KEEP]
-│   ├── common/
-│   │   ├── .gitkeep                                [KEEP]
-│   │   ├── __init__.py                             [KEEP]
-│   │   ├── audio.py                                [KEEP]
-│   │   ├── lang.py                                 [KEEP]
-│   │   └── logging_utils.py                        [KEEP]
-│   ├── fallback/
-│   │   ├── .gitkeep                                [KEEP]
-│   │   ├── __init__.py                             [KEEP]
-│   │   ├── main.py                                 [KEEP]
-│   │   └── pipeline.py                             [KEEP]
-│   └── realtime/
-│       ├── .gitkeep                                [KEEP]
-│       ├── __init__.py                             [KEEP]
-│       ├── client.py                               [KEEP]
-│       └── main.py                                 [KEEP]
+│   └── .gitkeep
 ├── server/
-│   ├── __init__.py                                 [NEW]
-│   ├── config.py                                   [NEW]
-│   ├── events.py                                   [NEW]
-│   ├── models.py                                   [NEW]
-│   ├── redis.py                                    [NEW]
-│   ├── gateway/
-│   │   ├── __init__.py                             [NEW]
-│   │   ├── api_health.py                           [NEW]
-│   │   ├── api_rooms.py                            [NEW]
-│   │   ├── app_state.py                            [NEW]
-│   │   ├── auth.py                                 [NEW]
-│   │   ├── dependencies.py                         [NEW]
-│   │   ├── event_consumer.py                       [NEW]
-│   │   ├── livekit_tokens.py                       [NEW]
-│   │   ├── main.py                                 [NEW]
-│   │   ├── room_service.py                         [NEW]
-│   │   ├── room_store.py                           [NEW]
-│   │   ├── ws_endpoint.py                          [NEW]
-│   │   └── ws_hub.py                               [NEW]
-│   └── interpreter/
-│       ├── __init__.py                             [NEW]
-│       ├── audio_adapter.py                        [NEW]
-│       ├── client_pool.py                          [NEW]
-│       ├── event_sink.py                           [NEW]
-│       ├── fallback_translator.py                  [NEW]
-│       ├── livekit_runtime.py                      [NEW]
-│       ├── main.py                                 [NEW]
-│       ├── output_router.py                        [NEW]
-│       ├── realtime_bridge.py                      [NEW]
-│       ├── service.py                              [NEW]
-│       └── session.py                              [NEW]
+│   ├── __init__.py
+│   ├── config.py
+│   ├── events.py
+│   ├── meeting_modes.py
+│   ├── models.py
+│   ├── redis.py
+│   ├── brain/
+│   │   ├── __init__.py
+│   │   ├── realtime/
+│   │   │   ├── __init__.py
+│   │   │   ├── client.py                   # reusable OpenAI Realtime client
+│   │   │   ├── interpreter_client.py       # meeting realtime model wrapper/callback bridge
+│   │   │   ├── main.py                     # local realtime CLI entrypoint
+│   │   │   ├── session_config.py           # model session/VAD/instruction config
+│   │   │   ├── source_policy.py            # source transcript validation/anti-hallucination policy
+│   │   │   └── translation_test_client.py  # gateway translation-test model client
+│   │   ├── prompts/
+│   │   │   ├── __init__.py
+│   │   │   └── language.py                 # language routing, detection, instruction builders
+│   │   └── fallback/
+│   │       ├── __init__.py
+│   │       ├── main.py                     # local fallback CLI entrypoint
+│   │       └── pipeline.py                 # fallback STT + chat model pipeline
+│   ├── service/
+│   │   ├── __init__.py
+│   │   ├── brain_runtime/
+│   │   │   ├── __init__.py
+│   │   │   ├── main.py                     # brain runtime service process entrypoint
+│   │   │   ├── daemon.py                   # Redis control consumer, room manager lifecycle
+│   │   │   ├── events.py                   # Redis event publisher/envelope adapter
+│   │   │   └── room_manager.py             # room-level orchestration around brain clients
+│   │   ├── media/
+│   │   │   ├── __init__.py
+│   │   │   ├── audio_input.py              # LiveKit AudioStream -> generic AudioInput adapter
+│   │   │   ├── livekit_runtime.py          # LiveKit programmatic participant runtime
+│   │   │   └── output_router.py            # brain audio output -> LiveKit relay track
+│   │   └── gateway/
+│   │       ├── __init__.py
+│   │       ├── api_health.py
+│   │       ├── api_rooms.py
+│   │       ├── api_test_sessions.py
+│   │       ├── app_state.py
+│   │       ├── auth.py
+│   │       ├── dependencies.py
+│   │       ├── event_consumer.py
+│   │       ├── livekit_tokens.py
+│   │       ├── main.py
+│   │       ├── room_service.py
+│   │       ├── room_store.py
+│   │       ├── test_session_store.py
+│   │       ├── ws_endpoint.py
+│   │       ├── ws_hub.py
+│   │       ├── ws_test_mic.py
+│   │       └── ws_test_translation.py
+│   ├── integrations/
+│   │   ├── __init__.py
+│   │   └── telegram.py
+│   └── shared/
+│       ├── __init__.py
+│       ├── audio.py
+│       └── logging_utils.py
 └── tests/
-    ├── conftest.py                                 [NEW]
-    ├── test_gateway_api.py                         [NEW]
-    ├── test_gateway_auth.py                        [NEW]
-    ├── test_gateway_room_store.py                  [NEW]
-    ├── test_gateway_ws.py                          [NEW]
-    ├── test_integration_room_lifecycle.py          [NEW]
-    ├── test_interpreter_audio_adapter.py           [NEW]
-    ├── test_interpreter_client_pool.py             [NEW]
-    ├── test_interpreter_fallback_translator.py     [NEW]
-    ├── test_interpreter_output_router.py           [NEW]
-    ├── test_interpreter_realtime_bridge.py         [NEW]
-    └── test_realtime_observability.py              [KEEP]
+    ├── conftest.py
+    ├── test_gateway_api.py
+    ├── test_gateway_auth.py
+    ├── test_gateway_room_store.py
+    ├── test_gateway_ws.py
+    ├── test_interpreter_audio_adapter.py
+    ├── test_realtime_observability.py
+    └── test_telegram_notifier.py
 ```
 
-## File Responsibilities
+## Module Boundaries
 
-### Top-level files
+### `server.brain`
 
-| File | Status | Responsibility |
+Brain owns AI/model-facing code:
+
+- OpenAI Realtime websocket client and meeting-specific realtime wrapper.
+- Model session payload config, VAD config, and realtime model instructions.
+- Prompt/instruction builders and language routing helpers used by model prompts.
+- Source transcript validation and anti-hallucination policy used before model relay output can publish.
+- Translation-test model client.
+- Fallback STT + chat model pipeline.
+
+Brain does **not** own room lifecycle, Redis control consumption, LiveKit room connection lifecycle, or Gateway fan-out.
+
+### `server.service`
+
+Service owns backend orchestration:
+
+- `service.gateway`: FastAPI REST routes, WebSocket room transport, auth, room store/service, browser LiveKit token issuance, Gateway app state, and event fan-out.
+- `service.brain_runtime.main`: process entrypoint for the runtime that listens to Gateway control events and manages BRSE room runtimes.
+- `service.brain_runtime.daemon`: Redis control channel consumer, room snapshot lookup, BRSE enabled/expired gates, manager spawn/stop lifecycle.
+- `service.brain_runtime.room_manager`: room-level participant/media coordination, routing between room state and brain clients, speaker lifecycle/focus arbitration, transcript publish orchestration.
+- `service.brain_runtime.events`: Redis event publisher/envelope adapter for service-to-gateway events.
+- `service.media`: LiveKit media adapters used by the service runtime.
+
+The production Gateway service starts with:
+
+```bash
+uvicorn server.service.gateway.main:app --host 0.0.0.0 --port 8000
+```
+
+The production brain runtime service starts with:
+
+```bash
+python -m server.service.brain_runtime.main
+```
+
+`docker-compose.yml` and `docker-compose.prod.yml` use this entrypoint for the interpreter/brain runtime container.
+
+### `server.service.gateway`
+
+Gateway owns transport and room ingress/egress:
+
+- FastAPI REST routes and WebSocket room transport.
+- JWT and LiveKit browser token issuance.
+- Redis-backed room store/service.
+- Fan-out of backend events into room snapshots and WebSocket messages.
+- Test-only mic/translation WebSocket endpoints.
+
+Gateway may call `server.brain.realtime.translation_test_client` for the translation-test tool because that code directly controls a realtime model session.
+
+### `server.shared`
+
+Shared contains generic backend helpers that are not AI-specific:
+
+- `audio.py`: generic audio abstractions, mic/device capture, speaker playback helpers.
+- `logging_utils.py`: generic logger and output helpers.
+
+### `server.integrations`
+
+Integrations contains external non-AI service adapters:
+
+- `telegram.py`: Telegram notification integration used by Gateway room service.
+
+## Notable Moves
+
+| Old path | New path | Why |
 | --- | --- | --- |
-| `BE/.dockerignore` | `[MODIFY]` | Loại runtime-local files khỏi Docker build context, đặc biệt `.env`, `.venv`, `recordings/*.wav`, `logs/*`, cache directories. |
-| `BE/.env.example` | `[MODIFY]` | Template đầy đủ cho CLI và platform: OpenAI, Redis, JWT, LiveKit public/internal URLs, API secrets. |
-| `BE/.gitignore` | `[MODIFY]` | Ignore `.env`, recordings generated at runtime, logs, caches, and local editor artifacts. |
-| `BE/Dockerfile` | `[MODIFY]` | Base image chung cho CLI, Gateway, và Interpreter; cài deps web/redis/livekit ngoài deps CLI hiện có. |
-| `BE/README.md` | `[MODIFY]` | Mô tả cách chạy CLI cũ và các process mới: Gateway, Interpreter, test, Docker usage. |
-| `BE/main.py` | `[KEEP]` | Entry point CLI hiện có; không tham gia luồng meeting platform. |
-| `BE/requirements.txt` | `[MODIFY]` | Bổ sung FastAPI, Uvicorn, Redis client, JWT libs, LiveKit Python SDK hiện hành, test deps còn thiếu nếu project pin trong một file. |
+| `BE/server/brain/main.py` | `BE/server/service/brain_runtime/main.py` | Process startup is service orchestration. |
+| `BE/server/brain/relay/daemon.py` | `BE/server/service/brain_runtime/daemon.py` | Redis control and manager lifecycle are service orchestration. |
+| `BE/server/brain/relay/events.py` | `BE/server/service/brain_runtime/events.py` | Redis event publication is service IO, not model logic. |
+| `BE/server/brain/relay/room_manager.py` | `BE/server/service/brain_runtime/room_manager.py` | Room coordination and lifecycle are service logic. |
+| `BE/server/brain/livekit/audio_input.py` | `BE/server/service/media/audio_input.py` | LiveKit media adapter, not model logic. |
+| `BE/server/brain/livekit/runtime.py` | `BE/server/service/media/livekit_runtime.py` | LiveKit participant runtime, not model logic. |
+| `BE/server/brain/livekit/output_router.py` | `BE/server/service/media/output_router.py` | LiveKit output routing, not model logic. |
+| `BE/server/gateway/*` | `BE/server/service/gateway/*` | Gateway is backend application/transport logic, so it belongs under `service`. |
+| source transcript filter inside room manager | `BE/server/brain/realtime/source_policy.py` | AI response anti-hallucination/source policy belongs to model-response path. |
 
-### Runtime placeholder directories
+## Intentionally Kept
 
-| File | Status | Responsibility |
-| --- | --- | --- |
-| `BE/logs/.gitkeep` | `[KEEP]` | Giữ thư mục log tồn tại; production không commit file log thực tế. |
-| `BE/recordings/.gitkeep` | `[KEEP]` | Giữ thư mục recordings cho CLI fallback; platform path không được persist audio vào đây. |
+- `server.models`, `server.events`, `server.redis`, and `server.config` remain shared server-level contracts/config.
+- `server.meeting_modes` remains server-level because Gateway and service both use the meeting/BRSE constants.
+- `server.shared.audio` remains shared because it is generic audio abstraction, not AI-specific.
+- No top-level `server.gateway` compatibility shim is kept; canonical Gateway imports are `server.service.gateway.*`.
 
-### Existing reusable engine in `src/`
+## Behavior Preservation Strategy
 
-| File | Status | Responsibility |
-| --- | --- | --- |
-| `BE/src/__init__.py` | `[KEEP]` | Marker package cho source tree hiện hữu. |
-| `BE/src/common/.gitkeep` | `[KEEP]` | Placeholder thư mục. |
-| `BE/src/common/__init__.py` | `[KEEP]` | Marker package cho common module. |
-| `BE/src/common/audio.py` | `[KEEP]` | Contract `AudioInput`, `SpeakerPlayer`, mic/loopback capture; interpreter chỉ implement adapter mới ở `server/`. |
-| `BE/src/common/lang.py` | `[KEEP]` | Instruction builder và routing helper được tái sử dụng bởi interpreter và fallback translator. |
-| `BE/src/common/logging_utils.py` | `[KEEP]` | Logger utility hiện có. |
-| `BE/src/fallback/.gitkeep` | `[KEEP]` | Placeholder thư mục. |
-| `BE/src/fallback/__init__.py` | `[KEEP]` | Marker package cho fallback module. |
-| `BE/src/fallback/main.py` | `[KEEP]` | CLI fallback runner hiện có. |
-| `BE/src/fallback/pipeline.py` | `[KEEP]` | CLI-oriented fallback pipeline; platform không sửa file này, chỉ tái sử dụng ý tưởng/model choice. |
-| `BE/src/realtime/.gitkeep` | `[KEEP]` | Placeholder thư mục. |
-| `BE/src/realtime/__init__.py` | `[KEEP]` | Marker package cho realtime module. |
-| `BE/src/realtime/client.py` | `[KEEP]` | `RealtimeClient` lõi; interpreter dùng subclass/wrapper ở `server/interpreter/realtime_bridge.py` thay vì sửa trực tiếp. |
-| `BE/src/realtime/main.py` | `[KEEP]` | CLI realtime runner hiện có. |
-
-### Shared server package
-
-| File | Status | Responsibility |
-| --- | --- | --- |
-| `BE/server/__init__.py` | `[NEW]` | Marker package cho toàn bộ backend meeting-platform code. |
-| `BE/server/config.py` | `[NEW]` | `BaseSettings` cho Gateway và Interpreter: Redis URL, JWT secret, LiveKit public/internal URL, OpenAI key, TTLs, limits. |
-| `BE/server/events.py` | `[NEW]` | Khai báo channel names Redis pub/sub, event type constants, helper build/parse envelope. |
-| `BE/server/models.py` | `[NEW]` | Shared Pydantic models / TypedDicts cho room state, participant state, transcript event, interpreter status, API DTOs. |
-| `BE/server/redis.py` | `[NEW]` | Factory tạo `redis.asyncio.Redis`, helper ping/close, TTL refresh helpers. |
-
-### Gateway package
-
-| File | Status | Responsibility |
-| --- | --- | --- |
-| `BE/server/gateway/__init__.py` | `[NEW]` | Marker package cho Gateway service. |
-| `BE/server/gateway/api_health.py` | `[NEW]` | `GET /api/health` route và response mapping. |
-| `BE/server/gateway/api_rooms.py` | `[NEW]` | `POST /api/rooms`, `GET /api/rooms/{id}`, `POST /join`, `DELETE /leave` routes. |
-| `BE/server/gateway/app_state.py` | `[NEW]` | Runtime singletons: settings, Redis clients, room store, ws hub, background tasks. |
-| `BE/server/gateway/auth.py` | `[NEW]` | Sinh/verify room JWT bằng `python-jose`, token claims, close-code mapping cho WS auth failures. |
-| `BE/server/gateway/dependencies.py` | `[NEW]` | FastAPI dependency providers cho settings, store, room service, authenticated participant context. |
-| `BE/server/gateway/event_consumer.py` | `[NEW]` | Background subscriber nhận events từ Interpreter qua Redis và fan-out vào room store + ws hub. |
-| `BE/server/gateway/livekit_tokens.py` | `[NEW]` | Sinh LiveKit access token cho browser participants bằng `livekit-api`; gắn metadata chuẩn. |
-| `BE/server/gateway/main.py` | `[NEW]` | FastAPI app factory, lifespan startup/shutdown, route registration, middleware. |
-| `BE/server/gateway/room_service.py` | `[NEW]` | Use-case layer cho create/join/leave/update-language; publish control events sang Interpreter. |
-| `BE/server/gateway/room_store.py` | `[NEW]` | Redis persistence cho room meta, participants, transcripts, TTL refresh, snapshot retrieval. |
-| `BE/server/gateway/ws_endpoint.py` | `[NEW]` | WebSocket `/ws/rooms/{room_id}` endpoint, heartbeat, auth, message parsing, disconnect cleanup. |
-| `BE/server/gateway/ws_hub.py` | `[NEW]` | In-memory connection registry theo `room_id` và `participant_id`; send snapshot/broadcast per-room/per-participant. |
-
-### Interpreter package
-
-| File | Status | Responsibility |
-| --- | --- | --- |
-| `BE/server/interpreter/__init__.py` | `[NEW]` | Marker package cho Interpreter service. |
-| `BE/server/interpreter/audio_adapter.py` | `[NEW]` | `LiveKitAudioInput` implements `AudioInput` bằng cách bridge `rtc.AudioStream` sang PCM16 16kHz chunk iterator. |
-| `BE/server/interpreter/client_pool.py` | `[NEW]` | `RealtimeClientPool` quản lý create/reuse/evict sessions theo `(room_id, speaker_id, src_lang, tgt_lang)`. |
-| `BE/server/interpreter/event_sink.py` | `[NEW]` | Publish transcript/status/media events từ Interpreter sang Redis channel của Gateway. |
-| `BE/server/interpreter/fallback_translator.py` | `[NEW]` | In-memory Whisper + GPT fallback cho utterance buffer, không ghi WAV ra disk. |
-| `BE/server/interpreter/livekit_runtime.py` | `[NEW]` | Kết nối programmatic participant tới LiveKit room, subscribe remote mic tracks, publish translated output tracks. |
-| `BE/server/interpreter/main.py` | `[NEW]` | Process entrypoint cho Interpreter service. |
-| `BE/server/interpreter/output_router.py` | `[NEW]` | Convert PCM16 24kHz deltas thành `rtc.AudioFrame`, publish/fan-out tới track riêng cho từng listener, clear queues khi barge-in. |
-| `BE/server/interpreter/realtime_bridge.py` | `[NEW]` | Subclass/wrapper của `RealtimeClient` để chuyển OpenAI events thành callbacks thay vì stdout/speaker playback. |
-| `BE/server/interpreter/service.py` | `[NEW]` | Orchestrator chính: consume Redis control events, manage room runtimes, trigger pool/session lifecycle. |
-| `BE/server/interpreter/session.py` | `[NEW]` | State machine và runtime object cho một interpretation session per `(room, speaker, src, tgt)`. |
-
-### Test suite
-
-| File | Status | Responsibility |
-| --- | --- | --- |
-| `BE/tests/conftest.py` | `[NEW]` | Shared fixtures cho Redis fake, LiveKit stubs, JWT helpers, FastAPI app factory. |
-| `BE/tests/test_gateway_api.py` | `[NEW]` | REST contract tests cho create/get/join/leave. |
-| `BE/tests/test_gateway_auth.py` | `[NEW]` | JWT issue/verify tests, room mismatch, expiry, invalid signature. |
-| `BE/tests/test_gateway_room_store.py` | `[NEW]` | Redis state persistence tests, transcript trimming, TTL refresh, room lifecycle transitions. |
-| `BE/tests/test_gateway_ws.py` | `[NEW]` | WebSocket handshake, `room.snapshot`, `set_language`, heartbeat, reconnect replacement. |
-| `BE/tests/test_integration_room_lifecycle.py` | `[NEW]` | Gateway + Interpreter + Redis fake integration around join/speak/leave event flow. |
-| `BE/tests/test_interpreter_audio_adapter.py` | `[NEW]` | `LiveKitAudioInput` frame conversion, chunk sizing, stop semantics. |
-| `BE/tests/test_interpreter_client_pool.py` | `[NEW]` | Pool key reuse, reference counting, teardown on language change/participant leave. |
-| `BE/tests/test_interpreter_fallback_translator.py` | `[NEW]` | Fallback trigger behavior, in-memory WAV conversion, text-only degraded output contract. |
-| `BE/tests/test_interpreter_output_router.py` | `[NEW]` | Audio rechunking 24kHz, per-listener track publish, `clear_queue()` on cancel. |
-| `BE/tests/test_interpreter_realtime_bridge.py` | `[NEW]` | Mapping OpenAI events thành transcript/audio callbacks và session state transitions. |
-| `BE/tests/test_realtime_observability.py` | `[KEEP]` | Existing regression tests cho `src/realtime/client.py`; vẫn phải pass sau khi thêm platform code. |
-
-## Local Artifacts To Remove
-
-| Path | Status | Reason |
-| --- | --- | --- |
-| `BE/recordings/.DS_Store` | `[REMOVE]` | macOS artifact, không thuộc target tree. |
-| `BE/tasks/` | `[REMOVE]` | Empty scratch directory hiện tại, không có vai trò trong target backend. |
-
-## Design Notes
-
-1. `BE/src/` là frozen engine layer. Mọi integration code mới phải đi vào `BE/server/`.
-2. Gateway và Interpreter cùng dùng chung `server/config.py`, `server/events.py`, `server/models.py`, `server/redis.py` để không duplicate contract.
-3. `server/interpreter/realtime_bridge.py` là điểm then chốt để tái sử dụng `RealtimeClient` mà không sửa file gốc.
-4. Không thêm database migration, ORM, SQL model, hay Alembic vì MVP chỉ dùng Redis TTL 24h.
+1. Move modules mechanically and update imports.
+2. Keep public API/WS contracts unchanged.
+3. Keep Redis channel names, event types, room store semantics, and room lifecycle decisions unchanged.
+4. Keep realtime model client behavior, VAD config, prompt text, source transcript policy, and relay gating semantics unchanged.
+5. Keep LiveKit identity/token/track naming behavior unchanged.
+6. Update Docker/compose/README entrypoint paths to the new `service.gateway` and `service.brain_runtime` modules.
+7. Defer full test suite per CODE-ONLY instruction; use only lightweight compile/import checks for moved modules.

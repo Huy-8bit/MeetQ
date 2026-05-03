@@ -1,5 +1,7 @@
 # Gateway Service Design
 
+> Update note (2026-05-03): Gateway remains the HTTP/WS transport and room ingress boundary, and its canonical module path is now `server.service.gateway`. AI/model-facing code lives under `server.brain`; backend application/orchestration code lives under `server.service`. See `docs/backend/FILE_STRUCTURE.md` for the current layout.
+>
 > Update note (2026-05-01): Gateway room state now has explicit `brse_enabled`. Create-room can set it, REST/WS snapshots expose it, and live toggle uses `room.brse_updated` plus BRSE participant join/left events. `brse_enabled=false` is normal human-only meeting mode with no BRSE runtime or virtual participant.
 >
 > Update note (2026-04-30): Gateway runtime now exposes BRSE relay mode by default. Snapshot and websocket payloads may include room-level BRSE mode fields, a virtual participant `brse_ai`, and room-wide relay transcript events. Legacy per-listener routing details below remain as historical design context only.
@@ -36,7 +38,7 @@ Ràng buộc thiết kế:
 - Python 3.12+, `asyncio`
 - Không dùng SQL database
 - Room state lưu Redis với TTL = meeting duration + 5 phút grace (mặc định 35 phút)
-- `BE/src/` giữ nguyên, toàn bộ code mới nằm dưới `BE/server/`
+- AI/model-facing code lives under `BE/server/brain/`; backend application/orchestration code, including Gateway, lives under `BE/server/service/`; Gateway code is under `BE/server/service/gateway/`
 - Gateway và Interpreter giao tiếp qua **Redis pub/sub + Redis state**, không dùng shared memory, không dùng internal HTTP
 
 ## Process Model

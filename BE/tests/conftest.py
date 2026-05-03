@@ -115,12 +115,12 @@ def fake_redis() -> FakeRedis:
 def gateway_app(fake_settings, fake_redis):
     # Lazy import to avoid error before GTW-004 is implemented
     try:
-        from server.gateway.main import app
+        from server.service.gateway.main import app
         from fastapi.testclient import TestClient
-        from server.gateway.app_state import app_state
-        from server.gateway.room_store import RoomStore
-        from server.gateway.room_service import RoomService
-        from server.gateway.ws_hub import WSHub
+        from server.service.gateway.app_state import app_state
+        from server.service.gateway.room_store import RoomStore
+        from server.service.gateway.room_service import RoomService
+        from server.service.gateway.ws_hub import WSHub
         
         # Override app_state for tests
         app_state.settings = fake_settings

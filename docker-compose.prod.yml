@@ -51,7 +51,7 @@ services:
     build:
       context: ./BE
     restart: unless-stopped
-    command: ["-m", "uvicorn", "server.gateway.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    command: ["-m", "uvicorn", "server.service.gateway.main:app", "--host", "0.0.0.0", "--port", "8000"]
     working_dir: /app
     environment:
       OPENAI_API_KEY: ${OPENAI_API_KEY:-replace-with-openai-api-key}
@@ -85,7 +85,7 @@ services:
     build:
       context: ./BE
     restart: unless-stopped
-    command: ["-m", "server.interpreter.main"]
+    command: ["-m", "server.service.brain_runtime.main"]
     working_dir: /app
     environment:
       OPENAI_API_KEY: ${OPENAI_API_KEY:-replace-with-openai-api-key}

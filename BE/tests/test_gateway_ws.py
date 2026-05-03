@@ -1,7 +1,7 @@
 import pytest
 import json
 from fastapi.testclient import TestClient
-from server.gateway.auth import issue_room_token
+from server.service.gateway.auth import issue_room_token
 
 @pytest.mark.asyncio
 async def test_ws_connect_snapshot(gateway_app: TestClient, fake_settings):
@@ -61,7 +61,7 @@ async def test_ws_connect_snapshot(gateway_app: TestClient, fake_settings):
         
         # Test event consumer transcript.final fanout
         import asyncio
-        from server.gateway.event_consumer import _handle_interpreter_events
+        from server.service.gateway.event_consumer import _handle_interpreter_events
         
         t_msg = {
             "type": "transcript.final",

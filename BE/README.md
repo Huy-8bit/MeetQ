@@ -5,7 +5,7 @@ This repository contains both a CLI tool for local translation and a full Web Me
 
 ## Architecture Modes
 
-- **Meeting Platform**: Scalable web backend with Gateway (FastAPI/WebSocket) and Interpreter (LiveKit/Redis).
+- **Meeting Platform**: Scalable web backend with Gateway (FastAPI/WebSocket) and Brain interpreter (LiveKit/Redis/OpenAI).
 - **CLI Realtime**: Local microphone or audio device input.
 - **CLI Fallback**: Testing with audio clips.
 
@@ -20,16 +20,16 @@ This repository contains both a CLI tool for local translation and a full Web Me
 ### 2) Run Gateway Service
 
 ```bash
-uvicorn server.gateway.main:app --host 0.0.0.0 --port 8000
+uvicorn server.service.gateway.main:app --host 0.0.0.0 --port 8000
 ```
 Note: Gateway connects to Redis and LiveKit API, expecting `.env` vars like `REDIS_URL`, `LIVEKIT_API_KEY`, etc.
 
-### 3) Run Interpreter Service
+### 3) Run Brain/Interpreter Service
 
 ```bash
-python -m server.interpreter.main
+python -m server.service.brain_runtime.main
 ```
-Note: Interpreter connects to the same Redis to listen for room events and connects to LiveKit as a participant.
+Note: Brain interpreter connects to the same Redis to listen for room events and connects to LiveKit as a participant.
 
 ## CLI Quickstart
 
@@ -278,10 +278,10 @@ For direct module invocation:
 
 ```bash
 # Realtime mode
-python -m src.realtime.main --input mic --src vi --tgt en
+python -m server.brain.realtime.main --input mic --src vi --tgt en
 
 # Fallback mode
-python -m src.fallback.pipeline --mic 1 --seconds 5
+python -m server.brain.fallback.main --mic 1 --seconds 5
 ```
 
 ## Troubleshooting

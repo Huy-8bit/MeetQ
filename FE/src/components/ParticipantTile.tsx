@@ -36,7 +36,7 @@ export function ParticipantTile({
           <VideoTrackView track={feed.track} mirrored={feed.isLocal} />
         ) : isBrse ? (
           <div className="participant-fallback participant-fallback-brse">
-            <span className="brse-avatar-mark">BRSE</span>
+            <img src="/cat.jpg" alt="AI relay avatar" className="brse-avatar-img" />
             <strong>{isBrseEnabled ? relayStatusLabel : "Relay off"}</strong>
             <p>{isBrseEnabled ? "AI relay participant" : "Normal meeting mode"}</p>
           </div>

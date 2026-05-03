@@ -35,4 +35,4 @@ COPY . .
 
 # Default: run Gateway
 ENTRYPOINT ["python"]
-CMD ["-m", "uvicorn", "server.gateway.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["-m", "uvicorn", "server.service.gateway.main:app", "--host", "0.0.0.0", "--port", "8000"]

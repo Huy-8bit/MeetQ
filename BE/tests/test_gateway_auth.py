@@ -2,14 +2,14 @@ import pytest
 import time
 import json
 from jose import jwt
-from server.gateway.auth import (
+from server.service.gateway.auth import (
     issue_room_token,
     verify_room_token,
     InvalidTokenError,
     ExpiredTokenError,
     TokenRoomMismatchError
 )
-from server.gateway.livekit_tokens import generate_livekit_token
+from server.service.gateway.livekit_tokens import generate_livekit_token
 from server.config import Settings
 
 def test_room_token_valid(fake_settings: Settings):

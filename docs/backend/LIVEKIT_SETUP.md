@@ -70,7 +70,7 @@ services:
   gateway:
     build:
       context: ./BE
-    command: uvicorn server.gateway.main:app --host 0.0.0.0 --port 8000
+    command: uvicorn server.service.gateway.main:app --host 0.0.0.0 --port 8000
     environment:
       REDIS_URL: redis://redis:6379/0
       LIVEKIT_API_KEY: devkey
@@ -86,7 +86,7 @@ services:
   interpreter:
     build:
       context: ./BE
-    command: python -m server.interpreter.main
+    command: python -m server.service.brain_runtime.main
     environment:
       REDIS_URL: redis://redis:6379/0
       LIVEKIT_API_KEY: devkey

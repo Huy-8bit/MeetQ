@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, Iterable, Optional
 
-from src.common.lang import PLATFORM_SUPPORTED_LANGS
+from server.brain.prompts.language import PLATFORM_SUPPORTED_LANGS
 
 
 MEETING_MODE_DIRECT_TRANSLATION = "direct_translation"

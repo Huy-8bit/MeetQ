@@ -99,9 +99,9 @@ def parse_args() -> argparse.Namespace:
 
 
 def run_realtime(args: argparse.Namespace, api_key: str) -> int:
-    from src.common.audio import MicInput
-    from src.common.lang import parse_pairs
-    from src.realtime.client import RealtimeClient
+    from server.shared.audio import MicInput
+    from server.brain.prompts.language import parse_pairs
+    from server.brain.realtime.client import RealtimeClient
 
     audio_input = MicInput(device=args.device, sample_rate=16000)
     enable_speaker = not args.no_speaker
@@ -123,7 +123,7 @@ def run_realtime(args: argparse.Namespace, api_key: str) -> int:
 
 
 def run_fallback_loop(args: argparse.Namespace, api_key: str) -> int:
-    from src.fallback.pipeline import run_fallback
+    from server.brain.fallback.pipeline import run_fallback
 
     print(
         f"[Fallback mode] Ghi âm {args.seconds:.0f}s mỗi lượt. Nói xong sẽ dịch. Ctrl+C để dừng.\n",
@@ -157,7 +157,7 @@ def main() -> int:
     args = parse_args()
 
     if args.list_devices:
-        from src.common.audio import print_input_devices, print_output_devices
+        from server.shared.audio import print_input_devices, print_output_devices
         print("=== Thiết bị đầu vào (mic) ===")
         print_input_devices()
         print("\n=== Thiết bị đầu ra (loa) ===")

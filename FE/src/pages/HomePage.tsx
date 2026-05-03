@@ -132,6 +132,33 @@ export function HomePage() {
           />
         </div>
       </section>
+
+      <footer className="landing-contact-wrap" aria-label="Contact">
+        <div className="landing-contact">
+          <a
+            className="landing-contact-icon"
+            href="mailto:johnnynguyen882@gmail.com"
+            aria-label="Email contact"
+            title="Email"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+              <path d="M3 6.75A1.75 1.75 0 0 1 4.75 5h14.5A1.75 1.75 0 0 1 21 6.75v10.5A1.75 1.75 0 0 1 19.25 19H4.75A1.75 1.75 0 0 1 3 17.25V6.75Zm2.09-.25 6.5 4.94a.75.75 0 0 0 .91 0l6.5-4.94H5.09Zm14.41 1.88-6.1 4.64a2.25 2.25 0 0 1-2.8 0L4.5 8.38v8.87c0 .14.11.25.25.25h14.5a.25.25 0 0 0 .25-.25V8.38Z" />
+            </svg>
+          </a>
+          <a
+            className="landing-contact-icon"
+            href="https://www.linkedin.com/in/huy8bit/"
+            target="_blank"
+            rel="noopener noreferrer"
+            aria-label="LinkedIn profile"
+            title="LinkedIn"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+              <path d="M6.84 8.2a1.56 1.56 0 1 1 0-3.12 1.56 1.56 0 0 1 0 3.12ZM5.5 9.5h2.68V19H5.5V9.5Zm4.22 0h2.57v1.3h.04c.36-.67 1.24-1.37 2.55-1.37 2.73 0 3.23 1.79 3.23 4.12V19h-2.68v-4.88c0-1.17-.02-2.67-1.63-2.67-1.63 0-1.88 1.27-1.88 2.58V19H9.72V9.5Z" />
+            </svg>
+          </a>
+        </div>
+      </footer>
     </main>
   );
 }

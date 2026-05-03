@@ -1,7 +1,7 @@
 import pytest
 import time
 from datetime import datetime, timezone
-from server.gateway.room_store import RoomStore
+from server.service.gateway.room_store import RoomStore
 from server.models import RoomState, ParticipantState, TranscriptEvent
 
 @pytest.mark.asyncio

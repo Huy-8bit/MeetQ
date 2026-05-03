@@ -1,5 +1,412 @@
 # Backend Implementation State
 
+## Turn Update: 2026-05-03 Gateway Under Service Refactor (Kickoff)
+
+- Time: 2026-05-03T19:09:23+07:00
+- Mode: CODE-ONLY
+- Testing deferred: full test suite not run, per instruction
+
+### Objective Locked
+
+- Refactor backend into two primary domains:
+  - `brain`: only AI/model-facing logic.
+  - `service`: backend application logic, including Gateway transport and orchestration.
+- Move Gateway under `service`; `gateway` must not remain a top-level backend domain next to `brain`.
+- Preserve production behavior: no API/WS contract changes, no room lifecycle semantic changes, no BRSE toggle semantic changes, no LiveKit flow changes, no Redis state/event contract changes, and no unrelated business-logic fixes.
+
+### Read Status
+
+- Read required backend docs:
+  - `docs/backend/IMPLEMENTATION_STATE.md`
+  - `docs/backend/FILE_STRUCTURE.md`
+  - `docs/backend/GATEWAY_DESIGN.md`
+  - `docs/backend/INTERPRETER_DESIGN.md`
+  - `docs/backend/API_CONTRACT.md`
+- Read current backend tree and key runtime roots:
+  - `BE/server/service/gateway/*`
+  - `BE/server/brain/*`
+  - `BE/server/service/*`
+  - `BE/server/models.py`
+  - Docker compose and Dockerfile entrypoint references
+- Current issue before this turn's move: Gateway still exists at `BE/server/service/gateway/*`; this violates the new requested boundary because Gateway is backend service/transport logic, not an independent top-level domain.
+
+### Classification Plan
+
+- Keep in `brain`:
+  - prompt/language instruction builders,
+  - OpenAI Realtime client and meeting realtime wrapper,
+  - model session/VAD config,
+  - translation-test model client,
+  - fallback STT/chat model pipeline,
+  - AI source transcript anti-hallucination/meaningfulness policy.
+- Keep/move in `service`:
+  - `service/gateway`: FastAPI routes, WebSocket transport, auth, room store/service, browser LiveKit token issuance, event consumer, and test WebSocket endpoints.
+  - `service/brain_runtime`: BRSE runtime daemon, room manager orchestration, Redis control/event IO.
+  - `service/media`: LiveKit runtime/audio input/output adapters.
+- Keep server-level/shared modules only where they are cross-cutting contracts/config/utilities: `models`, `events`, `redis`, `config`, `meeting_modes`, `integrations`, `shared`.
+
+### Final Sync
+
+- Time: 2026-05-03T19:11:37+07:00
+- Status: Gateway is now under `service`; canonical backend domains are `server.brain` and `server.service`.
+
+### Final Backend Domain Layout
+
+```text
+BE/server/
+├── brain/
+│   ├── prompts/              # prompt/instruction and language helpers
+│   ├── realtime/             # OpenAI Realtime clients, session config, AI source policy
+│   └── fallback/             # fallback STT + chat model path
+├── service/
+│   ├── gateway/              # FastAPI/WS transport, auth, room store/service, event fan-out
+│   ├── brain_runtime/        # Redis control daemon and room-level BRSE orchestration
+│   └── media/                # LiveKit media adapters used by the runtime service
+├── integrations/             # external non-AI integrations
+├── shared/                   # generic helpers
+├── config.py
+├── events.py
+├── meeting_modes.py
+├── models.py
+└── redis.py
+```
+
+### Moves In This Turn
+
+- `BE/server/gateway/*` -> `BE/server/service/gateway/*`
+- Updated all canonical imports from `server.gateway.*` to `server.service.gateway.*`.
+- Updated Gateway entrypoints:
+  - `BE/Dockerfile`
+  - `docker-compose.yml`
+  - `docker-compose.prod.yml`
+  - `BE/README.md`
+  - `docs/backend/LIVEKIT_SETUP.md`
+- Updated Gateway-adjacent service imports:
+  - `BE/server/service/brain_runtime/daemon.py`
+  - `BE/server/service/media/livekit_runtime.py`
+  - Gateway import references in `BE/tests/*`
+
+### Boundary Result
+
+- `brain` remains AI-only:
+  - prompt builders,
+  - model/realtime clients,
+  - model session config,
+  - AI response/source policy,
+  - fallback model pipeline.
+- `service` now owns all backend application logic:
+  - Gateway HTTP/WS ingress/egress,
+  - room store/service and auth,
+  - BRSE runtime daemon/room manager orchestration,
+  - LiveKit media adapters,
+  - integration glue between room state, Gateway, LiveKit, Redis, and Brain.
+- `gateway` no longer exists as a top-level backend package. No compatibility shim was kept because the requested boundary requires Gateway to live under `service`.
+
+### Behavior Preservation Notes
+
+- No REST route paths changed.
+- No WebSocket route paths or event names changed.
+- No room snapshot shape changed.
+- No room lifecycle, BRSE on/off, expiry, chat, LiveKit token, Telegram notification, or Redis event semantics were intentionally changed.
+- This was a mechanical package move plus import/entrypoint/docs cleanup.
+
+### Docs Updated
+
+- `docs/backend/FILE_STRUCTURE.md` documents `server.service.gateway` under the `service` domain and removes top-level Gateway from the target tree.
+- `docs/backend/GATEWAY_DESIGN.md` documents `server.service.gateway` as the canonical Gateway module path.
+- `docs/backend/IMPLEMENTATION_STATE.md` records this behavior-preserving gateway-under-service refactor.
+
+### Verification
+
+- Full test suite not run, per CODE-ONLY instruction.
+- New tests not added.
+- Lightweight checks run:
+  - `python -m py_compile $(find BE/server BE/tests -name '*.py' | sort)`
+  - import smoke for `server.service.gateway.main`, Gateway store/service/hub, `service.brain_runtime.room_manager`, `service.media.livekit_runtime`, and `brain.realtime.interpreter_client`
+  - `git diff --check`
+
+## Turn Update: 2026-05-03 Brain vs Service Boundary Refactor (Kickoff)
+
+- Time: 2026-05-03T18:31:30+07:00
+- Mode: CODE-ONLY
+- Testing deferred: full test suite not run, per instruction
+
+### Objective Locked
+
+- Refactor only AI-adjacent backend code so `brain` contains AI-facing logic and `service` contains backend orchestration/application logic.
+- Preserve production behavior: no API/WS contract changes, no room lifecycle semantic changes, no BRSE on/off semantic changes, no LiveKit flow changes, no Redis channel/event contract changes, and no unrelated bugfixes.
+- Use mechanical moves/import cleanup where possible.
+
+### Read Status
+
+- Read required docs:
+  - `docs/backend/IMPLEMENTATION_STATE.md`
+  - `docs/backend/FILE_STRUCTURE.md`
+  - `docs/backend/GATEWAY_DESIGN.md`
+  - `docs/backend/INTERPRETER_DESIGN.md`
+  - `docs/backend/API_CONTRACT.md`
+- Read current backend tree and key files:
+  - `BE/server/brain/*`
+  - `BE/server/service/gateway/*`
+  - `BE/server/models.py`
+  - Docker compose / entrypoint paths
+- Path note: after the previous cleanup, `BE/server/interpreter/*`, `BE/server/src/*`, and `BE/src/*` no longer exist; active AI-adjacent code is under `BE/server/brain/*`.
+
+### Classification Plan
+
+- Keep in `brain`:
+  - prompt/language instruction builders,
+  - OpenAI Realtime client and meeting realtime wrapper,
+  - model session/VAD config,
+  - translation-test model client,
+  - fallback STT/chat model pipeline,
+  - source transcript anti-hallucination/meaningfulness policy used by the model-response path.
+- Move to `service`:
+  - process entrypoint and Redis control daemon,
+  - room-level manager/orchestration,
+  - Redis event publisher/envelope adapter,
+  - LiveKit room runtime and audio ingress/egress adapters,
+  - backend routing between room state, LiveKit media, and brain clients.
+
+### Final Sync
+
+- Time: 2026-05-03T18:35:38+07:00
+- Status: `brain` vs `service` boundary refactor completed with canonical imports and updated runtime entrypoint.
+
+### Final Classification
+
+#### `brain`
+
+- `BE/server/brain/prompts/language.py`
+  - language detection/routing and prompt/instruction helpers.
+- `BE/server/brain/realtime/client.py`
+  - reusable OpenAI Realtime websocket client.
+- `BE/server/brain/realtime/interpreter_client.py`
+  - meeting BRSE realtime model wrapper and model-event callback bridge.
+- `BE/server/brain/realtime/session_config.py`
+  - realtime model session payload, VAD config, and BRSE instruction config.
+- `BE/server/brain/realtime/source_policy.py`
+  - source transcript meaningfulness and anti-hallucination policy used by the model-response path.
+- `BE/server/brain/realtime/translation_test_client.py`
+  - gateway translation-test realtime model client.
+- `BE/server/brain/realtime/main.py`
+  - local realtime CLI that directly runs the realtime model client.
+- `BE/server/brain/fallback/main.py`
+- `BE/server/brain/fallback/pipeline.py`
+  - fallback STT + chat model path.
+
+#### `service`
+
+- `BE/server/service/brain_runtime/main.py`
+  - BRSE runtime service process entrypoint.
+- `BE/server/service/brain_runtime/daemon.py`
+  - Redis control consumer, room snapshot lookup, BRSE enabled/expired gates, manager spawn/stop lifecycle.
+- `BE/server/service/brain_runtime/room_manager.py`
+  - room-level orchestration around brain clients, participant/media coordination, speaker lifecycle/focus arbitration, transcript publish orchestration.
+- `BE/server/service/brain_runtime/events.py`
+  - Redis event publisher/envelope adapter for service-to-gateway output.
+- `BE/server/service/media/audio_input.py`
+  - LiveKit audio stream adapter into the generic `AudioInput` contract consumed by brain clients.
+- `BE/server/service/media/livekit_runtime.py`
+  - LiveKit room participant runtime and microphone track subscription.
+- `BE/server/service/media/output_router.py`
+  - brain audio output publication to LiveKit relay track.
+
+### Notable Moves In This Turn
+
+- `BE/server/brain/main.py` -> `BE/server/service/brain_runtime/main.py`
+- `BE/server/brain/relay/daemon.py` -> `BE/server/service/brain_runtime/daemon.py`
+- `BE/server/brain/relay/events.py` -> `BE/server/service/brain_runtime/events.py`
+- `BE/server/brain/relay/room_manager.py` -> `BE/server/service/brain_runtime/room_manager.py`
+- `BE/server/brain/livekit/audio_input.py` -> `BE/server/service/media/audio_input.py`
+- `BE/server/brain/livekit/runtime.py` -> `BE/server/service/media/livekit_runtime.py`
+- `BE/server/brain/livekit/output_router.py` -> `BE/server/service/media/output_router.py`
+- Source transcript validation/anti-hallucination constants and logic were extracted from the room manager into `BE/server/brain/realtime/source_policy.py`; service still calls the same policy from the same callback path.
+
+### Entrypoints Updated
+
+- Docker compose interpreter command now uses `python -m server.service.brain_runtime.main`.
+- Production compose interpreter command uses the same path.
+- `BE/README.md` and `docs/backend/LIVEKIT_SETUP.md` now document `server.service.brain_runtime.main` for the BRSE runtime service.
+
+### Behavior Preservation Notes
+
+- No API/WS contract changes.
+- No Redis channel/event type changes.
+- No room lifecycle, BRSE toggle, expiry, chat, participant, LiveKit identity, or track naming behavior was intentionally changed.
+- Realtime prompt/session/VAD behavior remains under `brain.realtime.session_config` unchanged.
+- Source transcript policy logic was moved, not retuned.
+- Room manager decision flow remains service-side and calls the same brain client/model callbacks.
+- No compatibility shims were added in this turn; imports were migrated directly to canonical paths.
+
+### Docs Updated
+
+- `docs/backend/FILE_STRUCTURE.md` now documents the strict `brain` vs `service` boundary and module placement.
+- `docs/backend/IMPLEMENTATION_STATE.md` updated with this boundary refactor.
+- `docs/backend/GATEWAY_DESIGN.md` and `docs/backend/INTERPRETER_DESIGN.md` now point to `server.brain` for AI/model-facing code and `server.service` for orchestration/media.
+
+### Verification
+
+- Full test suite not run, per CODE-ONLY instruction.
+- New tests not added.
+- Existing tests only had imports updated where module paths moved.
+- Lightweight checks run after this refactor:
+  - `python -m py_compile BE/main.py BE/server/meeting_modes.py BE/server/service/gateway/ws_test_translation.py BE/server/service/brain_runtime/main.py BE/server/service/brain_runtime/daemon.py BE/server/service/brain_runtime/events.py BE/server/service/brain_runtime/room_manager.py BE/server/service/media/audio_input.py BE/server/service/media/livekit_runtime.py BE/server/service/media/output_router.py BE/server/brain/realtime/client.py BE/server/brain/realtime/interpreter_client.py BE/server/brain/realtime/session_config.py BE/server/brain/realtime/source_policy.py BE/server/brain/realtime/translation_test_client.py BE/server/brain/realtime/main.py BE/server/brain/prompts/language.py BE/server/brain/fallback/main.py BE/server/brain/fallback/pipeline.py BE/server/shared/audio.py BE/server/shared/logging_utils.py BE/tests/test_interpreter_audio_adapter.py BE/tests/test_realtime_observability.py`
+  - `python - <<'PY' ... import server.service.brain_runtime.main, service room manager/media modules, brain realtime/source policy modules ... PY`
+  - `git diff --check`
+
+## Turn Update: 2026-05-03 Backend Brain Domain Refactor (Kickoff)
+
+- Time: 2026-05-03T18:11:09+07:00
+- Mode: CODE-ONLY
+- Testing deferred: full test suite not run, per instruction
+
+### Objective Locked
+
+- Refactor backend source organization so AI/interpreter/realtime/relay logic has a clear domain home under `brain`.
+- Preserve production behavior: API/WS contracts, room lifecycle, BRSE on/off semantics, LiveKit flow, Redis state/event semantics, relay arbitration, transcript-first gates, and Telegram/gateway behavior are not business-logic targets in this turn.
+- Use low-risk mechanical moves and import cleanup; after cleanup, remove old shim folders so there is a single canonical import path.
+
+### Initial Read Status
+
+- Read required backend docs:
+  - `docs/backend/IMPLEMENTATION_STATE.md`
+  - `docs/backend/FILE_STRUCTURE.md`
+  - `docs/backend/GATEWAY_DESIGN.md`
+  - `docs/backend/INTERPRETER_DESIGN.md`
+  - `docs/backend/API_CONTRACT.md`
+- Read current backend tree and key runtime roots:
+  - `BE/server/service/gateway/*`
+  - `BE/server/interpreter/*`
+  - `BE/server/src/realtime/*`
+  - `BE/server/src/common/*`
+  - `BE/server/models.py`
+  - `BE/server/config.py`
+  - Docker compose and Dockerfile entrypoint references
+
+### Refactor Direction
+
+- Create `BE/server/brain/` as the primary AI domain.
+- Split moved AI code by responsibility:
+  - `brain/relay/` for room-level BRSE orchestration and Redis event publishing.
+  - `brain/realtime/` for OpenAI Realtime client/runtime behavior.
+  - `brain/livekit/` for LiveKit audio ingress/egress used by BRSE runtime.
+  - `brain/prompts/` for language routing and instruction/prompt builders.
+  - `brain/fallback/` for fallback translation pipeline code.
+- Keep `gateway` focused on HTTP/WS room transport and store/service ingress.
+- Keep shared generic helpers separate from brain-specific language/prompt logic.
+- Migrate callers to canonical `server.brain.*` and `server.shared.*` imports.
+
+### Final Sync
+
+- Time: 2026-05-03T18:17:09+07:00
+- Status: backend AI/interpreter/realtime/relay code moved under `server.brain`; old shim folders removed; production entrypoint paths updated.
+
+### New Backend Structure Summary
+
+```text
+BE/server/
+├── brain/
+│   ├── main.py
+│   ├── relay/
+│   │   ├── daemon.py
+│   │   ├── events.py
+│   │   └── room_manager.py
+│   ├── realtime/
+│   │   ├── client.py
+│   │   ├── interpreter_client.py
+│   │   ├── main.py
+│   │   ├── session_config.py
+│   │   └── translation_test_client.py
+│   ├── livekit/
+│   │   ├── audio_input.py
+│   │   ├── output_router.py
+│   │   └── runtime.py
+│   ├── prompts/
+│   │   └── language.py
+│   └── fallback/
+│       ├── main.py
+│       └── pipeline.py
+├── gateway/
+├── integrations/
+├── shared/
+│   ├── audio.py
+│   └── logging_utils.py
+```
+
+### Responsibility Boundaries After Refactor
+
+- `server.service.gateway` remains HTTP/WS transport, auth, room store/service, LiveKit browser token issuance, and fan-out of backend events to clients.
+- `server.brain` is now the AI domain home:
+  - `brain.relay` owns Redis control consumption, room-level BRSE relay orchestration, source/relay transcript publication, focus/overlap arbitration, and manager lifecycle.
+  - `brain.realtime` owns OpenAI Realtime clients, meeting realtime wrapper, BRSE session/VAD config, and translation-test realtime client.
+  - `brain.livekit` owns LiveKit audio ingress and BRSE relay audio track output.
+  - `brain.prompts` owns language routing/detection and instruction/prompt builders.
+  - `brain.fallback` owns fallback STT + chat translation pipeline.
+- `server.shared` contains generic helpers only: audio abstractions/device helpers and logging helpers.
+- `server.integrations` remains non-AI external integrations such as Telegram.
+
+### Notable Mechanical Moves
+
+- `BE/server/interpreter/main.py` -> `BE/server/brain/main.py`
+- `BE/server/interpreter/daemon.py` -> `BE/server/brain/relay/daemon.py`
+- `BE/server/interpreter/event_publisher.py` -> `BE/server/brain/relay/events.py`
+- `BE/server/interpreter/room_manager.py` -> `BE/server/brain/relay/room_manager.py`
+- `BE/server/interpreter/interpreter_client.py` -> `BE/server/brain/realtime/interpreter_client.py`
+- `BE/server/interpreter/meeting_config.py` -> `BE/server/brain/realtime/session_config.py`
+- `BE/server/interpreter/translation_test_client.py` -> `BE/server/brain/realtime/translation_test_client.py`
+- `BE/server/interpreter/audio_input.py` -> `BE/server/brain/livekit/audio_input.py`
+- `BE/server/interpreter/livekit_runtime.py` -> `BE/server/brain/livekit/runtime.py`
+- `BE/server/interpreter/output_router.py` -> `BE/server/brain/livekit/output_router.py`
+- `BE/server/src/realtime/client.py` -> `BE/server/brain/realtime/client.py`
+- `BE/server/src/realtime/main.py` -> `BE/server/brain/realtime/main.py`
+- `BE/server/src/common/lang.py` -> `BE/server/brain/prompts/language.py`
+- `BE/server/src/fallback/main.py` and `pipeline.py` -> `BE/server/brain/fallback/`
+- `BE/server/src/common/audio.py` -> `BE/server/shared/audio.py`
+- `BE/server/src/common/logging_utils.py` -> `BE/server/shared/logging_utils.py`
+
+### Removed Redundant Files
+
+- Cleanup time: 2026-05-03T18:25:55+07:00
+- Removed old `BE/server/interpreter/` shim package after backend imports and entrypoints were migrated to `server.brain.*`.
+- Removed old `BE/server/src/` shim package after backend imports and CLI paths were migrated to `server.brain.*` / `server.shared.*`.
+- Removed old top-level `BE/src/__init__.py` legacy namespace bridge.
+- Removed tracked root `.DS_Store`, local `.DS_Store` artifacts, backend `__pycache__`, and backend `.pytest_cache`.
+
+### Entrypoints Updated
+
+- Docker compose interpreter command changed from `python -m server.interpreter.main` to `python -m server.service.brain_runtime.main`.
+- Production compose interpreter command changed the same way.
+- `BE/README.md` and `docs/backend/LIVEKIT_SETUP.md` now use the `server.service.brain_runtime.main` interpreter entrypoint.
+- Local CLI docs now point realtime/fallback commands at `server.brain.realtime.main` and `server.brain.fallback.main`.
+- Backend tests that referenced old import paths now import canonical `server.brain.*` modules.
+
+### Behavior Preservation Notes
+
+- REST/WS contracts were not intentionally changed.
+- Gateway room state, Redis key/channel names, event types, room lifecycle, BRSE on/off behavior, chat behavior, LiveKit token generation, and Telegram notifier code were not rewritten.
+- BRSE source-transcript-first filtering, relay focus arbitration, overlap suppression, Realtime VAD/session config, output routing, and LiveKit audio behavior were moved without changing decision logic.
+- The only path-sensitive preservation adjustment made during move was keeping `server.shared.logging_utils` log directory resolution equivalent to the old `server/src/common/logging_utils.py` path.
+- No unrelated production bugfixes were folded into this refactor.
+
+### Docs Updated
+
+- `docs/backend/FILE_STRUCTURE.md` now documents the `brain` domain layout, gateway/shared/integration boundaries, notable moves, removed shim folders, and behavior-preservation strategy.
+- `docs/backend/IMPLEMENTATION_STATE.md` updated with this refactor record.
+- `docs/backend/GATEWAY_DESIGN.md` and `docs/backend/INTERPRETER_DESIGN.md` now include update notes pointing to the new `server.brain` layout and noting that old shim folders were removed.
+- `docs/backend/LIVEKIT_SETUP.md` command path updated for the interpreter/brain process.
+- `BE/README.md` command paths updated for the moved backend entrypoints.
+
+### Verification
+
+- Full test suite not run, per CODE-ONLY instruction.
+- New tests not added.
+- Existing tests only had imports updated from old shim paths to canonical `server.brain` paths.
+- Lightweight checks run:
+  - `python -m py_compile BE/main.py BE/server/meeting_modes.py BE/server/service/gateway/ws_test_translation.py BE/server/brain/main.py BE/server/brain/relay/daemon.py BE/server/brain/relay/events.py BE/server/brain/relay/room_manager.py BE/server/brain/realtime/client.py BE/server/brain/realtime/interpreter_client.py BE/server/brain/realtime/session_config.py BE/server/brain/realtime/translation_test_client.py BE/server/brain/realtime/main.py BE/server/brain/livekit/audio_input.py BE/server/brain/livekit/runtime.py BE/server/brain/livekit/output_router.py BE/server/brain/prompts/language.py BE/server/brain/fallback/main.py BE/server/brain/fallback/pipeline.py BE/server/shared/audio.py BE/server/shared/logging_utils.py BE/tests/test_interpreter_audio_adapter.py BE/tests/test_realtime_observability.py`
+  - `python - <<'PY' ... import server.brain/main, brain realtime/relay modules, prompt/shared modules ... PY`
+  - `git diff --check`
+
 ## Turn Update: 2026-05-02 BRSE Realtime Mini Default
 
 - Time: 2026-05-02T15:21:40+07:00
@@ -202,7 +609,7 @@
 - Path note: requested `BE/src/realtime/client.py` and `BE/src/common/lang.py` do not exist in this checkout; active files are under `BE/server/src/...`.
 - Related state/relay files inspected:
   - `BE/server/events.py`
-  - `BE/server/gateway/event_consumer.py`
+  - `BE/server/service/gateway/event_consumer.py`
   - `BE/server/models.py`
   - FE status usage was skimmed only to avoid choosing a backend status shape that would obviously break runtime consumers; no FE edits planned.
 
@@ -413,7 +820,7 @@
 
 - `BE/server/config.py`
   - added `PUBLIC_APP_URL`, `PUBLIC_GATEWAY_URL`, `PUBLIC_GATEWAY_WS_URL`
-- `BE/server/gateway/room_service.py`
+- `BE/server/service/gateway/room_service.py`
   - `share_url` now uses `PUBLIC_APP_URL`
   - join response `websocket.url` now uses public Gateway WS URL
   - `livekit.url` continues to use `LIVEKIT_WS_URL_PUBLIC`
@@ -461,7 +868,7 @@
 - Lightweight checks run:
   - `docker compose --env-file .env.example -f docker-compose.prod.yml config`
   - `docker compose -f docker-compose.yml config`
-  - Python syntax parse for `BE/server/config.py` and `BE/server/gateway/room_service.py`
+  - Python syntax parse for `BE/server/config.py` and `BE/server/service/gateway/room_service.py`
   - `git diff --check`
 - Nginx runtime syntax check deferred because local `nginx` binary is unavailable and production certificates are not present in this workspace.
 - FE typecheck attempted with no emit; it stops on existing `LocalTrack/RemoteTrack.name` type errors in `FE/src/lib/livekit.ts`, unrelated to this deploy change.
@@ -485,13 +892,13 @@
   - `docs/backend/API_CONTRACT.md`
 - Read required backend files:
   - `BE/server/config.py`
-  - `BE/server/gateway/api_rooms.py`
-  - `BE/server/gateway/room_service.py`
+  - `BE/server/service/gateway/api_rooms.py`
+  - `BE/server/service/gateway/room_service.py`
   - `BE/server/models.py`
 - Read related runtime/config files:
   - `BE/server/src/common/logging_utils.py`
-  - `BE/server/gateway/main.py`
-  - `BE/server/gateway/dependencies.py`
+  - `BE/server/service/gateway/main.py`
+  - `BE/server/service/gateway/dependencies.py`
   - `BE/server/redis.py`
   - `BE/requirements.txt`
   - `.env.example`
@@ -523,7 +930,7 @@
   - short timeout from config
   - safe skip when disabled or missing token/chat id
   - warning logs for HTTP/network/unexpected failures with `room_id`
-- Hooked `RoomService.create_room` in `BE/server/gateway/room_service.py`:
+- Hooked `RoomService.create_room` in `BE/server/service/gateway/room_service.py`:
   - notification scheduled only after `store.create_room` and room-created/virtual-participant publishes complete
   - schedule uses `asyncio.create_task` so Telegram does not block room creation response
   - task callback logs unexpected task failures
@@ -554,7 +961,7 @@
   - `BE/server/config.py`
   - `BE/server/integrations/__init__.py`
   - `BE/server/integrations/telegram.py`
-  - `BE/server/gateway/room_service.py`
+  - `BE/server/service/gateway/room_service.py`
   - `.env.example`
   - `BE/.env.example`
   - `docker-compose.yml`
@@ -588,7 +995,7 @@
 - Time: 2026-05-02T02:26:22+07:00
 - Runtime issue reported:
   - Docker gateway failed on startup with `ModuleNotFoundError: No module named 'src'`
-  - Import chain: `server.gateway.main` -> `server.models` -> `server.meeting_modes` -> `src.common.lang`
+  - Import chain: `server.service.gateway.main` -> `server.models` -> `server.meeting_modes` -> `src.common.lang`
 - Fix applied:
   - added `BE/src/__init__.py` as a compatibility package
   - the package appends `BE/server/src` to `src.__path__`
@@ -665,11 +1072,11 @@
 - `BE/server/config.py` — added `room_meeting_duration_seconds`, `room_max_participants`
 - `BE/server/events.py` — added `ROOM_EXPIRED` event type
 - `BE/server/models.py` — `participant_limit` → `Optional[int] = None`
-- `BE/server/gateway/room_service.py` — 30-min expiry, room expiry check, removed participant cap enforcement
-- `BE/server/gateway/api_rooms.py` — `RoomExpiredError` handling (410)
-- `BE/server/gateway/ws_endpoint.py` — room expiry check on WS connect (4410)
-- `BE/server/gateway/room_store.py` — default TTL updated to 2100 (35 min)
-- `BE/server/gateway/main.py` — RoomStore TTL wired from config
+- `BE/server/service/gateway/room_service.py` — 30-min expiry, room expiry check, removed participant cap enforcement
+- `BE/server/service/gateway/api_rooms.py` — `RoomExpiredError` handling (410)
+- `BE/server/service/gateway/ws_endpoint.py` — room expiry check on WS connect (4410)
+- `BE/server/service/gateway/room_store.py` — default TTL updated to 2100 (35 min)
+- `BE/server/service/gateway/main.py` — RoomStore TTL wired from config
 - `BE/server/interpreter/daemon.py` — room expiry gate for BRSE runtime spawn
 - `docs/backend/API_CONTRACT.md` — updated policy notes, examples, error codes
 - `docs/backend/GATEWAY_DESIGN.md` — updated TTL, participant_limit, env vars, error cases
@@ -827,16 +1234,16 @@
   - `docs/backend/IMPLEMENTATION_STATE.md`
 - Read required backend/runtime source:
   - `BE/server/models.py`
-  - `BE/server/gateway/api_rooms.py`
-  - `BE/server/gateway/ws_endpoint.py`
-  - `BE/server/gateway/event_consumer.py`
-  - `BE/server/gateway/room_service.py`
+  - `BE/server/service/gateway/api_rooms.py`
+  - `BE/server/service/gateway/ws_endpoint.py`
+  - `BE/server/service/gateway/event_consumer.py`
+  - `BE/server/service/gateway/room_service.py`
   - `BE/server/interpreter/daemon.py`
   - `BE/server/interpreter/room_manager.py`
   - `BE/server/interpreter/livekit_runtime.py`
   - `BE/server/interpreter/output_router.py`
 - Read related room state/store/runtime files:
-  - `BE/server/gateway/room_store.py`
+  - `BE/server/service/gateway/room_store.py`
   - `BE/server/meeting_modes.py`
   - `BE/server/events.py`
   - `BE/server/interpreter/event_publisher.py`
@@ -906,11 +1313,11 @@
   - `BE/server/meeting_modes.py`
   - `BE/server/models.py`
   - `BE/server/events.py`
-  - `BE/server/gateway/room_store.py`
-  - `BE/server/gateway/room_service.py`
-  - `BE/server/gateway/api_rooms.py`
-  - `BE/server/gateway/ws_endpoint.py`
-  - `BE/server/gateway/event_consumer.py`
+  - `BE/server/service/gateway/room_store.py`
+  - `BE/server/service/gateway/room_service.py`
+  - `BE/server/service/gateway/api_rooms.py`
+  - `BE/server/service/gateway/ws_endpoint.py`
+  - `BE/server/service/gateway/event_consumer.py`
   - `BE/server/interpreter/daemon.py`
   - `BE/server/interpreter/room_manager.py`
   - `docs/backend/API_CONTRACT.md`
@@ -945,16 +1352,16 @@
   - `docs/backend/IMPLEMENTATION_STATE.md`
 - Read required backend/runtime source files:
   - `BE/server/models.py`
-  - `BE/server/gateway/api_rooms.py`
-  - `BE/server/gateway/ws_endpoint.py`
-  - `BE/server/gateway/event_consumer.py`
-  - `BE/server/gateway/room_service.py`
+  - `BE/server/service/gateway/api_rooms.py`
+  - `BE/server/service/gateway/ws_endpoint.py`
+  - `BE/server/service/gateway/event_consumer.py`
+  - `BE/server/service/gateway/room_service.py`
   - `BE/server/interpreter/daemon.py`
   - `BE/server/interpreter/room_manager.py`
   - `BE/server/interpreter/livekit_runtime.py`
   - `BE/server/interpreter/output_router.py`
 - Read related room state/store files:
-  - `BE/server/gateway/room_store.py`
+  - `BE/server/service/gateway/room_store.py`
   - `BE/server/meeting_modes.py`
   - `BE/server/events.py`
   - `BE/server/interpreter/event_publisher.py`
@@ -979,11 +1386,11 @@
   - `BE/server/meeting_modes.py`
   - `BE/server/models.py`
   - `BE/server/events.py`
-  - `BE/server/gateway/room_store.py`
-  - `BE/server/gateway/room_service.py`
-  - `BE/server/gateway/api_rooms.py`
-  - `BE/server/gateway/ws_endpoint.py`
-  - `BE/server/gateway/event_consumer.py`
+  - `BE/server/service/gateway/room_store.py`
+  - `BE/server/service/gateway/room_service.py`
+  - `BE/server/service/gateway/api_rooms.py`
+  - `BE/server/service/gateway/ws_endpoint.py`
+  - `BE/server/service/gateway/event_consumer.py`
 
 ### Batch 2: Runtime Gating + Live Toggle Path (Completed)
 
@@ -1050,11 +1457,11 @@
   - `BE/server/meeting_modes.py`
   - `BE/server/models.py`
   - `BE/server/events.py`
-  - `BE/server/gateway/room_store.py`
-  - `BE/server/gateway/room_service.py`
-  - `BE/server/gateway/api_rooms.py`
-  - `BE/server/gateway/ws_endpoint.py`
-  - `BE/server/gateway/event_consumer.py`
+  - `BE/server/service/gateway/room_store.py`
+  - `BE/server/service/gateway/room_service.py`
+  - `BE/server/service/gateway/api_rooms.py`
+  - `BE/server/service/gateway/ws_endpoint.py`
+  - `BE/server/service/gateway/event_consumer.py`
   - `BE/server/interpreter/daemon.py`
   - `docs/backend/API_CONTRACT.md`
   - `docs/backend/GATEWAY_DESIGN.md`
@@ -1079,7 +1486,7 @@
 
 ### Mandatory Read Status
 
-- Read backend contract/state/runtime files: `docs/backend/API_CONTRACT.md`, `docs/backend/IMPLEMENTATION_STATE.md`, `BE/server/models.py`, `BE/server/gateway/ws_endpoint.py`, `BE/server/gateway/ws_hub.py`, `BE/server/gateway/room_service.py`, `BE/server/gateway/event_consumer.py`, `BE/server/gateway/room_store.py`.
+- Read backend contract/state/runtime files: `docs/backend/API_CONTRACT.md`, `docs/backend/IMPLEMENTATION_STATE.md`, `BE/server/models.py`, `BE/server/service/gateway/ws_endpoint.py`, `BE/server/service/gateway/ws_hub.py`, `BE/server/service/gateway/room_service.py`, `BE/server/service/gateway/event_consumer.py`, `BE/server/service/gateway/room_store.py`.
 - Read FE chat/runtime reference files: `FE/src/lib/ws.ts`, `FE/src/lib/api.ts`, `FE/src/features/room/useMeetingRoom.ts`, `FE/src/pages/RoomPage.tsx`, `FE/src/types/ws.ts`, `FE/src/types/api.ts`, `FE/src/components/ChatPanel.tsx`.
 
 ### Current Trace Hypothesis
@@ -1102,23 +1509,23 @@
 ### Backend Trace Result
 
 - Inbound websocket:
-  - `BE/server/gateway/ws_endpoint.py` has `elif msg_type == "chat.send"`.
+  - `BE/server/service/gateway/ws_endpoint.py` has `elif msg_type == "chat.send"`.
   - It extracts `payload.text`, uses authenticated `participant_id`, and uses the current websocket participant `session_id`.
 - Validation/session guard:
-  - `BE/server/gateway/room_service.py::send_chat_message(...)` trims text, rejects non-string/empty/too-long text, rejects stale session mismatch, disconnected/missing participants, and virtual participants.
+  - `BE/server/service/gateway/room_service.py::send_chat_message(...)` trims text, rejects non-string/empty/too-long text, rejects stale session mismatch, disconnected/missing participants, and virtual participants.
 - Persist:
-  - `BE/server/gateway/room_store.py::append_chat_message(...)` appends to Redis key `room:{room_id}:chat`, trims to `chat_limit`, and refreshes TTL.
+  - `BE/server/service/gateway/room_store.py::append_chat_message(...)` appends to Redis key `room:{room_id}:chat`, trims to `chat_limit`, and refreshes TTL.
 - Broadcast:
   - `RoomService.send_chat_message(...)` publishes `EventType.CHAT_MESSAGE`.
   - `BE/server/events.py` defines `CHAT_MESSAGE = "chat.message"`.
-  - `BE/server/gateway/event_consumer.py` broadcasts gateway-control messages to all active room sockets.
+  - `BE/server/service/gateway/event_consumer.py` broadcasts gateway-control messages to all active room sockets.
 - Snapshot hydrate:
   - `BE/server/models.py` includes `recent_messages` in `SnapshotData` and `RoomSnapshotResponse`.
   - REST room snapshot, join response, and initial WS `room.snapshot` can project `recent_messages`.
 
 ### Backend Files
 
-- Backend source files inspected/verified: `BE/server/models.py`, `BE/server/events.py`, `BE/server/gateway/ws_endpoint.py`, `BE/server/gateway/ws_hub.py`, `BE/server/gateway/room_service.py`, `BE/server/gateway/event_consumer.py`, `BE/server/gateway/room_store.py`.
+- Backend source files inspected/verified: `BE/server/models.py`, `BE/server/events.py`, `BE/server/service/gateway/ws_endpoint.py`, `BE/server/service/gateway/ws_hub.py`, `BE/server/service/gateway/room_service.py`, `BE/server/service/gateway/event_consumer.py`, `BE/server/service/gateway/room_store.py`.
 - Backend source files changed this turn: none.
 - Backend state doc updated: `docs/backend/IMPLEMENTATION_STATE.md`.
 
@@ -1130,7 +1537,7 @@
 
 ### Minimal Verification
 
-- `python -m py_compile BE/server/models.py BE/server/events.py BE/server/gateway/ws_endpoint.py BE/server/gateway/ws_hub.py BE/server/gateway/room_service.py BE/server/gateway/event_consumer.py BE/server/gateway/room_store.py` passed.
+- `python -m py_compile BE/server/models.py BE/server/events.py BE/server/service/gateway/ws_endpoint.py BE/server/service/gateway/ws_hub.py BE/server/service/gateway/room_service.py BE/server/service/gateway/event_consumer.py BE/server/service/gateway/room_store.py` passed.
 - FE type check was run with `npx tsc -b --pretty false`; chat-related type issue was fixed, but the command still fails on existing non-chat `FE/src/lib/livekit.ts` `track.name` type errors.
 
 ### Deferred
@@ -1195,10 +1602,10 @@
   - widened `Language` / `MeetingLanguage` literals
   - room state and response models now serialize 7-language `supported_languages`
   - room create input now defaults to the legacy room pair when omitted instead of forcing empty invalid state
-- `BE/server/gateway/room_service.py`
+- `BE/server/service/gateway/room_service.py`
   - room create validation now accepts meeting-language pairs from the 7-language set
   - empty/omitted meeting-language input falls back to the legacy default pair for backward-compatible room creation
-- `BE/server/gateway/api_test_sessions.py`
+- `BE/server/service/gateway/api_test_sessions.py`
   - translation-test validation now accepts explicit `zh/ko/fr/es` source/target codes
 
 ### Validation / Routing Notes
@@ -1215,7 +1622,7 @@
 - Time: 2026-05-01T15:18:06+07:00
 - Final state file sync before turn end.
 - Backend chat root cause fixed: `chat.send` was missing in WS dispatch, chat state/model were missing, `chat.message` was never published, and snapshots had no `recent_messages`.
-- Files updated this turn: `BE/server/models.py`, `BE/server/events.py`, `BE/server/gateway/room_store.py`, `BE/server/gateway/room_service.py`, `BE/server/gateway/ws_endpoint.py`, `docs/backend/IMPLEMENTATION_STATE.md`.
+- Files updated this turn: `BE/server/models.py`, `BE/server/events.py`, `BE/server/service/gateway/room_store.py`, `BE/server/service/gateway/room_service.py`, `BE/server/service/gateway/ws_endpoint.py`, `docs/backend/IMPLEMENTATION_STATE.md`.
 - Recent chat strategy: Redis room list `room:{room_id}:chat`, trimmed to 100 messages, TTL refreshed with room state and deleted with room cleanup.
 - Event path: WS `chat.send` -> `RoomService.send_chat_message(...)` -> Redis append -> gateway control publish `chat.message` -> existing consumer room broadcast.
 - Session safety: Redis participant state is re-read and current `session_id` must match; disconnected/missing/virtual participants cannot send chat.
@@ -1231,9 +1638,9 @@
 
 - `BE/server/models.py`
 - `BE/server/events.py`
-- `BE/server/gateway/room_store.py`
-- `BE/server/gateway/room_service.py`
-- `BE/server/gateway/ws_endpoint.py`
+- `BE/server/service/gateway/room_store.py`
+- `BE/server/service/gateway/room_service.py`
+- `BE/server/service/gateway/ws_endpoint.py`
 - `docs/backend/IMPLEMENTATION_STATE.md`
 
 ### Root Cause / Fix Summary
@@ -1308,8 +1715,8 @@
 - `BE/src/realtime/client.py`
 - `BE/server/meeting_modes.py`
 - `BE/server/models.py`
-- `BE/server/gateway/room_service.py`
-- `BE/server/gateway/api_test_sessions.py`
+- `BE/server/service/gateway/room_service.py`
+- `BE/server/service/gateway/api_test_sessions.py`
 - `BE/server/interpreter/meeting_config.py`
 - `BE/server/interpreter/room_manager.py`
 - `docs/backend/API_CONTRACT.md`
@@ -1417,11 +1824,11 @@
 ### Planned Change Scope
 
 - `BE/server/models.py`
-- `BE/server/gateway/api_rooms.py`
-- `BE/server/gateway/room_service.py`
-- `BE/server/gateway/ws_endpoint.py`
-- `BE/server/gateway/event_consumer.py` (only if contract fan-out adjustments needed)
-- `BE/server/gateway/room_store.py` (if snapshot/state compatibility updates needed)
+- `BE/server/service/gateway/api_rooms.py`
+- `BE/server/service/gateway/room_service.py`
+- `BE/server/service/gateway/ws_endpoint.py`
+- `BE/server/service/gateway/event_consumer.py` (only if contract fan-out adjustments needed)
+- `BE/server/service/gateway/room_store.py` (if snapshot/state compatibility updates needed)
 - `BE/server/interpreter/room_manager.py`
 - `BE/server/interpreter/interpreter_client.py`
 - `BE/server/interpreter/meeting_config.py`
@@ -1479,7 +1886,7 @@
 
 ### Fix Applied
 
-- Updated `BE/server/gateway/room_service.py`:
+- Updated `BE/server/service/gateway/room_service.py`:
   - `_publish(...)` now accepts `payload: Any` and applies `fastapi.encoders.jsonable_encoder(payload)` before building/publishing envelope.
   - This normalizes Pydantic payloads to JSON-safe dict/list primitives and keeps existing event semantics unchanged.
 
@@ -1586,9 +1993,9 @@
 
 ### Files Updated In Batch B1
 
-- `BE/server/gateway/room_store.py`
-- `BE/server/gateway/room_service.py`
-- `BE/server/gateway/ws_endpoint.py`
+- `BE/server/service/gateway/room_store.py`
+- `BE/server/service/gateway/room_service.py`
+- `BE/server/service/gateway/ws_endpoint.py`
 
 ### Batch B2: Lifecycle Consistency Notes (Completed)
 
@@ -1619,9 +2026,9 @@
 - participant.left contract behavior (final):
   - event emitted once from unified path; includes required payload fields and diagnostic metadata (`session_id`, `reason`) while preserving contract compatibility.
 - files updated in this turn:
-  - `BE/server/gateway/room_store.py`
-  - `BE/server/gateway/room_service.py`
-  - `BE/server/gateway/ws_endpoint.py`
+  - `BE/server/service/gateway/room_store.py`
+  - `BE/server/service/gateway/room_service.py`
+  - `BE/server/service/gateway/ws_endpoint.py`
   - `docs/backend/IMPLEMENTATION_STATE.md`
 - testing status:
   - deferred by instruction (no test execution, no verification run).
@@ -1667,8 +2074,8 @@
     - `redis_channel_gateway_control`
     - `redis_channel_interpreter_events`
   - updated publish/subscribe paths in:
-    - `BE/server/gateway/room_service.py`
-    - `BE/server/gateway/event_consumer.py`
+    - `BE/server/service/gateway/room_service.py`
+    - `BE/server/service/gateway/event_consumer.py`
     - `BE/server/interpreter/event_publisher.py`
     - `BE/server/interpreter/daemon.py`
 - BRSE participant materialization improved:
@@ -1697,11 +2104,11 @@
   - `docs/backend/GATEWAY_DESIGN.md`
   - `docs/backend/IMPLEMENTATION_STATE.md`
   - `BE/server/models.py`
-  - `BE/server/gateway/api_rooms.py`
-  - `BE/server/gateway/ws_endpoint.py`
-  - `BE/server/gateway/ws_hub.py`
-  - `BE/server/gateway/event_consumer.py`
-  - `BE/server/gateway/room_service.py`
+  - `BE/server/service/gateway/api_rooms.py`
+  - `BE/server/service/gateway/ws_endpoint.py`
+  - `BE/server/service/gateway/ws_hub.py`
+  - `BE/server/service/gateway/event_consumer.py`
+  - `BE/server/service/gateway/room_service.py`
   - `BE/server/interpreter/livekit_runtime.py`
   - FE reference only:
     - `FE/src/types/ws.ts`
@@ -1728,9 +2135,9 @@
 - Extended event vocabulary in `BE/server/events.py`:
   - `screen_share.started`
   - `screen_share.stopped`
-- Extended snapshot projection in `BE/server/gateway/room_store.py`:
+- Extended snapshot projection in `BE/server/service/gateway/room_store.py`:
   - participant snapshot now includes screen-share fields.
-- Implemented service lifecycle in `BE/server/gateway/room_service.py`:
+- Implemented service lifecycle in `BE/server/service/gateway/room_service.py`:
   - `start_screen_share(...)`
   - `stop_screen_share(...)`
   - both publish `participant.updated` plus dedicated screen-share events.
@@ -1738,15 +2145,15 @@
 
 ### Batch 2: Signaling Entry Points + Stale Cleanup Paths (Completed)
 
-- Added REST signaling endpoints in `BE/server/gateway/api_rooms.py`:
+- Added REST signaling endpoints in `BE/server/service/gateway/api_rooms.py`:
   - `POST /api/rooms/{room_id}/screen-share/start`
   - `POST /api/rooms/{room_id}/screen-share/stop`
   - both room-token authenticated via existing dependency and session-aware.
-- Added WS signaling handlers in `BE/server/gateway/ws_endpoint.py`:
+- Added WS signaling handlers in `BE/server/service/gateway/ws_endpoint.py`:
   - `screen_share.start`
   - `screen_share.stop`
   - returns `error` envelope on session mismatch / participant invalid.
-- Strengthened stale cleanup in `BE/server/gateway/event_consumer.py`:
+- Strengthened stale cleanup in `BE/server/service/gateway/event_consumer.py`:
   - on `participant.media_disconnected`, gateway now also attempts `stop_screen_share(...)`.
 - Participant disconnect cleanup in service now proactively clears active screen-share state before final leave mutation.
 
@@ -1800,10 +2207,10 @@
   - `BE/server/interpreter/event_publisher.py`
 - Extend gateway/snapshot contract in:
   - `BE/server/models.py`
-  - `BE/server/gateway/room_store.py`
-  - `BE/server/gateway/room_service.py`
-  - `BE/server/gateway/event_consumer.py`
-  - `BE/server/gateway/ws_endpoint.py`
+  - `BE/server/service/gateway/room_store.py`
+  - `BE/server/service/gateway/room_service.py`
+  - `BE/server/service/gateway/event_consumer.py`
+  - `BE/server/service/gateway/ws_endpoint.py`
 - Update BRSE relay prompt/instructions in:
   - `BE/server/interpreter/meeting_config.py`
   - `BE/server/interpreter/interpreter_client.py`
@@ -1831,10 +2238,10 @@
   - `docs/backend/GATEWAY_DESIGN.md`
   - `docs/backend/API_CONTRACT.md`
   - `docs/backend/IMPLEMENTATION_STATE.md`
-  - `BE/server/gateway/ws_endpoint.py`
-  - `BE/server/gateway/ws_hub.py`
-  - `BE/server/gateway/room_service.py`
-  - `BE/server/gateway/event_consumer.py`
+  - `BE/server/service/gateway/ws_endpoint.py`
+  - `BE/server/service/gateway/ws_hub.py`
+  - `BE/server/service/gateway/room_service.py`
+  - `BE/server/service/gateway/event_consumer.py`
   - `BE/server/models.py`
   - `BE/server/redis.py`
   - `BE/server/interpreter/room_manager.py`
@@ -1978,10 +2385,10 @@
 - `docs/backend/INTERPRETER_DESIGN.md`
 - `BE/server/meeting_modes.py`
 - `BE/server/models.py`
-- `BE/server/gateway/room_store.py`
-- `BE/server/gateway/room_service.py`
-- `BE/server/gateway/event_consumer.py`
-- `BE/server/gateway/livekit_tokens.py`
+- `BE/server/service/gateway/room_store.py`
+- `BE/server/service/gateway/room_service.py`
+- `BE/server/service/gateway/event_consumer.py`
+- `BE/server/service/gateway/livekit_tokens.py`
 - `BE/server/interpreter/daemon.py`
 - `BE/server/interpreter/meeting_config.py`
 - `BE/server/interpreter/livekit_runtime.py`
@@ -1994,7 +2401,7 @@
 - Bypassed as authoritative meeting output in BRSE mode:
   - listener-scoped routing resolution in `BE/server/interpreter/room_manager.py`
   - listener-private track publish/unpublish and subscription permissions in `BE/server/interpreter/output_router.py`
-  - listener-private translated transcript fan-out semantics in `BE/server/gateway/event_consumer.py`
+  - listener-private translated transcript fan-out semantics in `BE/server/service/gateway/event_consumer.py`
 - Backward-compatible fields such as `listener_id`, `listener_ids`, and `translated_text` may still appear in some payload shapes where useful, but BRSE relay mode no longer depends on them for core runtime semantics.
 
 ## Current FE Contract Assumptions
@@ -2036,11 +2443,11 @@
   - `docs/backend/GATEWAY_DESIGN.md`
   - `docs/backend/IMPLEMENTATION_STATE.md`
   - `BE/server/models.py`
-  - `BE/server/gateway/ws_endpoint.py`
-  - `BE/server/gateway/ws_hub.py`
-  - `BE/server/gateway/room_service.py`
-  - `BE/server/gateway/event_consumer.py`
-  - `BE/server/gateway/room_store.py`
+  - `BE/server/service/gateway/ws_endpoint.py`
+  - `BE/server/service/gateway/ws_hub.py`
+  - `BE/server/service/gateway/room_service.py`
+  - `BE/server/service/gateway/event_consumer.py`
+  - `BE/server/service/gateway/room_store.py`
 - Read FE contract reference only:
   - `FE/src/lib/ws.ts`
   - `FE/src/features/room/useMeetingRoom.ts`
@@ -2049,7 +2456,7 @@
 
 ### Root Cause Confirmed
 
-- Backend has no `chat.send` handler in `BE/server/gateway/ws_endpoint.py`.
+- Backend has no `chat.send` handler in `BE/server/service/gateway/ws_endpoint.py`.
 - Backend has no stable chat message model in `BE/server/models.py`.
 - Room Redis state has no recent chat list/key and snapshots only include `recent_transcripts`.
 - No runtime path publishes/broadcasts `chat.message`, so FE optimistic chat is never reconciled by a canonical backend event.
@@ -2068,10 +2475,10 @@
 
 ### Root Cause Fixed
 
-- Added missing inbound WS `chat.send` dispatch in `BE/server/gateway/ws_endpoint.py`.
+- Added missing inbound WS `chat.send` dispatch in `BE/server/service/gateway/ws_endpoint.py`.
 - Added missing stable `ChatMessage` backend model in `BE/server/models.py`.
-- Added missing room-scoped recent chat persistence in `BE/server/gateway/room_store.py`.
-- Added missing chat service handler and canonical `chat.message` publication in `BE/server/gateway/room_service.py`.
+- Added missing room-scoped recent chat persistence in `BE/server/service/gateway/room_store.py`.
+- Added missing chat service handler and canonical `chat.message` publication in `BE/server/service/gateway/room_service.py`.
 
 ### Inbound / Outbound Event Path
 
@@ -2105,7 +2512,7 @@
 - Time: 2026-05-01T15:18:06+07:00
 - Final state file sync before turn end.
 - Backend chat root cause fixed: `chat.send` was missing in WS dispatch, chat state/model were missing, `chat.message` was never published, and snapshots had no `recent_messages`.
-- Files updated this turn: `BE/server/models.py`, `BE/server/events.py`, `BE/server/gateway/room_store.py`, `BE/server/gateway/room_service.py`, `BE/server/gateway/ws_endpoint.py`, `docs/backend/IMPLEMENTATION_STATE.md`.
+- Files updated this turn: `BE/server/models.py`, `BE/server/events.py`, `BE/server/service/gateway/room_store.py`, `BE/server/service/gateway/room_service.py`, `BE/server/service/gateway/ws_endpoint.py`, `docs/backend/IMPLEMENTATION_STATE.md`.
 - Recent chat strategy: Redis room list `room:{room_id}:chat`, trimmed to 100 messages, TTL refreshed with room state and deleted with room cleanup.
 - Event path: WS `chat.send` -> `RoomService.send_chat_message(...)` -> Redis append -> gateway control publish `chat.message` -> existing consumer room broadcast.
 - Session safety: Redis participant state is re-read and current `session_id` must match; disconnected/missing/virtual participants cannot send chat.

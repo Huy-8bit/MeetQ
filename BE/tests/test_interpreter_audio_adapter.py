@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 import livekit.rtc as rtc
 
-from server.interpreter.audio_input import LiveKitAudioInput
+from server.service.media.audio_input import LiveKitAudioInput
 
 
 def _pcm_chunk(sample_value: int, samples: int) -> bytes:

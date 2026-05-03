@@ -1,5 +1,7 @@
 # Interpreter Service Design
 
+> Update note (2026-05-03): backend AI/model-facing code lives under `server.brain`; backend orchestration around room lifecycle, Redis control, and LiveKit media lives under `server.service`. Historical references below may describe the pre-refactor `server/interpreter` layout; active runtime modules are documented in `docs/backend/FILE_STRUCTURE.md`.
+>
 > Update note (2026-05-01): interpreter runtime is gated by room `brse_enabled`. When false, the daemon does not spawn a room runtime, does not join LiveKit as `BRSE AI`, and ignores stale interpreter output for that room. Live toggle uses `room.brse_updated`: OFF terminates the manager and disconnects BRSE runtime; ON spawns a fresh manager from the current room snapshot.
 >
 > Update note (2026-04-30): active interpreter runtime now uses BRSE participant semantics instead of per-listener translated tracks. The interpreter joins as virtual participant `BRSE AI`, subscribes to human mic audio, and publishes canonical BRSE relay audio/text back to the room. Legacy per-listener sections below remain as background context only.
@@ -10,15 +12,16 @@ Nó chịu trách nhiệm:
 
 1. Join từng LiveKit room như một programmatic participant.
 2. Subscribe microphone audio track của human participants.
-3. Reuse core engine hiện có trong `BE/src/realtime/client.py` mà không sửa file gốc.
+3. Reuse core engine hiện có trong `BE/server/brain/realtime/client.py`.
 4. Publish translated audio trở lại LiveKit thành track riêng cho từng listener.
 5. Gửi transcript và interpreter status về Gateway qua Redis pub/sub.
 6. Degrade sang fallback Whisper + GPT nếu realtime path lỗi.
 
 Ràng buộc cứng:
 
-- Không sửa file nào trong `BE/src/common/`, `BE/src/realtime/`, `BE/src/fallback/`
-- Tất cả orchestration ở `BE/server/interpreter/`
+- Shared generic helpers nằm ở `BE/server/shared/`; AI prompt/realtime/fallback/source-policy code nằm ở `BE/server/brain/`
+- Backend orchestration cho BRSE runtime nằm ở `BE/server/service/brain_runtime/`
+- LiveKit/media adapters cho runtime nằm ở `BE/server/service/media/`
 - Async-first, Python 3.12+, `asyncio`
 - Không persist audio stream xuống disk trong platform mode
 - LiveKit room access qua maintained Python SDK packages `livekit` và `livekit-api`
@@ -204,7 +207,7 @@ Khi participant disconnect hoặc unpublish mic:
 
 ## `LiveKitAudioInput` Adapter
 
-`BE/src/common/audio.py` yêu cầu một `AudioInput` sync interface:
+`BE/server/shared/audio.py` yêu cầu một `AudioInput` sync interface:
 
 ```python
 class AudioInput(abc.ABC):
@@ -219,7 +222,7 @@ LiveKit Python SDK lại phát audio theo async iterator `rtc.AudioStream`.
 
 ### Design Goal
 
-`LiveKitAudioInput` bridge async `rtc.AudioStream` thành blocking PCM16 iterator mà `RealtimeClient` hiện có chấp nhận được, không sửa `src/realtime/client.py`.
+`LiveKitAudioInput` bridge async `rtc.AudioStream` thành blocking PCM16 iterator mà `RealtimeClient` hiện có chấp nhận được, không sửa `server/brain/realtime/client.py`.
 
 ### Construction
 
@@ -249,7 +252,7 @@ import queue
 from typing import Iterator
 
 from livekit import rtc
-from src.common.audio import AudioInput, AudioMetadata
+from server.shared.audio import AudioInput, AudioMetadata
 
 
 class LiveKitAudioInput(AudioInput):
@@ -304,9 +307,9 @@ class LiveKitAudioInput(AudioInput):
 2. Nếu track mute hoặc participant disconnect, `_pump_stream()` kết thúc cleanly và push sentinel.
 3. Nếu queue đầy, drop oldest chunk thay vì block event loop; realtime latency quan trọng hơn lossless capture.
 
-## Reusing `RealtimeClient` Without Editing `BE/src/`
+## Reusing `RealtimeClient` Without Rewriting the Realtime Client
 
-`src/realtime/client.py` hiện:
+`server/brain/realtime/client.py` hiện:
 
 - in translation text ra stdout
 - push audio delta vào `SpeakerPlayer`
@@ -633,9 +636,9 @@ Fallback của platform **không** ghi WAV ra disk. Nó dùng in-memory utteranc
 - save WAV vào `recordings/`
 - return text cho CLI
 
-Platform không thể dùng trực tiếp flow đó. Vì không được sửa file gốc, Interpreter tạo file mới `server/interpreter/fallback_translator.py` tái sử dụng:
+Platform không thể dùng trực tiếp flow đó. Vì không được sửa file gốc, Interpreter tạo file mới `server/brain/fallback/pipeline.py` tái sử dụng:
 
-- `build_instructions()` từ `src/common.lang`
+- `build_instructions()` từ `server.brain.prompts.language`
 - cùng model choice `whisper-1` + `gpt-4o-mini`
 - nhưng convert PCM -> WAV bytes in-memory
 
@@ -731,7 +734,7 @@ Tuy nhiên có hai thread-adjacent realities phải chấp nhận vì engine hi�
 1. `RealtimeClient` gọi `AudioInput.start()` và iterate `stream_frames()` theo sync contract.
 2. `LiveKitAudioInput.start()` vì vậy phải schedule async pump bằng `run_coroutine_threadsafe(...)` để bridge sang queue blocking.
 
-Đây là chi phí integration bắt buộc do không được sửa `src/realtime/client.py`.
+Đây là chi phí integration bắt buộc do không được sửa `server/brain/realtime/client.py`.
 
 ### `SpeakerPlayer` Thread Safety
 

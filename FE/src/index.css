@@ -1806,16 +1806,12 @@ button {
   padding: 18px;
 }
 
-.brse-avatar-mark {
-  width: 66px;
-  height: 66px;
-  display: grid;
-  place-items: center;
-  border-radius: 20px;
-  color: #042f2e;
-  background: linear-gradient(145deg, #5eead4, #fbbf24);
-  font-size: 0.8rem;
-  font-weight: 900;
+.brse-avatar-img {
+  width: 80px;
+  height: 80px;
+  border-radius: 50%;
+  object-fit: cover;
+  border: 3px solid #5eead4;
 }
 
 .participant-fallback-brse strong {
@@ -2406,7 +2402,11 @@ button {
 .product-home {
   min-height: 100vh;
   padding: 28px;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
   align-items: stretch;
+  gap: 14px;
   background:
     linear-gradient(180deg, #f8fafc 0%, #eef4f8 100%),
     #f8fafc;
@@ -2422,8 +2422,73 @@ button {
 
 .landing-shell-minimal {
   width: min(760px, 100%);
-  align-content: center;
+  align-content: start;
   gap: 18px;
+}
+
+.landing-contact-wrap {
+  position: fixed;
+  right: 18px;
+  bottom: 18px;
+  z-index: 40;
+}
+
+.landing-contact {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 10px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.82);
+  border: 1px solid rgba(15, 23, 42, 0.1);
+  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.14);
+}
+
+.landing-contact-label {
+  display: none;
+}
+
+.landing-contact-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 999px;
+  color: #0f172a;
+  background: #f8fafc;
+  border: 1px solid rgba(15, 23, 42, 0.12);
+  text-decoration: none;
+  transition: transform 160ms ease, box-shadow 160ms ease, background-color 160ms ease;
+}
+
+.landing-contact-icon:hover {
+  transform: translateY(-1px);
+  background: #ecfeff;
+  box-shadow: 0 8px 18px rgba(8, 145, 178, 0.18);
+}
+
+.landing-contact-icon svg {
+  width: 18px;
+  height: 18px;
+  fill: currentColor;
+}
+
+@media (max-width: 720px) {
+  .landing-contact-wrap {
+    right: 12px;
+    bottom: 12px;
+  }
+
+  .landing-contact {
+    padding: 8px;
+  }
+
+  .landing-contact-icon {
+    width: 34px;
+    height: 34px;
+  }
 }
 
 .landing-header {
