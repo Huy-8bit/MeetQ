@@ -1,9 +1,6 @@
 import type { GatewayConnectionState } from "../types/livekit";
 import type { Language, MeetingLanguage } from "../types/api";
-import {
-  formatMeetingLanguageBridge,
-  getLanguageLabel,
-} from "../lib/languages";
+import { formatMeetingLanguageBridge, getLanguageLabel } from "../lib/languages";
 import { useRoomExpiry } from "../features/room/useRoomExpiry";
 import { BrseToggleControl } from "./BrseToggleControl";
 import { ConnectionBadge } from "./ConnectionBadge";
@@ -46,43 +43,44 @@ export function RoomTopBar({
 
   return (
     <header className="room-topbar">
-      <div className="room-topbar-main">
+      {/* Left: identity */}
+      <div className="room-topbar-identity">
         <div className="room-brand-mark">MQ</div>
-        <div className="room-title-block">
-          <div className="room-title-row">
-            <h1>{displayName || "Meeting Room"}</h1>
-            <span className={brseEnabled ? "mode-chip mode-chip-on" : "mode-chip"}>
-              {brseEnabled ? "BRSE relay" : "Normal mode"}
-            </span>
-          </div>
-          <div className="room-meta-line">
+        <div className="room-topbar-meta">
+          <span className="room-topbar-name">{displayName || "Meeting"}</span>
+          <div className="room-topbar-sub">
             <span>{roomId}</span>
+            <span>·</span>
             <span>{formatMeetingLanguageBridge(meetingLanguages)}</span>
-            <span>{participantCount} participant{participantCount === 1 ? "" : "s"}</span>
+            <span>·</span>
+            <span>{participantCount}p</span>
             {remainingLabel ? (
-              <span className={isExpired ? "room-timer-chip room-timer-chip-expired" : "room-timer-chip"}>
-                {isExpired ? "Meeting ended" : `${remainingLabel} left`}
-              </span>
+              <>
+                <span>·</span>
+                <span className={isExpired ? "topbar-timer expired" : "topbar-timer"}>
+                  {isExpired ? "Ended" : remainingLabel}
+                </span>
+              </>
             ) : null}
           </div>
         </div>
       </div>
 
+      {/* Right: controls */}
       <div className="room-topbar-controls">
-        <label className="room-language-select">
-          <span>Your language</span>
-          <select
-            value={currentLanguage}
-            disabled={meetingLanguages.length !== 2}
-            onChange={(event) => onChangeLanguage(event.target.value as Language)}
-          >
-            {languageOptions.map((item) => (
-              <option key={item} value={item}>
-                {getLanguageLabel(item)}
-              </option>
-            ))}
-          </select>
-        </label>
+        <select
+          className="topbar-lang-select"
+          value={currentLanguage}
+          disabled={meetingLanguages.length !== 2}
+          onChange={(e) => onChangeLanguage(e.target.value as Language)}
+          aria-label="Your language"
+        >
+          {languageOptions.map((item) => (
+            <option key={item} value={item}>
+              {getLanguageLabel(item)}
+            </option>
+          ))}
+        </select>
 
         <ConnectionBadge state={connectionState} />
 

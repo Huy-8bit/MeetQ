@@ -4,6 +4,7 @@ import {
   Room,
   RoomEvent,
   Track,
+  VideoQuality,
   createLocalScreenTracks,
   createLocalTracks,
   type LocalTrack,
@@ -12,6 +13,8 @@ import {
   type RemoteParticipant,
   type RemoteTrackPublication,
   type RemoteVideoTrack,
+  type ScreenShareCaptureOptions,
+  type TrackPublishOptions,
 } from "livekit-client";
 import type {
   AudioRouting,
@@ -32,6 +35,23 @@ import { resolveLiveKitUrl } from "./urls";
 
 const BRSE_LIVEKIT_IDENTITY_PREFIX = "interp::brse_ai";
 const DEFAULT_BRSE_PARTICIPANT_ID = "brse_ai";
+const SCREEN_SHARE_CAPTURE_RESOLUTION = {
+  width: 2560,
+  height: 1440,
+  frameRate: 24,
+  aspectRatio: 16 / 9,
+} as const;
+const SCREEN_SHARE_PUBLISH_OPTIONS: TrackPublishOptions = {
+  source: Track.Source.ScreenShare,
+  stream: "screen_share",
+  simulcast: true,
+  screenShareEncoding: {
+    maxBitrate: 6_000_000,
+    maxFramerate: 24,
+    priority: "high",
+  },
+  degradationPreference: "maintain-resolution",
+};
 
 type SetSinkIdCapableElement = HTMLMediaElement & {
   setSinkId?: (sinkId: string) => Promise<void>;
@@ -260,10 +280,7 @@ export async function publishScreenShareTrack(room: Room): Promise<{
   trackSid?: string;
   trackName?: string;
 }> {
-  const tracks = await createLocalScreenTracks({
-    audio: false,
-    video: true,
-  });
+  const tracks = await createLocalScreenTracks(getScreenShareCaptureOptions());
 
   const videoTrack = tracks.find((track) => track.kind === Track.Kind.Video);
   if (!videoTrack) {
@@ -271,7 +288,12 @@ export async function publishScreenShareTrack(room: Room): Promise<{
     throw new Error("No screen video track returned by browser.");
   }
 
-  const publication = await room.localParticipant.publishTrack(videoTrack);
+  videoTrack.mediaStreamTrack.contentHint = "detail";
+
+  const publication = await room.localParticipant.publishTrack(
+    videoTrack,
+    SCREEN_SHARE_PUBLISH_OPTIONS,
+  );
   return {
     track: videoTrack as LocalVideoTrack,
     publication,
@@ -290,6 +312,15 @@ export function unpublishScreenShareTrack(
 
   room.localParticipant.unpublishTrack(track, true);
   track.stop();
+}
+
+export function preferScreenShareHighQuality(feed: ScreenShareFeed | null): void {
+  const publication = feed?.publication;
+  if (!publication || !("setVideoQuality" in publication)) {
+    return;
+  }
+
+  publication.setVideoQuality(VideoQuality.HIGH);
 }
 
 function assertMediaDevicesSupported(): void {
@@ -410,6 +441,7 @@ export function buildMediaSnapshot(args: {
         trackName: publication.trackName || getTrackRuntimeName(publication.track),
         track: publication.track as LocalVideoTrack,
         participant: null,
+        publication,
       });
     }
   });
@@ -425,6 +457,7 @@ export function buildMediaSnapshot(args: {
     metadata: selfSnapshot?.metadata,
     isCameraOff: !localVideoTrack || isCameraMuted(localVideoTrack),
     track: localVideoTrack,
+    isSpeaking: room.localParticipant.isSpeaking,
   });
   renderedParticipantIds.add(selfParticipantId);
 
@@ -455,6 +488,7 @@ export function buildMediaSnapshot(args: {
       metadata: snapshot.metadata,
       isCameraOff: !videoTrack || isTrackMuted(videoTrack),
       track: videoTrack,
+      isSpeaking: remoteParticipant?.isSpeaking,
     });
     renderedParticipantIds.add(snapshot.participant_id);
   });
@@ -489,6 +523,7 @@ export function buildMediaSnapshot(args: {
       metadata: snapshot?.metadata,
       isCameraOff: !videoTrack || isTrackMuted(videoTrack),
       track: videoTrack,
+      isSpeaking: participant.isSpeaking,
     });
   });
 
@@ -539,6 +574,7 @@ export function bindRoomRefresh(
     RoomEvent.ParticipantDisconnected,
     RoomEvent.LocalTrackPublished,
     RoomEvent.LocalTrackUnpublished,
+    RoomEvent.ActiveSpeakersChanged,
   ] as const;
 
   refreshEvents.forEach((eventName) => {
@@ -674,12 +710,45 @@ function collectParticipantScreenShares(
       trackName: publication.trackName || getTrackRuntimeName(publication.track),
       track: publication.track as RemoteVideoTrack,
       participant,
+      publication,
     });
   });
 }
 
 function getTrackRuntimeName(track: unknown): string | undefined {
   return (track as { name?: string }).name;
+}
+
+function getScreenShareCaptureOptions(): ScreenShareCaptureOptions {
+  return {
+    audio: false,
+    video: true,
+    contentHint: "detail",
+    surfaceSwitching: "include",
+    systemAudio: "exclude",
+    ...(isSafari17BasedBrowser()
+      ? {}
+      : {
+          resolution: SCREEN_SHARE_CAPTURE_RESOLUTION,
+        }),
+  };
+}
+
+function isSafari17BasedBrowser(): boolean {
+  if (typeof navigator === "undefined") {
+    return false;
+  }
+
+  const userAgent = navigator.userAgent;
+  const isSafari =
+    /Safari\//.test(userAgent) &&
+    !/(Chrome|Chromium|CriOS|FxiOS|Edg|OPR)\//.test(userAgent);
+  if (!isSafari) {
+    return false;
+  }
+
+  const versionMatch = userAgent.match(/Version\/(\d+)/);
+  return Number(versionMatch?.[1]) === 17;
 }
 
 function compareVideoFeeds(left: VideoFeed, right: VideoFeed): number {

@@ -4,9 +4,11 @@ import type {
   ScreenShareSource,
 } from "./api";
 import type {
+  LocalTrackPublication,
   LocalVideoTrack,
   RemoteParticipant,
   RemoteAudioTrack,
+  RemoteTrackPublication,
   RemoteVideoTrack,
 } from "livekit-client";
 
@@ -35,6 +37,7 @@ export interface VideoFeed {
   metadata?: Record<string, unknown>;
   isCameraOff?: boolean;
   track: LocalVideoTrack | RemoteVideoTrack | null;
+  isSpeaking?: boolean;
 }
 
 export interface HumanAudioFeed {
@@ -64,6 +67,7 @@ export interface ScreenShareFeed {
   trackName?: string;
   track: LocalVideoTrack | RemoteVideoTrack | null;
   participant: RemoteParticipant | null;
+  publication?: LocalTrackPublication | RemoteTrackPublication;
 }
 
 export interface AudioDeviceOption {

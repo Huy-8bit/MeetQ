@@ -30,7 +30,7 @@ export function ParticipantTile({
     .join("");
 
   return (
-    <article className={`participant-tile ${isBrse ? "participant-tile-brse" : ""}`}>
+    <article className={`participant-tile ${isBrse ? "participant-tile-brse" : ""} ${feed.isSpeaking ? "is-speaking" : ""}`.trim()}>
       <div className="participant-media-frame">
         {feed.track && !feed.isCameraOff ? (
           <VideoTrackView track={feed.track} mirrored={feed.isLocal} />

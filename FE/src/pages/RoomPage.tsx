@@ -15,7 +15,6 @@ import { ChatPanel } from "../components/ChatPanel";
 import { JoinRoomCard } from "../components/JoinRoomCard";
 import { AudioDevicePanel } from "../components/AudioDevicePanel";
 import { ParticipantList } from "../components/ParticipantList";
-import { TranscriptPanel } from "../components/TranscriptPanel";
 import { BrseRelayPanel } from "../components/BrseRelayPanel";
 import { MeetingStage } from "../components/MeetingStage";
 import { RoomControlBar } from "../components/RoomControlBar";
@@ -38,6 +37,7 @@ export function RoomPage() {
   const [joining, setJoining] = useState(false);
   const [joinError, setJoinError] = useState<string | null>(null);
   const [activePanel, setActivePanel] = useState<RoomPanelTab>("relay");
+  const [sidePanelOpen, setSidePanelOpen] = useState(true);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const session = getSession(roomId);
   const handleSessionInvalidated = useCallback(() => {
@@ -257,7 +257,11 @@ export function RoomPage() {
   }
 
   return (
-    <main className={meeting.brseEnabled ? "room-page brse-on" : "room-page brse-off"}>
+    <main className={[
+      "room-page",
+      meeting.brseEnabled ? "brse-on" : "brse-off",
+      sidePanelOpen ? "panel-open" : "panel-closed",
+    ].join(" ")}>
       <RoomTopBar
         roomId={roomId}
         displayName={meeting.selfState?.display_name || session.participant.display_name}
@@ -310,6 +314,7 @@ export function RoomPage() {
       <div className="room-shell">
         <section className="room-main-column">
           <MeetingStage
+            sidePanelOpen={sidePanelOpen}
             videos={meeting.videos}
             participants={meeting.participants}
             selectedScreenSharer={selectedScreenSharer}
@@ -344,7 +349,12 @@ export function RoomPage() {
               }
               void meeting.startScreenShare();
             }}
-            onOpenPanel={setActivePanel}
+            sidePanelOpen={sidePanelOpen}
+            onToggleSidePanel={() => setSidePanelOpen((prev) => !prev)}
+            onOpenPanel={(tab) => {
+              setActivePanel(tab);
+              if (!sidePanelOpen) setSidePanelOpen(true);
+            }}
             onOpenSettings={() => setSettingsOpen(true)}
             onLeave={() => {
               void meeting.leaveRoom().then(() => navigate("/"));
@@ -353,25 +363,20 @@ export function RoomPage() {
         </section>
 
         <RoomSidePanel
+          open={sidePanelOpen}
+          onClose={() => setSidePanelOpen(false)}
           activeTab={activePanel}
           transcriptCount={meeting.transcripts.length}
           chatCount={meeting.chatMessages.length}
           participantCount={meeting.participants.length}
           onTabChange={setActivePanel}
           relay={
-            <>
-              <BrseRelayPanel
-                brseEnabled={meeting.brseEnabled}
-                statuses={meeting.interpreterStatuses}
-                transcripts={meeting.transcripts}
-                meetingLanguages={roomMeetingLanguages}
-              />
-              <TranscriptPanel
-                entries={meeting.transcripts}
-                brseEnabled={meeting.brseEnabled}
-                embedded
-              />
-            </>
+            <BrseRelayPanel
+              brseEnabled={meeting.brseEnabled}
+              statuses={meeting.interpreterStatuses}
+              transcripts={meeting.transcripts}
+              meetingLanguages={roomMeetingLanguages}
+            />
           }
           chat={
             <ChatPanel

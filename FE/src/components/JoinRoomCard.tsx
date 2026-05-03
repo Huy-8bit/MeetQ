@@ -4,6 +4,7 @@ import {
   getLanguageLabel,
 } from "../lib/languages";
 import { formatExpiresAtHuman, useRoomExpiry } from "../features/room/useRoomExpiry";
+import { loadUserPrefs, saveUserPrefs } from "../lib/userPrefs";
 import type { MeetingLanguage, ParticipantSnapshot, RoomSnapshotResponse } from "../types/api";
 
 interface JoinRoomCardProps {
@@ -25,8 +26,12 @@ export function JoinRoomCard({
   isSubmitting,
   error,
 }: JoinRoomCardProps) {
-  const [displayName, setDisplayName] = useState("");
-  const [language, setLanguage] = useState<MeetingLanguage | "">("");
+  const prefs = loadUserPrefs();
+  const savedLang = meetingLanguages.includes(prefs.language as MeetingLanguage)
+    ? (prefs.language as MeetingLanguage)
+    : "";
+  const [displayName, setDisplayName] = useState(prefs.displayName);
+  const [language, setLanguage] = useState<MeetingLanguage | "">(savedLang);
   const [validationError, setValidationError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -84,6 +89,7 @@ export function JoinRoomCard({
     }
 
     setValidationError(null);
+    saveUserPrefs(displayName.trim(), language);
     await onJoin({
       displayName: displayName.trim(),
       language,

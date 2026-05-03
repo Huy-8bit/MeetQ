@@ -2,6 +2,7 @@ import type { RoomPanelTab } from "./RoomSidePanel";
 
 interface RoomControlBarProps {
   activePanel: RoomPanelTab;
+  sidePanelOpen: boolean;
   isMicMuted: boolean;
   isTogglingMic: boolean;
   isMutedByHost: boolean;
@@ -15,12 +16,14 @@ interface RoomControlBarProps {
   onToggleCamera: () => void;
   onToggleScreenShare: () => void;
   onOpenPanel: (tab: RoomPanelTab) => void;
+  onToggleSidePanel: () => void;
   onOpenSettings: () => void;
   onLeave: () => void;
 }
 
 export function RoomControlBar({
   activePanel,
+  sidePanelOpen,
   isMicMuted,
   isTogglingMic,
   isMutedByHost,
@@ -34,94 +37,120 @@ export function RoomControlBar({
   onToggleCamera,
   onToggleScreenShare,
   onOpenPanel,
+  onToggleSidePanel,
   onOpenSettings,
   onLeave,
 }: RoomControlBarProps) {
   const screenShareBusy = isStartingScreenShare || isStoppingScreenShare;
+  const micDisabled = isTogglingMic || (isMutedByHost && isMicMuted);
 
   return (
     <footer className="room-control-bar">
+      {/* Left: media controls */}
       <div className="room-control-group">
-        <button
-          className={isMicMuted ? "meeting-control-button is-muted" : "meeting-control-button is-live"}
-          type="button"
+        <ControlButton
+          active={!isMicMuted}
+          muted={isMicMuted}
+          disabled={micDisabled}
           onClick={onToggleMic}
-          disabled={isTogglingMic || (isMutedByHost && isMicMuted)}
-        >
-          <span className="control-icon" aria-hidden="true">M</span>
-          {isTogglingMic
-            ? "Updating mic"
-            : isMutedByHost && isMicMuted
-              ? "Muted by host"
-              : isMicMuted
-                ? "Unmute"
-                : "Mute"}
-        </button>
-
-        <button
-          className={isCameraOff ? "meeting-control-button is-muted" : "meeting-control-button is-live"}
-          type="button"
-          onClick={onToggleCamera}
+          label={isMutedByHost && isMicMuted ? "Muted by host" : isMicMuted ? "Unmute" : "Mute"}
+        />
+        <ControlButton
+          active={!isCameraOff}
+          muted={isCameraOff}
           disabled={isTogglingCamera || isLeaving}
-        >
-          <span className="control-icon" aria-hidden="true">C</span>
-          {isTogglingCamera
-            ? "Updating camera"
-            : isCameraOff
-              ? "Start video"
-              : "Stop video"}
-        </button>
-
-        <button
-          className={isScreenSharing ? "meeting-control-button is-sharing" : "meeting-control-button"}
-          type="button"
-          onClick={onToggleScreenShare}
+          onClick={onToggleCamera}
+          label={isCameraOff ? "Start video" : "Stop video"}
+        />
+        <ControlButton
+          active={isScreenSharing}
           disabled={screenShareBusy || isLeaving}
-        >
-          <span className="control-icon" aria-hidden="true">S</span>
-          {isStartingScreenShare
-            ? "Requesting share"
-            : isStoppingScreenShare
-              ? "Stopping share"
-              : isScreenSharing
-                ? "Stop share"
-                : "Share screen"}
-        </button>
+          onClick={onToggleScreenShare}
+          label={
+            isStartingScreenShare ? "Starting…" :
+            isStoppingScreenShare ? "Stopping…" :
+            isScreenSharing ? "Stop share" : "Share"
+          }
+        />
       </div>
 
-      <div className="room-control-tabs" aria-label="Open room panel">
-        {(["relay", "chat", "people"] as RoomPanelTab[]).map((tab) => (
+      {/* Right side: panel tabs + secondary actions */}
+      <div className="room-control-right-cluster">
+        {/* Center: panel tabs */}
+        <div className="room-control-tabs" aria-label="Open room panel">
+          {(["relay", "chat", "people"] as RoomPanelTab[]).map((tab) => (
+            <button
+              key={tab}
+              className={activePanel === tab && sidePanelOpen ? "panel-shortcut is-active" : "panel-shortcut"}
+              type="button"
+              onClick={() => onOpenPanel(tab)}
+            >
+              {tab === "relay" ? "Relay" : tab === "chat" ? "Chat" : "People"}
+            </button>
+          ))}
+        </div>
+
+        {/* Right: secondary actions */}
+        <div className="room-control-secondary">
           <button
-            className={activePanel === tab ? "panel-shortcut is-active" : "panel-shortcut"}
-            key={tab}
+            className="control-icon-btn"
             type="button"
-            onClick={() => onOpenPanel(tab)}
+            aria-label={sidePanelOpen ? "Hide panel" : "Show panel"}
+            title={sidePanelOpen ? "Hide panel" : "Show panel"}
+            onClick={onToggleSidePanel}
           >
-            {tab === "relay"
-              ? "Relay"
-              : tab === "people"
-                ? "People"
-                : tab[0].toUpperCase() + tab.slice(1)}
+            {sidePanelOpen ? "⇥" : "⇤"}
           </button>
-        ))}
-        <button
-          className="panel-shortcut panel-shortcut-settings"
-          type="button"
-          onClick={onOpenSettings}
-          aria-label="Open settings"
-        >
-          <span className="settings-gear" aria-hidden="true">⚙</span>
-          <span>Settings</span>
-        </button>
-        <button
-          className="meeting-control-button leave-control-button"
-          type="button"
-          onClick={onLeave}
-          disabled={isLeaving}
-        >
-          {isLeaving ? "Leaving" : "Leave"}
-        </button>
+          <button
+            className="control-icon-btn"
+            type="button"
+            aria-label="Settings"
+            title="Settings"
+            onClick={onOpenSettings}
+          >
+            ⚙
+          </button>
+          <button
+            className="leave-button"
+            type="button"
+            onClick={onLeave}
+            disabled={isLeaving}
+          >
+            {isLeaving ? "Leaving…" : "Leave"}
+          </button>
+        </div>
       </div>
     </footer>
+  );
+}
+
+function ControlButton({
+  active,
+  muted = false,
+  disabled = false,
+  onClick,
+  label,
+}: {
+  active: boolean;
+  muted?: boolean;
+  disabled?: boolean;
+  onClick: () => void;
+  label: string;
+}) {
+  return (
+    <button
+      className={[
+        "meeting-control-button",
+        active ? "is-live" : "",
+        muted ? "is-muted" : "",
+      ].filter(Boolean).join(" ")}
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      aria-label={label}
+      title={label}
+    >
+      <span className="control-btn-label">{label}</span>
+    </button>
   );
 }

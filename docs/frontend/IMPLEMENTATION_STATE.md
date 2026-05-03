@@ -1,5 +1,272 @@
 # Frontend Implementation State
 
+## Turn Update: 2026-05-03 Mobile Layout, Bottom Bar Regrouping & Active Speaker Highlight
+
+- Time: 2026-05-03T20:55:00+07:00
+- Mode: CODE-ONLY
+- Testing deferred: yes, per instruction
+
+### Objective
+Enhance meeting layout by repositioning bottom bar tabs, creating a dedicated mobile structure with bottom-sheet side panels, and implementing active speaker highlights for both humans and AI.
+
+### Changes Implemented
+
+#### 1. Bottom Bar Regrouping
+- **Repositioning Decision:** Moved the `Relay / Chat / People` tab cluster closer to the right side of the screen by wrapping it together with the secondary controls (Settings/Leave) in a `.room-control-right-cluster` flex container.
+- **Visual Balance:** This separates the primary meeting actions (Mute/Video/Share) on the left from the navigation and utility functions on the right, removing the floating, disconnected feel of the tabs in the center.
+
+#### 2. Dedicated Mobile Layout
+- **Strategy:** Added a comprehensive `@media (max-width: 768px)` block to overhaul the mobile experience.
+- **Top Bar:** Rút gọn noise bằng cách ẩn `.room-topbar-sub` và `.connection-label`, giữ cho top bar mỏng và tập trung.
+- **Stage Priority:** Đặt `.meeting-stage` thành vùng ưu tiên, co giãn lấp đầy chiều cao còn trống, giữ vai trò trung tâm trên màn hình nhỏ.
+- **Mobile Control Bar:** Chuyển `.room-control-bar` thành layout 2 hàng (column flex): hàng trên chứa 3 nút media (chia đều 3 cột grid), hàng dưới chứa tabs và nút chức năng dàn trải đều (space-between). Các nút to, dễ bấm hơn.
+- **Mobile Panel Pattern:** Khi mở panel trên mobile, `.room-side-panel` desktop được transform thành một bottom sheet overlay (fixed bottom, slide-up animation, z-index cao), dễ thao tác bằng một tay và không đẩy meeting stage ra khỏi màn hình.
+
+#### 3. Active Speaker Highlighting
+- **Highlight Strategy:** Áp dụng hiệu ứng glowing nhẹ (`box-shadow`, `border-color` và transform `translateY(-2px)`) cho `.participant-tile.is-speaking`. Hiệu ứng có transition 240ms mượt mà để tránh nhấp nháy gắt.
+- **BRSE / AI Active Speaker:** AI participant (`participant-tile-brse`) có highlight tone màu sáng và nổi bật hơn một chút để phân biệt với người dùng thông thường.
+- **Detection Source:** Tích hợp trực tiếp state `isSpeaking` từ LiveKit SDK (thông qua `RoomEvent.ActiveSpeakersChanged`). Giá trị này đã được map vào `VideoFeed.isSpeaking` trong file `lib/livekit.ts` và truyền xuống `ParticipantTile`. Tránh dùng thủ thuật text relay để xác định active speaker, đảm bảo tính ổn định và real-time.
+
+### Files Modified
+- `FE/src/components/RoomControlBar.tsx` (Regrouped tabs to the right)
+- `FE/src/components/ParticipantTile.tsx` (Added `.is-speaking` class dynamically)
+- `FE/src/lib/livekit.ts` (Binded `RoomEvent.ActiveSpeakersChanged` & added `isSpeaking` to payload)
+- `FE/src/types/livekit.ts` (Updated `VideoFeed` interface)
+- `FE/src/index.css` (Added active speaker animations & new mobile responsive layout block)
+
+### Build Check
+- Test suite and build deferred (CODE-ONLY mode).
+
+## Turn Update: 2026-05-03 Meeting Controls Polish & Panel Tabs Cohesion
+
+- Time: 2026-05-03T20:44:00+07:00
+- Mode: CODE-ONLY
+- Testing deferred: yes, per instruction
+
+### Objective
+
+Refine meeting controls and navigation panel tabs to be more cohesive, Apple-like, and text-focused without using icons for main meeting actions.
+
+### Changes Implemented
+
+#### 1. Panel Tab Cluster Tightening
+- Updated `.room-control-tabs` layout to use a segmented-control feel.
+- Grouped `Relay`, `Chat`, and `People` tabs into a continuous pill cluster with `padding: 4px` and a shared dark background.
+- Overrode `.panel-shortcut` spacing and active state to match the tighter visual rhythm and Apple-like aesthetic without breaking functionality.
+
+#### 2. Meeting Control Buttons Icon Removal
+- Removed icons entirely from `Mute`, `Stop video`, and `Share` buttons.
+- Updated `FE/src/components/RoomControlBar.tsx` `ControlButton` component to only display `.control-btn-label`.
+- Refined button padding (`padding: 0 20px`), label typography (`font-weight: 600`, `letter-spacing: 0.01em`), and text alignment to compensate for icon removal, preventing a "floating" or empty appearance.
+- Replaced `.control-icon` CSS dependencies with direct styles on `.meeting-control-button` for active/muted/sharing states.
+
+### Preserved Runtime Behavior
+- Panel switching logic, Mute/Video/Share functionality, and responsive behavior remain exactly the same. No behavioral or backend changes made.
+
+### Build Check
+- Test suite and build deferred (CODE-ONLY mode).
+- Testing not required per instruction.
+
+## Turn Update: 2026-05-03 UI/UX Redesign — Apple-like, Panel Collapse, User Persistence
+
+- Time: 2026-05-03T21:00:00+07:00
+- Mode: CODE-ONLY
+- Testing deferred: yes, per instruction
+
+### Objective
+
+Full UI/UX redesign of the meeting room toward a minimal, premium, Apple-like direction. Added user identity caching, collapsible side panel, and simplified relay panel.
+
+### Changes Implemented
+
+#### 1. User Identity Persistence
+
+- **New file:** `FE/src/lib/userPrefs.ts`
+  - `saveUserPrefs(name, language)` — writes to `localStorage` with keys `brse_display_name` / `brse_preferred_language`. No-op if storage unavailable (private browsing).
+  - `loadUserPrefs()` — reads both keys, returns `{ displayName, language }`.
+- **`FE/src/components/JoinRoomCard.tsx`**
+  - On mount: reads saved prefs. Pre-fills `displayName` state from `brse_display_name`. Pre-selects `language` only if the saved value is still in `meetingLanguages`; otherwise falls back to `""` (safe fallback for changed language pairs).
+  - On join submit: calls `saveUserPrefs()` before `onJoin()` so the latest values are always persisted.
+
+#### 2. Side Panel Collapse / Expand
+
+- **`FE/src/pages/RoomPage.tsx`**
+  - New `sidePanelOpen` state (default `true`).
+  - `room-page` gets `.panel-open` / `.panel-closed` class.
+  - Panel tab buttons in `RoomControlBar` call a new `onOpenPanel` wrapper that also opens the panel if it was closed.
+  - `RoomSidePanel` receives `open`, `onClose` props.
+  - Relay content simplified: `TranscriptPanel` removed from relay slot — `BrseRelayPanel` now renders the full history.
+- **CSS (`FE/src/index.css`)**
+  - `.room-shell` uses `grid-template-columns: minmax(0,1fr) 380px` with `transition: grid-template-columns 240ms cubic-bezier(0.4,0,0.2,1)`.
+  - `.room-page.panel-closed .room-shell` collapses column to `0px` — meeting stage expands to fill all available space.
+
+#### 3. RoomSidePanel Redesign
+
+- **`FE/src/components/RoomSidePanel.tsx`** — full rewrite
+  - Props: `open`, `onClose`, `activeTab`, counts, `onTabChange`, `relay`/`chat`/`people` slots.
+  - New structure: `.side-panel-header` containing `.side-panel-tabs` (segmented-pill style) + `.side-panel-close` (✕ button).
+  - Tabs: compact 30px-tall segmented control, Apple pill look with white active state and subtle shadow.
+  - Badge count shown only when `> 0`, minimal style.
+  - `.side-panel-body` replaces old `.room-side-content` — 14px padding, clean grid.
+
+#### 4. BrseRelayPanel Simplification
+
+- **`FE/src/components/BrseRelayPanel.tsx`** — full rewrite
+  - Removed: status cards ("AI relay is available"), "Relay State" section, status-list boxes, explanatory copy, `relay-mode-card`.
+  - Now renders only a scrollable `relay-history-list` of `RelayEntry` items, or a 1-line empty state.
+  - `RelayEntry`: speaker name + language tag in meta row, live-pulse dot for partial entries, relay direction badge. Source text + translated text (styled distinctly) for relay kind; source text only for human kind.
+  - Auto-scroll to bottom (same threshold pattern as old `TranscriptPanel`).
+
+#### 5. RoomControlBar Refinement
+
+- **`FE/src/components/RoomControlBar.tsx`** — full rewrite
+  - New prop: `sidePanelOpen`, `onToggleSidePanel`.
+  - Three sections: media controls left, panel tab shortcuts center, secondary actions right.
+  - Media buttons use emoji icons + short labels, `is-live`/`is-muted` states.
+  - Secondary: `control-icon-btn` for panel toggle (⇥/⇤) and settings (⚙), `leave-button` pill.
+  - Panel tab shortcuts open panel if it was closed (`onOpenPanel` wrapper in `RoomPage`).
+
+#### 6. RoomTopBar Refinement
+
+- **`FE/src/components/RoomTopBar.tsx`** — full rewrite
+  - Layout: `.room-topbar-identity` (brand mark + name + meta sub-line) on left; controls on right.
+  - Brand mark: 36×36px (down from 54×54px), tighter radius.
+  - Name shown as `.room-topbar-name`, sub-line (`.room-topbar-sub`) shows room ID · language pair · participant count · timer, all in a single compact row.
+  - Language selector: inline `<select>` with `topbar-lang-select` (no label wrapper, 30px height).
+  - Removed old `.room-language-select` wrapper; `mode-chip` removed from topbar (BRSE toggle already shows state).
+  - Connection badge and BRSE toggle remain; both visually slimmed.
+
+#### 7. MeetingStage Cleanup
+
+- **`FE/src/components/MeetingStage.tsx`**
+  - Removed verbose `.stage-status-row` (title, kicker, two state pills).
+  - Replaced with `.stage-sharer-label` shown only when screen sharing is active — one compact line.
+  - Stage grid: default `minmax(0, 1fr)` single row (no top auto row); `.has-sharer-label` adds `auto` row.
+  - Empty state text shortened to "Waiting for video".
+
+#### 8. CSS Visual Direction (Apple-like)
+
+- **`FE/src/index.css`** — multiple targeted edits + new section appended
+  - Background: very dark `#080c14`, near-black.
+  - Topbar: padding reduced (`8px 12px`), border-radius `18px`, `backdrop-filter: blur(24px)` with `-webkit-` prefix.
+  - Control bar: 60px min-height, `border-radius: 18px`, three distinct section groups.
+  - Meeting stage: padding `10px`, radius `22px`, no top status row.
+  - Side panel: `border-radius: 20px`, subtle shadow, smooth opacity transition when closed.
+  - New segmented tab system for side panel.
+  - New relay history entry styles: clean cards, green accent for translated text, live pulse dot.
+  - `topbar-lang-select`, `topbar-timer`, `room-topbar-name`, `room-topbar-sub` — new topbar identity classes.
+  - BRSE toggle: slimmed to 32px height, 36px toggle track, tighter layout.
+  - Connection badge: 30px height, smaller dot, lighter background.
+  - Responsive: `@media (max-width: 1180px)` forces single-column layout; panel collapse is no-op on mobile (panel either shown or hidden via `display:none`).
+
+### Architecture Note
+
+`TranscriptPanel` is no longer rendered inside the relay tab. `BrseRelayPanel` now handles all transcript display in relay tab (both source and relay entries). `TranscriptPanel` component file is untouched and still importable for potential standalone use.
+
+### Preserved Runtime Behavior
+
+Join/leave room, WebSocket, LiveKit, BRSE toggle, chat, participant list, screen share, camera/mic controls — all unchanged. Session store, `useMeetingRoom`, audio sinks, settings drawer — all unchanged.
+
+### Build Check
+
+- `tsc --noEmit` passed clean (zero errors).
+- Full test suite not run, per CODE-ONLY instruction.
+- New tests not added.
+
+### Files Changed
+
+| File | Action |
+| --- | --- |
+| `FE/src/lib/userPrefs.ts` | New |
+| `FE/src/components/JoinRoomCard.tsx` | Updated (persistence) |
+| `FE/src/components/RoomSidePanel.tsx` | Rewrite |
+| `FE/src/components/BrseRelayPanel.tsx` | Rewrite |
+| `FE/src/components/RoomControlBar.tsx` | Rewrite |
+| `FE/src/components/RoomTopBar.tsx` | Rewrite |
+| `FE/src/components/MeetingStage.tsx` | Updated |
+| `FE/src/pages/RoomPage.tsx` | Updated |
+| `FE/src/index.css` | Multiple targeted edits + new section |
+
+---
+
+## Turn Update: 2026-05-03 Screen Share Readability Quality Fix (Kickoff)
+
+- Time: 2026-05-03T20:06:13+07:00
+- Mode: CODE-ONLY
+- Testing deferred: yes, per instruction; no full test suite and no new tests
+
+### Objective Locked
+
+- Debug and fix blurry/low-resolution screen share in the meeting app.
+- Trace screen-share quality end-to-end across FE capture, publish options, LiveKit source/layer behavior, subscriber/render quality, and stage CSS.
+- Prioritize text/UI/code readability over webcam-style motion smoothness.
+- Keep start/stop share, join/leave, camera/mic, BRSE, chat, transcript, and existing meeting stage behavior intact outside the quality path.
+
+### Initial Trace Findings
+
+- FE capture currently uses `createLocalScreenTracks({ audio: false, video: true })` in `FE/src/lib/livekit.ts`; no app-level readability profile, content hint, or higher-than-default screen resolution is set.
+- LiveKit client defaults cap non-Safari screen capture at `h1080fps30` and publish screen share with `h1080fps15` encoding, which downscales high-resolution shared monitors/windows before participants render them.
+- Screen share is correctly identified as `Track.Source.ScreenShare` by LiveKit SDK and backend metadata uses `source: "screen_share"`.
+- FE render uses `VideoTrackView fit="contain"` and bounded stage CSS; no current `cover` crop/stretch path was found for active screen share.
+- No backend/LiveKit YAML bitrate cap specific to screen share has been found so far.
+
+### Final Sync
+
+- Time: 2026-05-03T20:09:01+07:00
+- Final status: screen share now uses a FE readability profile instead of default webcam-like/default screen settings.
+
+### Root Cause Confirmed
+
+- Primary root cause was FE screen-share capture/publish quality, not backend room metadata or LiveKit YAML.
+- `createLocalScreenTracks({ audio: false, video: true })` let `livekit-client` apply its default non-Safari screen capture cap of 1920x1080 at 30fps.
+- Publishing without screen-specific options used LiveKit's default screen encoding of 1080p at 15fps around 2.5 Mbps, which is too low for detailed text/code/UI from 1440p/4K shared sources.
+- The active stage was already bounded and used `object-fit: contain`; no active CSS stretch/crop path was found as the blur source.
+- Remote screen share subscription relied on adaptive stream defaults only; the main stage did not explicitly request the high-quality layer for the selected shared screen.
+- `ops/livekit/livekit.yaml`, `ops/livekit/livekit.prod.yaml`, `docker-compose.yml`, and backend screen-share state APIs do not define a screen-share bitrate/layer cap, so no backend/LiveKit config change was needed.
+
+### Changes Implemented
+
+- `FE/src/lib/livekit.ts`
+  - added a dedicated screen-share capture profile: 2560x1440 ideal resolution at 15fps, `contentHint="detail"`, screen audio disabled, and browser surface switching enabled.
+  - kept Safari 17-based browsers on uncapped SDK capture behavior to avoid the known Safari low-resolution constraint bug.
+  - publishes screen share with `source: Track.Source.ScreenShare`, `stream: "screen_share"`, simulcast enabled, `screenShareEncoding` at 6 Mbps / 15fps, and `degradationPreference: "maintain-resolution"`.
+  - exposes `preferScreenShareHighQuality(...)` to request the high layer for the active remote screen share.
+- `FE/src/types/livekit.ts`
+  - carries the LiveKit publication with `ScreenShareFeed` so render code can control subscription quality.
+- `FE/src/components/MeetingStage.tsx`
+  - requests `VideoQuality.HIGH` for the selected screen-share feed shown in the main stage.
+
+### Backend / LiveKit Config Decision
+
+- Backend and LiveKit config were read and traced but not modified.
+- Backend screen-share APIs only store/broadcast metadata (`source: "screen_share"`, track SID/name) and do not transcode or choose layers.
+- Local/prod LiveKit YAML only configures signaling/RTC ports, Redis, keys, and external IP behavior; no screen-share codec/bitrate/dynacast policy is currently capping quality there.
+- `docs/backend/IMPLEMENTATION_STATE.md` was not updated because no backend or LiveKit config files were changed.
+
+### Verification
+
+- Full test suite not run, per CODE-ONLY instruction.
+- New tests not added.
+- Existing tests not modified.
+- Lightweight checks run:
+  - `npm exec tsc -- -p tsconfig.app.json` from `FE/`
+  - `git diff --check`
+- Both checks passed.
+
+### Follow-Up Smoothness Tune
+
+- Time: 2026-05-03T20:14:38+07:00
+- Updated screen-share capture and publish framerate from 15fps to 24fps for smoother demos while keeping the same readability-first profile:
+  - 2560x1440 ideal capture resolution.
+  - `contentHint="detail"`.
+  - 6 Mbps screen-share encoding.
+  - `degradationPreference: "maintain-resolution"`.
+- Full test suite still not run, per CODE-ONLY instruction.
+- Lightweight checks re-run:
+  - `npm exec tsc -- -p tsconfig.app.json` from `FE/`
+  - `git diff --check`
+- Both checks passed.
+
 ## Turn Update: 2026-05-02 Screen Share Stage Layout Fix (Kickoff)
 
 - Time: 2026-05-02T14:51:23+07:00
