@@ -1,4 +1,4 @@
-import type { Language } from "../types/api";
+import type { ChatTranslationMode, Language } from "../types/api";
 import type {
   ClientMessage,
   ServerEvent,
@@ -164,8 +164,11 @@ export class GatewaySocket {
     this.sendEnvelope("room.brse.disable", {});
   }
 
-  sendChatMessage(text: string): string {
-    return this.sendEnvelope("chat.send", { text });
+  sendChatMessage(text: string, translationMode?: ChatTranslationMode): string {
+    return this.sendEnvelope("chat.send", {
+      text,
+      ...(translationMode ? { translation_mode: translationMode } : {}),
+    });
   }
 
   sendMuteParticipant(targetParticipantId: string): void {

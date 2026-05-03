@@ -386,6 +386,7 @@ export function RoomPage() {
               disabled={!meeting.canSendChat || isRoomExpired}
               error={meeting.chatError}
               isSending={meeting.isSendingChat}
+              meetingLanguages={roomMeetingLanguages}
               embedded
             />
           }

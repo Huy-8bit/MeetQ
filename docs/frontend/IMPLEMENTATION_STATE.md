@@ -1,5 +1,118 @@
 # Frontend Implementation State
 
+## Turn Update: 2026-05-03 Chat Translation UI
+
+- Time: 2026-05-03T00:00:00+07:00
+- Mode: CODE-ONLY
+- Testing deferred: yes, per instruction
+
+### Objective
+
+Add UI/UX for chat with optional translation mode. Backend sends translated
+text alongside original; FE lets user choose mode and renders both clearly.
+
+### Chat Translation UI Strategy
+
+User-facing controls are added to `ChatPanel`:
+
+- A compact **segmented control** (`chat-mode-bar`) sits between the message
+  list and the input bar.
+- Two options: `Original` | `+ Translate`.
+- Active option highlighted with white pill (Apple-segmented-control feel).
+- Choice is **persisted in `localStorage`** under key
+  `brseai_chat_translation_mode` so the user's last mode survives tab reloads.
+- Default (first visit or unknown stored value): `original_only`.
+
+### Message Render Strategy
+
+**`original_only` messages:** render exactly as before — no visual change.
+
+**`translate` messages with translations:**
+
+```
+┌─────────────────────────────────────────────────────────┐
+│  Huy  [VI]                                   12:34      │
+│  xin chào mọi người                                     │
+│  ╔══════════════════════════════════════════════════╗   │
+│  ║ TRANSLATED · ENGLISH                             ║   │
+│  ║ hello everyone                                   ║   │
+│  ╚══════════════════════════════════════════════════╝   │
+└─────────────────────────────────────────────────────────┘
+```
+
+- Original `text` always rendered as the primary content.
+- Each `translations[]` entry rendered as a secondary block with:
+  - Small uppercase label: `Translated · English`
+  - Left green border accent (`2px solid rgba(15,118,110,0.28)`)
+  - Slightly muted background
+- "Translating…" placeholder shown for optimistic (sending) messages in
+  translate mode until the server echo with actual translated text arrives.
+
+**Backward compat:** messages without `translation_mode` / `translations` (old
+server or old snapshot) default to `original_only` rendering — no crash, no
+blank fields.
+
+### Send Mode Wiring
+
+```
+User picks mode in ChatPanel (segmented control)
+  → stored in component state + localStorage
+  → handleSubmit() calls onSend(text, translationMode)
+  → ChatPanel.onSend prop: (text, translationMode) => Promise<boolean>
+  → RoomPage passes meeting.sendChatMessage directly (signature compatible)
+  → useMeetingRoom.sendChatMessage(text, translationMode="original_only")
+  → GatewaySocket.sendChatMessage(text, translationMode?)
+  → WS payload: { text, translation_mode? }
+  → backend picks up translation_mode, runs translation if "translate"
+  → broadcasts chat.message with translations[]
+  → FE applyChatMessage → normalizeChatMessage → mergeRoomChatMessages
+  → ChatPanel re-renders with translation block
+```
+
+### Snapshot Hydration
+
+- `normalizeChatMessage()` now maps `translation_mode` and `translations` from
+  `ChatMessage` into `RoomChatMessage`.
+- Messages loaded from `recent_messages` (join snapshot / WS snapshot) with
+  existing translation data render correctly immediately.
+- No duplicate risk: `mergeRoomChatMessages` deduplicates by
+  `message_id` / `client_event_id` as before.
+
+### Optimistic Message Handling
+
+- `createOptimisticChatMessage()` accepts `translationMode` and stamps
+  `translation_mode` + `translations: []` on the pending message.
+- When `translationMode === "translate"` and `delivery_status === "sending"`,
+  ChatPanel shows `"Translating…"` placeholder in the translation block.
+- Server echo replaces the optimistic entry (via `mergeRoomChatMessages`),
+  populated with real `translations[]`.
+
+### Persistence Choice
+
+- `localStorage` key: `brseai_chat_translation_mode`
+- Stored on every mode change; loaded once on `ChatPanel` mount.
+- Gracefully skipped if `localStorage` unavailable (try/catch).
+
+### Files Changed
+
+| File | Change |
+|------|--------|
+| `FE/src/types/api.ts` | Added `ChatTranslationMode`, `ChatTranslation`; extended `ChatMessage` and `RoomChatMessage` with translation fields |
+| `FE/src/types/ws.ts` | Imported `ChatTranslationMode`; added `translation_mode?` to `ChatSendMessage` payload |
+| `FE/src/lib/ws.ts` | `sendChatMessage(text, translationMode?)` — passes `translation_mode` in WS payload |
+| `FE/src/features/room/useMeetingRoom.ts` | `sendChatMessage(text, translationMode)`, `normalizeChatMessage`, `createOptimisticChatMessage` carry translation fields |
+| `FE/src/components/ChatPanel.tsx` | Segmented mode control, translation bubble render, localStorage persistence, `meetingLanguages` prop |
+| `FE/src/pages/RoomPage.tsx` | Passes `meetingLanguages` to ChatPanel |
+| `FE/src/index.css` | `.chat-mode-bar`, `.chat-mode-btn`, `.chat-translation-block`, `.chat-translation-label`, `.chat-translation-text` |
+
+### Testing
+
+- Full test suite not run, per CODE-ONLY instruction.
+- No new tests added.
+- No existing tests modified.
+
+---
+
 ## Turn Update: 2026-05-03 Mobile Layout, Bottom Bar Regrouping & Active Speaker Highlight
 
 - Time: 2026-05-03T20:55:00+07:00

@@ -1,15 +1,38 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { getLanguageLabel } from "../lib/languages";
-import type { RoomChatMessage } from "../types/api";
+import type { ChatTranslationMode, MeetingLanguage, RoomChatMessage } from "../types/api";
+
+const TRANSLATION_MODE_STORAGE_KEY = "brseai_chat_translation_mode";
+
+function loadStoredTranslationMode(): ChatTranslationMode {
+  try {
+    const stored = localStorage.getItem(TRANSLATION_MODE_STORAGE_KEY);
+    if (stored === "translate" || stored === "original_only") {
+      return stored;
+    }
+  } catch {
+    // localStorage unavailable
+  }
+  return "original_only";
+}
+
+function saveTranslationMode(mode: ChatTranslationMode): void {
+  try {
+    localStorage.setItem(TRANSLATION_MODE_STORAGE_KEY, mode);
+  } catch {
+    // ignore
+  }
+}
 
 interface ChatPanelProps {
   messages: RoomChatMessage[];
   selfParticipantId?: string;
-  onSend: (text: string) => Promise<boolean>;
+  onSend: (text: string, translationMode: ChatTranslationMode) => Promise<boolean>;
   disabled?: boolean;
   error?: string | null;
   isSending?: boolean;
   embedded?: boolean;
+  meetingLanguages?: MeetingLanguage[];
 }
 
 export function ChatPanel({
@@ -20,16 +43,26 @@ export function ChatPanel({
   error = null,
   isSending = false,
   embedded = false,
+  meetingLanguages,
 }: ChatPanelProps) {
   const [inputText, setInputText] = useState("");
+  const [translationMode, setTranslationMode] = useState<ChatTranslationMode>(
+    loadStoredTranslationMode,
+  );
   const listRef = useRef<HTMLDivElement>(null);
 
+  // Auto-scroll to bottom on new messages
   useEffect(() => {
     const el = listRef.current;
     if (el) {
       el.scrollTop = el.scrollHeight;
     }
   }, [messages.length]);
+
+  function handleModeChange(mode: ChatTranslationMode): void {
+    setTranslationMode(mode);
+    saveTranslationMode(mode);
+  }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -38,7 +71,7 @@ export function ChatPanel({
       return;
     }
 
-    const sent = await onSend(trimmed);
+    const sent = await onSend(trimmed, translationMode);
     if (sent) {
       setInputText("");
     }
@@ -52,6 +85,10 @@ export function ChatPanel({
       return "";
     }
   }
+
+  // Decide whether to show the translate toggle.
+  // Only useful when room has a 2-lang pair and translation can be meaningful.
+  const canTranslate = !meetingLanguages || meetingLanguages.length >= 2;
 
   return (
     <section className={embedded ? "chat-panel panel-section" : "panel chat-panel"}>
@@ -71,6 +108,14 @@ export function ChatPanel({
         ) : (
           messages.map((message) => {
             const isSelf = message.participant_id === selfParticipantId;
+            const hasTranslation =
+              message.translation_mode === "translate" &&
+              message.translations != null &&
+              message.translations.length > 0;
+            const isPendingTranslation =
+              message.translation_mode === "translate" &&
+              message.delivery_status === "sending";
+
             return (
               <div
                 className={`chat-message ${isSelf ? "chat-message-self" : "chat-message-other"}`}
@@ -91,18 +136,59 @@ export function ChatPanel({
                     <span className="badge warning chat-delivery-badge">Failed</span>
                   ) : null}
                 </div>
+
                 <p className="chat-message-text">{message.text}</p>
+
+                {hasTranslation
+                  ? message.translations!.map((t) => (
+                      <div className="chat-translation-block" key={t.language}>
+                        <span className="chat-translation-label">
+                          Translated · {getLanguageLabel(t.language)}
+                        </span>
+                        <p className="chat-translation-text">{t.text}</p>
+                      </div>
+                    ))
+                  : null}
+
+                {isPendingTranslation && !hasTranslation ? (
+                  <div className="chat-translation-block chat-translation-pending">
+                    <span className="chat-translation-label">Translating…</span>
+                  </div>
+                ) : null}
               </div>
             );
           })
         )}
       </div>
 
+      {canTranslate ? (
+        <div className="chat-mode-bar">
+          <button
+            type="button"
+            className={`chat-mode-btn ${translationMode === "original_only" ? "chat-mode-btn-active" : ""}`}
+            onClick={() => handleModeChange("original_only")}
+            disabled={disabled}
+            title="Send without translation"
+          >
+            Original
+          </button>
+          <button
+            type="button"
+            className={`chat-mode-btn ${translationMode === "translate" ? "chat-mode-btn-active" : ""}`}
+            onClick={() => handleModeChange("translate")}
+            disabled={disabled}
+            title="Send with translation"
+          >
+            + Translate
+          </button>
+        </div>
+      ) : null}
+
       <form className="chat-input-bar" onSubmit={(event) => void handleSubmit(event)}>
         <input
           className="chat-input"
           type="text"
-          placeholder={disabled ? "Chat is unavailable right now" : "Type a message..."}
+          placeholder={disabled ? "Chat is unavailable right now" : "Type a message…"}
           value={inputText}
           onChange={(event) => setInputText(event.target.value)}
           disabled={disabled || isSending}
@@ -114,7 +200,7 @@ export function ChatPanel({
           type="submit"
           disabled={disabled || isSending || !inputText.trim()}
         >
-          {isSending ? "Sending..." : "Send"}
+          {isSending ? "Sending…" : "Send"}
         </button>
       </form>
 

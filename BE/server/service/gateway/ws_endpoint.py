@@ -159,12 +159,15 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str, token: str = Qu
 
                 elif msg_type == "chat.send":
                     try:
+                        raw_mode = payload.get("translation_mode") if isinstance(payload, dict) else None
+                        translation_mode = raw_mode if raw_mode in {"original_only", "translate"} else "original_only"
                         await app_state.room_service.send_chat_message(
                             room_id=room_id,
                             participant_id=participant_id,
                             session_id=state_participant.session_id,
                             text=payload.get("text") if isinstance(payload, dict) else None,
                             client_event_id=event_id,
+                            translation_mode=translation_mode,
                         )
                     except InvalidChatMessageError as exc:
                         await websocket.send_json({

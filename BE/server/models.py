@@ -2,6 +2,8 @@ from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
+ChatTranslationMode = Literal["original_only", "translate"]
+
 from server.meeting_modes import (
     BRSE_PARTICIPANT_ID,
     DEFAULT_BRSE_ENABLED,
@@ -151,6 +153,11 @@ class TranscriptEvent(BaseModel):
     relay_target: Optional[TranscriptTargetRef] = None
 
 
+class ChatTranslation(BaseModel):
+    language: MeetingLanguage
+    text: str
+
+
 class ChatMessage(BaseModel):
     message_id: str
     room_id: str
@@ -164,6 +171,9 @@ class ChatMessage(BaseModel):
     sender_display_name: Optional[str] = None
     sender_language: Optional[Language] = None
     sent_at: Optional[str] = None
+    # Translation fields — additive, default to original_only for backward compat
+    translation_mode: ChatTranslationMode = "original_only"
+    translations: List[ChatTranslation] = Field(default_factory=list)
 
 
 class CreateRoomResponseRoom(BaseModel):

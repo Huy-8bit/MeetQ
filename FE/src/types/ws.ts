@@ -2,6 +2,7 @@ import type {
   AudioOutputDescriptor,
   AudioRouting,
   ChatMessage,
+  ChatTranslationMode,
   InterpreterMode,
   Language,
   MeetingLanguage,
@@ -359,6 +360,7 @@ export type ChatSendMessage = WsEnvelope<
   "chat.send",
   {
     text: string;
+    translation_mode?: ChatTranslationMode;
   }
 >;
 

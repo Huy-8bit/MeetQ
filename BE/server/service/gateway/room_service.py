@@ -28,6 +28,8 @@ from server.meeting_modes import (
 )
 from server.models import (
     ChatMessage,
+    ChatTranslation,
+    ChatTranslationMode,
     CreateRoomResponse,
     CreateRoomResponseJoin,
     CreateRoomResponseRoom,
@@ -45,6 +47,10 @@ from server.models import (
     ScreenShareTrackInfo,
     SnapshotData,
     TranscriptEvent,
+)
+from server.service.gateway.chat_translator import (
+    resolve_chat_target_language,
+    translate_chat_message,
 )
 
 
@@ -503,6 +509,7 @@ class RoomService:
         session_id: Optional[str],
         text: Any,
         client_event_id: Optional[str] = None,
+        translation_mode: ChatTranslationMode = "original_only",
     ) -> ChatMessage:
         if not isinstance(text, str):
             raise InvalidChatMessageError("text must be a string")
@@ -547,6 +554,48 @@ class RoomService:
             raise InvalidChatMessageError("virtual participants cannot send chat", code="chat_not_allowed")
 
         now = self._now_str()
+        src_lang = participant.language
+        meeting_languages = list(snapshot.room.meeting_languages)
+        translations: List[Any] = []
+
+        if translation_mode == "translate":
+            tgt_lang = resolve_chat_target_language(src_lang, meeting_languages)
+            if tgt_lang:
+                logger.info(
+                    "chat translation: room=%s src=%s tgt=%s mode=translate",
+                    room_id,
+                    src_lang,
+                    tgt_lang,
+                )
+                translated_text = await translate_chat_message(
+                    text=normalized_text,
+                    src_lang=src_lang,
+                    tgt_lang=tgt_lang,
+                    api_key=self.settings.openai_api_key,
+                )
+                if translated_text is not None:
+                    translations = [ChatTranslation(language=tgt_lang, text=translated_text)]
+                    logger.info(
+                        "chat translation success: room=%s src=%s tgt=%s",
+                        room_id,
+                        src_lang,
+                        tgt_lang,
+                    )
+                else:
+                    logger.warning(
+                        "chat translation failed (graceful degradation): room=%s src=%s tgt=%s",
+                        room_id,
+                        src_lang,
+                        tgt_lang,
+                    )
+            else:
+                logger.warning(
+                    "chat translation: could not resolve target language: room=%s src=%s meeting_languages=%s",
+                    room_id,
+                    src_lang,
+                    meeting_languages,
+                )
+
         message = ChatMessage(
             message_id=self._generate_id("msg"),
             room_id=room_id,
@@ -560,6 +609,8 @@ class RoomService:
             sender_display_name=participant.display_name,
             sender_language=participant.language,
             sent_at=now,
+            translation_mode=translation_mode,
+            translations=translations,
         )
 
         await self.store.append_chat_message(room_id, message)

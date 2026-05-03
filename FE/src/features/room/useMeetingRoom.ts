@@ -33,6 +33,8 @@ import {
 } from "../../lib/ws";
 import type {
   ChatMessage,
+  ChatTranslation,
+  ChatTranslationMode,
   RoomChatMessage,
   Language,
   MeetingLanguage,
@@ -1694,7 +1696,10 @@ export function useMeetingRoom({
     setChatError(null);
   }
 
-  async function sendChatMessage(text: string): Promise<boolean> {
+  async function sendChatMessage(
+    text: string,
+    translationMode: ChatTranslationMode = "original_only",
+  ): Promise<boolean> {
     const trimmed = text.trim();
     if (!trimmed || isSendingChat || expiredShutdownRef.current || isRoomExpired) {
       return false;
@@ -1711,12 +1716,13 @@ export function useMeetingRoom({
     setChatError(null);
 
     try {
-      const clientEventId = gateway.sendChatMessage(trimmed);
+      const clientEventId = gateway.sendChatMessage(trimmed, translationMode);
       pendingChatEventIdsRef.current.add(clientEventId);
       const optimisticMessage = createOptimisticChatMessage(
         currentSelf,
         trimmed,
         clientEventId,
+        translationMode,
       );
       setChatMessages((current) => mergeRoomChatMessages(current, [optimisticMessage]));
       return true;
@@ -2091,6 +2097,8 @@ function normalizeChatMessage(message: ChatMessage): RoomChatMessage | null {
     created_at: createdAt,
     sender_language: message.sender_language ?? message.language ?? null,
     delivery_status: "sent",
+    translation_mode: message.translation_mode ?? "original_only",
+    translations: message.translations ?? [],
   };
 }
 
@@ -2173,6 +2181,7 @@ function createOptimisticChatMessage(
   selfState: SelfState,
   text: string,
   clientEventId: string,
+  translationMode: ChatTranslationMode = "original_only",
 ): RoomChatMessage {
   return {
     message_id: `pending_${clientEventId}`,
@@ -2183,6 +2192,8 @@ function createOptimisticChatMessage(
     created_at: new Date().toISOString(),
     sender_language: selfState.language,
     delivery_status: "sending",
+    translation_mode: translationMode,
+    translations: [],
   };
 }
 

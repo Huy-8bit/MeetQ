@@ -1155,6 +1155,79 @@ button {
   margin-top: -2px;
 }
 
+/* ─── Chat Translation Mode Toggle ──────────────────────────────────────────── */
+
+.chat-mode-bar {
+  display: flex;
+  gap: 4px;
+  padding: 3px;
+  background: rgba(0, 0, 0, 0.06);
+  border-radius: 10px;
+  width: fit-content;
+}
+
+.chat-mode-btn {
+  background: transparent;
+  border: none;
+  border-radius: 8px;
+  padding: 5px 12px;
+  font-size: 0.78rem;
+  font-weight: 500;
+  color: var(--muted);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+  white-space: nowrap;
+}
+
+.chat-mode-btn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.6);
+  color: var(--text);
+}
+
+.chat-mode-btn-active {
+  background: rgba(255, 255, 255, 0.9) !important;
+  color: var(--text) !important;
+  font-weight: 600;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+.chat-mode-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* ─── Chat Translation Bubble ────────────────────────────────────────────────── */
+
+.chat-translation-block {
+  margin-top: 7px;
+  padding: 7px 10px;
+  border-radius: 10px;
+  background: rgba(15, 118, 110, 0.06);
+  border-left: 2px solid rgba(15, 118, 110, 0.28);
+}
+
+.chat-translation-label {
+  display: block;
+  font-size: 0.70rem;
+  font-weight: 600;
+  color: rgba(15, 118, 110, 0.75);
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  margin-bottom: 3px;
+}
+
+.chat-translation-text {
+  margin: 0;
+  font-size: 0.88rem;
+  line-height: 1.5;
+  color: var(--text);
+  word-break: break-word;
+}
+
+.chat-translation-pending .chat-translation-label {
+  color: var(--muted);
+}
+
 /* ─── Host Badge ─────────────────────────────────────────────────────────────── */
 
 .badge-host {

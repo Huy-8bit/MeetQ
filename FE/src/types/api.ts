@@ -289,6 +289,13 @@ export interface ScreenShareStateResponse {
 
 // ─── Chat types ───────────────────────────────────────────────────────────────
 
+export type ChatTranslationMode = "original_only" | "translate";
+
+export interface ChatTranslation {
+  language: MeetingLanguage;
+  text: string;
+}
+
 export interface ChatMessage {
   message_id: string;
   client_event_id?: string | null;
@@ -301,6 +308,9 @@ export interface ChatMessage {
   text: string;
   sent_at?: string;
   created_at?: string;
+  // Translation fields — additive, absent in old messages means original_only
+  translation_mode?: ChatTranslationMode | null;
+  translations?: ChatTranslation[] | null;
 }
 
 export type ChatDeliveryStatus = "sending" | "sent" | "failed";
@@ -314,6 +324,9 @@ export interface RoomChatMessage {
   created_at: string;
   sender_language?: Language | null;
   delivery_status?: ChatDeliveryStatus;
+  // Translation fields — carried through from ChatMessage
+  translation_mode?: ChatTranslationMode;
+  translations?: ChatTranslation[];
 }
 
 // ─── Moderation types ─────────────────────────────────────────────────────────

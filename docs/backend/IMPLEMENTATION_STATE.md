@@ -1,5 +1,211 @@
 # Backend Implementation State
 
+## Turn Update: 2026-05-04 Backend Architecture README
+
+- Time: 2026-05-04T00:00:00+07:00
+- Mode: documentation-only
+- Testing deferred: not applicable
+
+### Objective
+
+Add a backend-facing architecture README in `docs/backend/README.md` to give a
+high-level view of the system without relying on code-heavy explanations.
+
+### What was added
+
+- New file: `docs/backend/README.md`
+
+### Scope of the new README
+
+The document is intentionally architecture-first and flow-first. It covers:
+
+- main backend domains and responsibilities
+- the role of Gateway, Brain Runtime, Brain, Media, Redis, and LiveKit
+- major data flows:
+  - create room
+  - join room
+  - room websocket sync
+  - BRSE / AI relay pipeline
+  - chat pipeline
+  - screen share pipeline
+  - room expiry pipeline
+- production topology at a high level
+- where to look next for deeper docs
+
+### Documentation style decision
+
+- Minimal code snippets
+- Focus on responsibility boundaries and runtime flow
+- Intended as the "mental model" document for reviewing the backend as a whole
+
+### Follow-up expansion
+
+- Expanded `docs/backend/README.md` with visual diagrams and sequence flows:
+  - system overview diagram
+  - responsibility map
+  - create-room flow
+  - join-room flow
+  - websocket sync flow
+  - BRSE relay pipeline
+  - chat pipeline
+  - screen-share pipeline
+  - expiry enforcement flow
+  - production topology diagram
+
+- Goal of the expansion:
+  - make the backend easier to understand at a glance
+  - reduce dependence on low-level code reading
+  - provide a more visual system review document
+
+---
+
+## Turn Update: 2026-05-03 Chat Translation Feature
+
+- Time: 2026-05-03T00:00:00+07:00
+- Mode: CODE-ONLY
+- Testing deferred: full test suite not run, per instruction
+
+### Objective
+
+Add backend support for chat messages with optional translation. Existing chat
+flow is preserved unchanged (backward-compatible additive extension).
+
+### Chat Translation Contract
+
+#### Client → Server: `chat.send`
+
+```json
+{
+  "type": "chat.send",
+  "event_id": "evt_...",
+  "room_id": "rm_...",
+  "sent_at": "2026-05-03T...",
+  "payload": {
+    "text": "xin chào",
+    "translation_mode": "original_only"
+  }
+}
+```
+
+`translation_mode` is optional.
+- If omitted or any unrecognised value → defaults to `"original_only"` (backward-compatible).
+- Valid values: `"original_only"` | `"translate"`.
+
+#### Server → All clients: `chat.message`
+
+Canonical broadcast payload (additive — all fields present, old clients ignore new ones):
+
+```json
+{
+  "type": "chat.message",
+  "event_id": "evt_...",
+  "room_id": "rm_...",
+  "sent_at": "2026-05-03T...",
+  "payload": {
+    "message_id": "msg_...",
+    "room_id": "rm_...",
+    "participant_id": "pt_...",
+    "display_name": "Huy",
+    "language": "vi",
+    "text": "xin chào",
+    "created_at": "2026-05-03T...",
+    "translation_mode": "translate",
+    "translations": [
+      { "language": "en", "text": "hello" }
+    ]
+  }
+}
+```
+
+When `translation_mode = "original_only"`:
+- `translations` is an empty list `[]`.
+
+When `translation_mode = "translate"` and translation succeeded:
+- `translations` contains one entry for the target language.
+
+When `translation_mode = "translate"` but translation failed:
+- `translations` is an empty list `[]` (graceful degradation).
+- Original `text` is still present and broadcast — message is never lost.
+
+#### Translation strategy
+
+- Room has a 2-language pair (e.g. `["vi", "en"]`).
+- Target language = the language in the pair that is NOT the sender's language.
+- Example: sender language = `vi`, room pair = `["vi", "en"]` → target = `en`.
+- Translation uses OpenAI chat completions API (`gpt-4o-mini`, temperature 0.2).
+- This is chat-only text translation; completely separate from the audio relay
+  realtime API path.
+
+#### Default / backward-compatible behavior
+
+- Old FE clients that do not send `translation_mode` receive messages with
+  `translation_mode = "original_only"` and `translations = []`.
+- Old FE clients that ignore `translation_mode` / `translations` continue to
+  render `text` unchanged.
+- No existing field is removed or renamed.
+
+### Canonical `ChatMessage` shape
+
+```python
+class ChatTranslation(BaseModel):
+    language: MeetingLanguage  # e.g. "en"
+    text: str
+
+class ChatMessage(BaseModel):
+    message_id: str
+    room_id: str
+    participant_id: str
+    display_name: str
+    language: Language
+    text: str
+    created_at: str
+    client_event_id: Optional[str] = None
+    sender_id: Optional[str] = None
+    sender_display_name: Optional[str] = None
+    sender_language: Optional[Language] = None
+    sent_at: Optional[str] = None
+    # New additive fields:
+    translation_mode: ChatTranslationMode = "original_only"
+    translations: List[ChatTranslation] = []
+```
+
+### Snapshot changes
+
+- `recent_messages` in room snapshot already carries full `ChatMessage` objects.
+- New `translation_mode` and `translations` fields are stored with each message
+  in Redis (via `model_dump_json()`).
+- Users joining after translation has occurred will see correct translated
+  content in `snapshot.recent_messages`.
+- No snapshot schema change; the list of `ChatMessage` objects simply now
+  include the new fields.
+
+### Translation failure strategy
+
+- Translation is attempted asynchronously before broadcast.
+- If OpenAI call fails (timeout, API error, empty response):
+  - `translations` is left empty `[]`.
+  - Original message is still persisted and broadcast.
+  - A `WARNING` log is emitted for observability.
+- FE must treat empty `translations` on a `translate` message as "no
+  translation available, show original text".
+
+### Files changed
+
+| File | Change |
+|------|--------|
+| `BE/server/models.py` | Added `ChatTranslationMode` literal, `ChatTranslation` model, `translation_mode` + `translations` fields to `ChatMessage` |
+| `BE/server/service/gateway/chat_translator.py` | New — lightweight async chat translation helper using OpenAI chat completions |
+| `BE/server/service/gateway/room_service.py` | `send_chat_message()` accepts `translation_mode`, runs translation path, attaches `ChatTranslation` entries |
+| `BE/server/service/gateway/ws_endpoint.py` | `chat.send` handler reads `translation_mode` from payload, defaults to `"original_only"` |
+
+### Testing
+
+- Full test suite not run, per CODE-ONLY instruction.
+- New tests not added.
+- Existing chat tests not broken (additive-only change; default `translation_mode="original_only"` matches prior behavior).
+
+---
+
 ## Turn Update: 2026-05-03 Gateway Under Service Refactor (Kickoff)
 
 - Time: 2026-05-03T19:09:23+07:00
