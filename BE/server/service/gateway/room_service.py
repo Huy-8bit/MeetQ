@@ -52,6 +52,7 @@ from server.service.gateway.chat_translator import (
     resolve_chat_target_language,
     translate_chat_message,
 )
+from server.service.persistence.room_history import MongoRoomHistoryRepository
 
 
 logger = logging.getLogger(__name__)
@@ -101,13 +102,21 @@ class InvalidChatMessageError(Exception):
 class RoomService:
     MAX_CHAT_MESSAGE_LENGTH = 2000
 
-    def __init__(self, store: RoomStore, settings: Settings, redis: Redis):
+    def __init__(
+        self,
+        store: RoomStore,
+        settings: Settings,
+        redis: Redis,
+        room_history: Optional[MongoRoomHistoryRepository] = None,
+    ):
         self.store = store
         self.settings = settings
         self.redis = redis
+        self.room_history = room_history
         self.gateway_control_channel = settings.redis_channel_gateway_control
         self.telegram_notifier = TelegramNotifier(settings)
         self._notification_tasks: set[asyncio.Task] = set()
+        self._expiry_summary_tasks: set[asyncio.Task] = set()
 
     def _generate_id(self, prefix: str) -> str:
         return f"{prefix}_{uuid.uuid4().hex[:12]}"
@@ -124,6 +133,14 @@ class RoomService:
         """Room token expiry: longer TTL for JWT validity."""
         exp = datetime.now(timezone.utc) + timedelta(seconds=self.settings.room_token_ttl_seconds)
         return exp.isoformat().replace("+00:00", "Z")
+
+    def _parse_time(self, value: Optional[str]) -> Optional[datetime]:
+        if not value:
+            return None
+        try:
+            return datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except (TypeError, ValueError):
+            return None
 
     def _build_public_app_url(self, path: str) -> str:
         return self._join_url(self.settings.public_app_url, path)
@@ -163,6 +180,77 @@ class RoomService:
         envelope = build_envelope(event_type, room_id, jsonable_encoder(payload))
         await self.redis.publish(self.gateway_control_channel, json.dumps(envelope))
 
+    def _schedule_history(
+        self,
+        action: str,
+        room_id: str,
+        operation,
+    ) -> None:
+        if not self.room_history:
+            return
+        self.room_history.schedule(operation, action=action, room_id=room_id)
+
+    def _schedule_room_expiry_summary(self, room: RoomState) -> None:
+        if not self.room_history:
+            return
+        expires_at = self._parse_time(room.expires_at)
+        if expires_at is None:
+            return
+
+        delay_seconds = max((expires_at - datetime.now(timezone.utc)).total_seconds(), 0)
+        try:
+            task = asyncio.create_task(
+                self._persist_room_expiry_after_delay(
+                    room.room_id,
+                    room.expires_at,
+                    delay_seconds,
+                )
+            )
+        except Exception:
+            logger.exception("failed to schedule Mongo room expiry summary: room_id=%s", room.room_id)
+            return
+
+        self._expiry_summary_tasks.add(task)
+        task.add_done_callback(self._on_expiry_summary_task_done)
+
+    async def _persist_room_expiry_after_delay(
+        self,
+        room_id: str,
+        expires_at: str,
+        delay_seconds: float,
+    ) -> None:
+        await asyncio.sleep(delay_seconds)
+        if not self.room_history:
+            return
+        snapshot = await self.store.get_room_snapshot(room_id)
+        room = snapshot.room if snapshot else {"room_id": room_id, "expires_at": expires_at, "state": "expired"}
+        current_human_count = active_human_participant_count(snapshot.participants) if snapshot else 0
+        await self.room_history.persist_room_expired(
+            room,
+            expired_at=expires_at,
+            current_human_count=current_human_count,
+            reason="scheduled_expiry",
+        )
+
+    def _on_expiry_summary_task_done(self, task: asyncio.Task) -> None:
+        self._expiry_summary_tasks.discard(task)
+        try:
+            task.result()
+        except asyncio.CancelledError:
+            return
+        except Exception:
+            logger.exception("Mongo room expiry summary task failed unexpectedly")
+
+    async def shutdown_side_effects(self) -> None:
+        pending_tasks = list(self._notification_tasks | self._expiry_summary_tasks)
+        if not pending_tasks:
+            return
+        for task in pending_tasks:
+            task.cancel()
+        await asyncio.gather(*pending_tasks, return_exceptions=True)
+        self._notification_tasks.clear()
+        self._expiry_summary_tasks.clear()
+
     def _schedule_room_created_notification(self, room: RoomState, share_url: str) -> None:
         if not self.telegram_notifier.is_room_created_enabled():
             return
@@ -176,7 +264,11 @@ class RoomService:
             )
             self._notification_tasks.add(task)
             task.add_done_callback(
-                lambda completed_task: self._on_notification_task_done(completed_task, room.room_id)
+                lambda completed_task: self._on_notification_task_done(
+                    completed_task,
+                    room.room_id,
+                    "room-created",
+                )
             )
         except Exception:
             logger.exception(
@@ -184,7 +276,47 @@ class RoomService:
                 room.room_id,
             )
 
-    def _on_notification_task_done(self, task: asyncio.Task, room_id: str) -> None:
+    def _schedule_participant_joined_notification(
+        self,
+        room: Any,
+        participant: ParticipantState,
+        *,
+        participant_count: int,
+    ) -> None:
+        if not self.telegram_notifier.is_participant_joined_enabled():
+            return
+
+        try:
+            task = asyncio.create_task(
+                self.telegram_notifier.send_participant_joined(
+                    room,
+                    participant,
+                    participant_count=participant_count,
+                )
+            )
+            self._notification_tasks.add(task)
+            task.add_done_callback(
+                lambda completed_task: self._on_notification_task_done(
+                    completed_task,
+                    self._room_id_from_any(room),
+                    "participant-joined",
+                )
+            )
+        except Exception:
+            logger.exception(
+                "failed to schedule participant-joined notification: room_id=%s participant_id=%s",
+                self._room_id_from_any(room),
+                participant.participant_id,
+            )
+
+    def _room_id_from_any(self, room: Any) -> str:
+        if hasattr(room, "room_id"):
+            return getattr(room, "room_id")
+        if isinstance(room, dict):
+            return room.get("room_id", "unknown")
+        return "unknown"
+
+    def _on_notification_task_done(self, task: asyncio.Task, room_id: str, action: str) -> None:
         self._notification_tasks.discard(task)
         try:
             task.result()
@@ -192,7 +324,8 @@ class RoomService:
             return
         except Exception:
             logger.exception(
-                "room-created notification task failed unexpectedly: room_id=%s",
+                "%s notification task failed unexpectedly: room_id=%s",
+                action,
                 room_id,
             )
 
@@ -270,6 +403,12 @@ class RoomService:
                 await self._publish(EventType.PARTICIPANT_JOINED, room_id, participant)
 
         share_url = self._build_public_app_url(f"/rooms/{room_id}")
+        self._schedule_history(
+            "room_created",
+            room_id,
+            lambda: self.room_history.persist_room_created(room, share_url=share_url),
+        )
+        self._schedule_room_expiry_summary(room)
         self._schedule_room_created_notification(room, share_url)
 
         return CreateRoomResponse(
@@ -331,6 +470,12 @@ class RoomService:
         if not brse_enabled:
             await self.store.clear_transcripts(room_id)
 
+        self._schedule_history(
+            "room_mode_updated",
+            room_id,
+            lambda: self.room_history.persist_room_mode_updated(updated_room, changed_at=now),
+        )
+
         await self._publish(
             EventType.ROOM_BRSE_UPDATED,
             room_id,
@@ -344,7 +489,18 @@ class RoomService:
         )
 
         if brse_enabled:
+            current_human_count = active_human_participant_count(snapshot.participants)
             for participant in updated_room.virtual_participants:
+                self._schedule_history(
+                    "virtual_participant_joined",
+                    room_id,
+                    lambda participant=participant: self.room_history.persist_participant_join(
+                        updated_room,
+                        participant,
+                        current_human_count=current_human_count,
+                        client_meta=None,
+                    ),
+                )
                 await self._publish(EventType.PARTICIPANT_JOINED, room_id, participant)
         else:
             await self._publish(
@@ -410,6 +566,16 @@ class RoomService:
 
         # Check room expiry: 30-minute meeting duration
         if self._is_room_expired(snapshot):
+            self._schedule_history(
+                "room_expired",
+                room_id,
+                lambda: self.room_history.persist_room_expired(
+                    snapshot.room,
+                    expired_at=snapshot.room.expires_at,
+                    current_human_count=active_human_participant_count(snapshot.participants),
+                    reason="join_rejected_expired",
+                ),
+            )
             raise RoomExpiredError()
 
         meeting_pair = list(snapshot.room.meeting_languages)
@@ -419,16 +585,19 @@ class RoomService:
                 details={"field": "language", "meeting_languages": meeting_pair},
             )
 
+        now = self._now_str()
         if snapshot.room.state in {"created", "empty"}:
             meta_json = await self.store.client.get(self.store._meta_key(room_id))
             if meta_json:
                 room_data = json.loads(meta_json)
                 room_data["state"] = "active"
+                if not room_data.get("activated_at"):
+                    room_data["activated_at"] = now
+                room_data["emptied_at"] = None
                 await self.store.create_room(RoomState(**room_data))
 
         participant_id = self._generate_id("pt")
         session_id = self._generate_id("ses")
-        now = self._now_str()
 
         participant = ParticipantState(
             participant_id=participant_id,
@@ -468,6 +637,22 @@ class RoomService:
         )
 
         fresh_snapshot = await self.store.get_room_snapshot(room_id)
+        current_participant_count = active_human_participant_count(fresh_snapshot.participants)
+        self._schedule_history(
+            "participant_joined",
+            room_id,
+            lambda: self.room_history.persist_participant_join(
+                fresh_snapshot.room,
+                participant,
+                current_human_count=current_participant_count,
+                client_meta=client_meta,
+            ),
+        )
+        self._schedule_participant_joined_notification(
+            fresh_snapshot.room,
+            participant,
+            participant_count=current_participant_count,
+        )
         personalized_snapshot = self.build_snapshot_data_for_participant(
             fresh_snapshot,
             participant_id,
@@ -619,6 +804,11 @@ class RoomService:
             participant_id,
             {"last_seen_at": now},
         )
+        self._schedule_history(
+            "chat_message",
+            room_id,
+            lambda: self.room_history.persist_chat_message(message, room=snapshot.room),
+        )
         await self._publish(EventType.CHAT_MESSAGE, room_id, message.model_dump())
         return message
 
@@ -671,8 +861,23 @@ class RoomService:
         )
 
         fresh_snapshot = await self.store.get_room_snapshot(room_id)
-        if fresh_snapshot and active_human_participant_count(fresh_snapshot.participants) == 0:
-            await self.store.mark_room_empty(room_id)
+        current_human_count = active_human_participant_count(fresh_snapshot.participants) if fresh_snapshot else 0
+        terminal_state = "empty" if fresh_snapshot and current_human_count == 0 else None
+        if terminal_state:
+            await self.store.mark_room_empty(room_id, emptied_at=now)
+
+        self._schedule_history(
+            "participant_left",
+            room_id,
+            lambda: self.room_history.persist_participant_left(
+                room_id,
+                participant,
+                left_at=now,
+                reason=reason,
+                current_human_count=current_human_count,
+                terminal_state=terminal_state,
+            ),
+        )
 
         return True
 

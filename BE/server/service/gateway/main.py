@@ -4,6 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 
 from server.config import get_settings
+from server.integrations.mongodb import close_mongo_client, create_mongo_client, get_mongo_database
 from server.redis import create_redis_client, close_redis
 from server.service.gateway.app_state import app_state
 from server.service.gateway.room_store import RoomStore
@@ -17,6 +18,7 @@ from server.service.gateway.ws_endpoint import router as ws_router
 from server.service.gateway.ws_test_mic import router as ws_mic_router
 from server.service.gateway.ws_test_translation import router as ws_translation_router
 from server.service.gateway.event_consumer import start_event_consumer
+from server.service.persistence.room_history import MongoRoomHistoryRepository
 import uuid
 
 
@@ -43,8 +45,21 @@ async def lifespan(app: FastAPI):
     # Startup
     app_state.settings = get_settings()
     app_state.redis = await create_redis_client(app_state.settings.redis_url)
+    app_state.mongo_client = create_mongo_client(app_state.settings)
+    mongo_db = get_mongo_database(app_state.mongo_client, app_state.settings)
+    app_state.room_history = MongoRoomHistoryRepository(mongo_db)
+    app_state.room_history.schedule(
+        app_state.room_history.ensure_indexes,
+        action="ensure_indexes",
+        room_id="__startup__",
+    )
     app_state.room_store = RoomStore(app_state.redis, ttl_seconds=app_state.settings.room_meeting_duration_seconds + 300)
-    app_state.room_service = RoomService(app_state.room_store, app_state.settings, app_state.redis)
+    app_state.room_service = RoomService(
+        app_state.room_store,
+        app_state.settings,
+        app_state.redis,
+        room_history=app_state.room_history,
+    )
     app_state.ws_hub = WSHub(
         on_connection_lost=_on_ws_connection_lost,
         stale_timeout_seconds=app_state.settings.ws_stale_timeout_seconds,
@@ -68,8 +83,14 @@ async def lifespan(app: FastAPI):
     except asyncio.CancelledError:
         pass
 
+    if app_state.room_service:
+        await app_state.room_service.shutdown_side_effects()
+    if app_state.room_history:
+        await app_state.room_history.shutdown()
+
     if app_state.redis:
         await close_redis(app_state.redis)
+    close_mongo_client(app_state.mongo_client)
 
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
@@ -125,4 +146,3 @@ app.include_router(test_sessions_router)
 app.include_router(ws_router)
 app.include_router(ws_mic_router)
 app.include_router(ws_translation_router)
-

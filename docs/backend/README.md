@@ -21,7 +21,9 @@ Backend của MeetQ phục vụ một meeting room realtime có các capability 
 - chat room với tùy chọn dịch hoặc không dịch
 - screen share
 - room expiry 30 phút
+- MongoDB historical persistence cho room / participant / conversation archive
 - Telegram notification khi tạo room
+- Telegram notification khi user join room
 
 Ở mức tổng thể, backend được thiết kế thành các khối tách rõ giữa:
 
@@ -45,6 +47,7 @@ Gateway Service
     |
     +--> Redis room state
     +--> Redis pub/sub control/events
+    +--> MongoDB historical archive
     +--> LiveKit token issuing
     +--> Brain Runtime control
     +--> Telegram integration
@@ -79,6 +82,7 @@ flowchart LR
     R -->|"Control channel"| BRS["Brain Runtime Service"]
     BRS -->|"Publish transcript / relay / status"| R
 
+    GW -->|"Room / participant / conversation archive"| M["MongoDB"]
     BRS -->|"Join room as virtual participant"| LK
     LK -->|"Human mic audio"| BRS
     BRS -->|"Relay audio"| LK
@@ -102,6 +106,7 @@ flowchart TB
     subgraph State["Application State"]
         RS["Redis room state"]
         RH["Recent transcript / chat history"]
+        MH["MongoDB historical archive"]
     end
 
     subgraph Service["Backend Service Layer"]
@@ -121,6 +126,7 @@ flowchart TB
     GW2 --> GWS
     GWS --> RS
     GWS --> RH
+    GWS --> MH
     GWS --> BRS2
 
     BRS2 --> MED
@@ -201,11 +207,13 @@ Nguyên tắc:
 
 ### 3.5 `server.integrations`
 
-Hiện tại tích hợp nổi bật là Telegram notifier.
+Hiện tại tích hợp nổi bật là Telegram notifier và MongoDB client wiring.
 
-Nó chịu trách nhiệm:
+Tích hợp chịu trách nhiệm:
 
 - gửi notification ra Telegram channel khi room được tạo
+- gửi notification ra Telegram channel khi user join room
+- tạo / đóng MongoDB client dùng bởi persistence repository
 
 ### 3.6 `server.shared`
 
@@ -234,6 +242,22 @@ Redis được dùng cho:
 - Gateway và Brain Runtime không cần shared memory
 - mỗi process vẫn phối hợp được qua Redis
 - room state có TTL gắn với vòng đời meeting
+
+### 4.1 MongoDB historical archive
+
+MongoDB là lớp persistence / historical storage, không thay Redis trong hot path.
+
+Gateway ghi side effect vào MongoDB để lưu:
+
+- `rooms`: metadata room, languages, BRSE mode, lifecycle timestamps, duration, participant totals.
+- `room_participants`: participant summaries và session join/leave history.
+- `room_messages`: chat messages, source transcripts, translated transcripts, và BRSE relay lines.
+
+Nếu MongoDB timeout hoặc lỗi tạm thời:
+
+- create / join / chat / transcript runtime vẫn tiếp tục theo Redis
+- lỗi được log
+- historical archive có thể thiếu record tương ứng và cần operational follow-up
 
 ## 5. LiveKit đóng vai trò gì
 
@@ -265,8 +289,9 @@ Flow:
 1. FE gọi `POST /api/rooms`
 2. Gateway tạo room state trong Redis
 3. Gateway gán meeting languages, expiry, BRSE mode, participant policy
-4. Gateway trả room metadata + join/share info cho FE
-5. Gateway có thể gửi Telegram notification nếu bật config
+4. Gateway ghi room metadata sang MongoDB archive theo side effect
+5. Gateway trả room metadata + join/share info cho FE
+6. Gateway có thể gửi Telegram notification nếu bật config
 
 Kết quả:
 
@@ -278,11 +303,13 @@ sequenceDiagram
     participant FE as Frontend
     participant GW as Gateway
     participant Redis as Redis
+    participant Mongo as MongoDB
     participant TG as Telegram
 
     FE->>GW: POST /api/rooms
     GW->>Redis: create room state
     GW->>Redis: set expiry / languages / BRSE mode
+    GW->>Mongo: archive room metadata
     alt Telegram enabled
         GW->>TG: send room-created notification
     end
@@ -300,6 +327,8 @@ Flow:
    - tạo participant/session state
    - phát room JWT cho websocket
    - phát LiveKit access token cho browser
+   - ghi participant join history sang MongoDB
+   - gửi Telegram join notification nếu bật config
 4. FE connect:
    - Gateway WebSocket
    - LiveKit
@@ -315,6 +344,8 @@ sequenceDiagram
     participant FE as Frontend
     participant GW as Gateway
     participant Redis as Redis
+    participant Mongo as MongoDB
+    participant TG as Telegram
     participant LK as LiveKit
 
     FE->>GW: GET /api/rooms/{room_id}
@@ -323,6 +354,10 @@ sequenceDiagram
 
     FE->>GW: POST /api/rooms/{room_id}/join
     GW->>Redis: validate room + create participant session
+    GW->>Mongo: archive participant join session
+    alt Telegram enabled
+        GW->>TG: send participant-joined notification
+    end
     GW-->>FE: room JWT + LiveKit token
 
     FE->>GW: connect room WebSocket
@@ -372,7 +407,9 @@ Khi room bật BRSE:
 7. Runtime publish:
    - relay audio trở lại LiveKit
    - transcript / relay events sang Gateway qua Redis
-8. Gateway persist recent transcript và fan-out event tới FE
+8. Gateway persist recent transcript vào Redis
+9. Gateway ghi transcript / relay line sang MongoDB archive
+10. Gateway fan-out event tới FE
 
 Điểm quan trọng:
 
@@ -386,6 +423,7 @@ sequenceDiagram
     participant RT as Brain Runtime
     participant Brain as Brain
     participant Redis as Redis
+    participant Mongo as MongoDB
     participant GW as Gateway
     participant FE as Frontend
 
@@ -398,6 +436,7 @@ sequenceDiagram
     RT->>Redis: publish transcript / relay events
     Redis->>GW: interpreter events
     GW->>Redis: persist recent transcript
+    GW->>Mongo: archive transcript / relay line
     GW-->>FE: websocket relay/transcript updates
 ```
 
@@ -414,7 +453,8 @@ Flow:
    - Gateway gọi chat translation path
    - attach translation result vào chính message đó
 5. Gateway persist message vào recent chat history
-6. Gateway broadcast `chat.message` cho cả room
+6. Gateway ghi canonical chat message sang MongoDB archive
+7. Gateway broadcast `chat.message` cho cả room
 
 Kết quả:
 
@@ -427,6 +467,7 @@ sequenceDiagram
     participant GW as Gateway
     participant Brain as Brain / translation path
     participant Redis as Redis
+    participant Mongo as MongoDB
     participant Room as Room clients
 
     FE->>GW: chat.send
@@ -436,6 +477,7 @@ sequenceDiagram
         Brain-->>GW: translated text
     end
     GW->>Redis: persist canonical chat message
+    GW->>Mongo: archive canonical chat message
     GW-->>Room: chat.message broadcast
 ```
 
@@ -503,6 +545,16 @@ Tùy loại dữ liệu, source of truth khác nhau:
 Source of truth:
 
 - Gateway + Redis
+
+### Historical room / conversation archive
+
+Source of truth:
+
+- MongoDB (`rooms`, `room_participants`, `room_messages`)
+
+Runtime rule:
+
+- Archive data is not used to make active room decisions; Redis remains hot state.
 
 ### Media tracks
 

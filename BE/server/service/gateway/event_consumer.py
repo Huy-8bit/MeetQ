@@ -118,6 +118,16 @@ async def _handle_interpreter_events(msg_data: dict):
             await app_state.room_store.append_transcript(room_id, transcript)
         except Exception as exc:
             logger.error("Failed to parse and save transcript: %s", exc)
+        if app_state.room_history:
+            app_state.room_history.schedule(
+                lambda: app_state.room_history.persist_transcript(
+                    room_id,
+                    transcript,
+                    room=snapshot.room,
+                ),
+                action="transcript_final",
+                room_id=room_id,
+            )
 
         if transcript.kind in {"source", "relay"}:
             await app_state.ws_hub.broadcast_to_room(room_id, msg_data)

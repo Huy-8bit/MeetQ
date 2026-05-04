@@ -1,5 +1,193 @@
 # Backend Implementation State
 
+## Turn Update: 2026-05-04 Mongo Persistence Layer Kickoff
+
+- Time: 2026-05-04T00:00:00+07:00
+- Mode: CODE-ONLY
+- Testing deferred: full test suite not run, per instruction
+
+### Objective
+
+Add MongoDB as an additive persistence / historical archive layer for room
+metadata, participant history, chat, transcript, and relay history while keeping
+Redis as the hot runtime source of truth for active rooms.
+
+### Strategy Locked
+
+- Redis remains responsible for room runtime state, pub/sub, TTL lifecycle,
+  websocket snapshots, and BRSE runtime coordination.
+- MongoDB stores historical records only:
+  - `rooms` for room metadata and lifecycle summary.
+  - `room_participants` for cumulative participant summaries and join sessions.
+  - `room_messages` for chat, source transcript, translated transcript, and
+    relay conversation items in timestamp order.
+- Persistence and Telegram notifications are side effects. Transient failures
+  must log and degrade gracefully without failing create/join/chat/transcript
+  runtime paths.
+
+### Initial Hook Points
+
+- Room creation: `RoomService.create_room(...)`
+- Participant join: `RoomService.join_room(...)`
+- Chat messages: `RoomService.send_chat_message(...)`
+- Transcript / relay final events: `event_consumer._handle_interpreter_events(...)`
+- Room empty/ended summary: `RoomService.cleanup_participant(...)`
+- Startup/shutdown wiring: `service.gateway.main` and `app_state`
+
+### Final Sync
+
+- Time: 2026-05-04T00:00:00+07:00
+- Status: MongoDB persistence layer added as Redis-adjacent historical storage.
+- Runtime rule preserved: Redis remains active room state, pub/sub, TTL lifecycle,
+  websocket snapshot source, and BRSE runtime coordination backbone.
+
+### MongoDB Collections
+
+#### `rooms`
+
+Stores room-level historical summary:
+
+- `room_id`
+- `state`
+- `created_at`, `activated_at`, `emptied_at`, `expires_at`, `ended_at`
+- `meeting_languages`
+- `brse_enabled`
+- `meeting_mode`
+- `interpreter_mode`
+- `audio_routing`
+- `virtual_participants`
+- `participant_count_current`
+- `participant_count_total`
+- `participant_ids`
+- `participant_summaries`
+- `duration_seconds`
+- `status_summary`
+- message counters and last-event timestamps
+
+Room lifecycle strategy:
+
+- `create_room` inserts initial room archive document.
+- first human join marks the archive active and sets `activated_at` if missing.
+- empty room cleanup marks `state=empty`, sets `ended_at`, and stores duration.
+- room expiry is archived by:
+  - a lightweight per-room expiry side-effect task scheduled at create time
+  - join / websocket rejection paths for expired rooms
+- expiry archive update does not override an already-terminal room summary.
+- lifecycle archive updates skip stale terminal writes if Mongo already has a
+  newer `last_event_at`, which avoids an old empty/expired side effect
+  overwriting a fast rejoin.
+
+#### `room_participants`
+
+Stores participant summaries and join-session history:
+
+- unique key: `room_id + participant_id`
+- participant identity/display/language/kind/is_virtual/livekit metadata
+- `join_count`
+- `first_joined_at`, `last_joined_at`, `last_left_at`
+- `sessions[]` with `session_id`, `joined_at`, `left_at`, `status`, `reason`, and client metadata
+
+Participant strategy:
+
+- human joins append a new session and refresh room participant totals.
+- if the same `participant_id` appears again, it appends another session and increments `join_count`.
+- BRSE virtual participant records are stored with `is_virtual=true` / `kind=virtual_brse`, but room `participant_count_total` counts human users only.
+- leave / cleanup updates the matching session `left_at` when available.
+
+#### `room_messages`
+
+Stores all durable conversation items in one chronological collection:
+
+- `conversation_type`: `chat` or `transcript`
+- `kind`: `chat`, `source`, `translated`, or `relay`
+- `room_id`
+- `message_id` / `transcript_id`
+- participant/display/language fields
+- `text`
+- `created_at`
+- chat metadata: `translation_mode`, `translations`, client event id
+- transcript metadata: `source_text`, `translated_text`, `brse_text`, src/target lang, listener, relay/audio output
+
+Conversation strategy:
+
+- chat messages are written after Redis recent chat persistence succeeds.
+- transcript / relay lines are written on `transcript.final` after Gateway builds the canonical `TranscriptEvent`.
+- source, translated, and BRSE relay transcript lines share `room_messages` to keep room conversation history queryable by one `room_id + created_at` scan.
+
+### Graceful Degradation
+
+- MongoDB client is optional at runtime. If `MONGODB_URL` is unset or `motor` is unavailable, archive writes are disabled and Redis runtime continues.
+- MongoDB writes are scheduled as background side effects and wrapped in error logging.
+- Mongo insert/update failures do not fail create-room, join-room, chat, leave, websocket, or transcript fan-out paths.
+
+### Telegram Join Notification
+
+- Added optional `participant.joined` Telegram notification.
+- Config:
+  - `TELEGRAM_NOTIFY_PARTICIPANT_JOINED=true`
+- Payload includes:
+  - room id
+  - meeting languages
+  - BRSE on/off
+  - current human participant count
+  - joined participant id, display name, language, joined time
+- Telegram failures remain non-fatal side effects.
+
+### Config / Stack
+
+Added config/env:
+
+- `MONGODB_URL`
+- `MONGODB_DATABASE`
+- `MONGODB_SERVER_SELECTION_TIMEOUT_MS`
+- `MONGODB_CONNECT_TIMEOUT_MS`
+- `TELEGRAM_NOTIFY_PARTICIPANT_JOINED`
+
+Local/prod compose changes:
+
+- Added `mongo:7` service.
+- Added `mongo_data` volume.
+- Gateway receives `MONGODB_URL` / `MONGODB_DATABASE`.
+- Gateway depends on Mongo in compose startup order.
+- Interpreter remains Redis/LiveKit runtime only and does not use Mongo.
+
+### Files Changed
+
+| File | Change |
+|------|--------|
+| `BE/server/integrations/mongodb.py` | New Mongo client wiring with optional Motor dependency handling |
+| `BE/server/service/persistence/room_history.py` | New MongoDB room history repository and indexes |
+| `BE/server/service/persistence/__init__.py` | New persistence package |
+| `BE/server/config.py` | Added MongoDB and Telegram join notification config |
+| `BE/server/models.py` | Added optional `activated_at` / `emptied_at` to `RoomState` |
+| `BE/server/service/gateway/main.py` | Wires Mongo repository into Gateway lifecycle |
+| `BE/server/service/gateway/app_state.py` | Stores Mongo client and room history repository |
+| `BE/server/service/gateway/room_service.py` | Adds room/participant/chat/lifecycle persistence hooks and Telegram join notify |
+| `BE/server/service/gateway/room_store.py` | Allows `mark_room_empty` to persist `emptied_at` in Redis state |
+| `BE/server/service/gateway/event_consumer.py` | Persists `transcript.final` / relay lines to Mongo archive |
+| `BE/server/service/gateway/ws_endpoint.py` | Archives room expiry on expired websocket rejection |
+| `BE/server/integrations/telegram.py` | Adds participant-joined notification |
+| `BE/requirements.txt` | Adds `motor` |
+| `.env.example` | Adds MongoDB and Telegram join notification env |
+| `docker-compose.yml` | Adds local MongoDB service and Gateway env wiring |
+| `docker-compose.prod.yml` | Adds prod MongoDB service and Gateway env wiring |
+| `docs/backend/README.md` | Documents MongoDB archive role and Telegram join notification |
+| `docs/backend/FILE_STRUCTURE.md` | Documents new integration/persistence modules |
+| `docs/backend/IMPLEMENTATION_STATE.md` | This implementation state update |
+
+### Verification
+
+- Full test suite not run, per CODE-ONLY instruction.
+- New tests not added, per instruction.
+- Targeted syntax check only:
+  - `python -m py_compile BE/server/config.py BE/server/integrations/mongodb.py BE/server/integrations/telegram.py BE/server/models.py BE/server/service/gateway/app_state.py BE/server/service/gateway/main.py BE/server/service/gateway/room_store.py BE/server/service/gateway/room_service.py BE/server/service/gateway/event_consumer.py BE/server/service/gateway/ws_endpoint.py BE/server/service/persistence/room_history.py`
+- Whitespace check:
+  - `git diff --check`
+- Targeted import smoke check:
+  - `PYTHONPATH=BE python - <<'PY' ... imports ok`
+
+---
+
 ## Turn Update: 2026-05-04 Backend Architecture README
 
 - Time: 2026-05-04T00:00:00+07:00

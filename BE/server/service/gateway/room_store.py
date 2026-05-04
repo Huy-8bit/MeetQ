@@ -169,11 +169,13 @@ class RoomStore:
         await pipe.execute()
         await self._refresh_ttl(room_id)
 
-    async def mark_room_empty(self, room_id: str):
+    async def mark_room_empty(self, room_id: str, emptied_at: Optional[str] = None):
         meta_json = await self.client.get(self._meta_key(room_id))
         if meta_json:
             room_data = json.loads(meta_json)
             room_data["state"] = "empty"
+            if emptied_at is not None:
+                room_data["emptied_at"] = emptied_at
             updated_r = RoomState(**room_data)
             await self.client.set(self._meta_key(room_id), updated_r.model_dump_json(), ex=self.ttl)
 

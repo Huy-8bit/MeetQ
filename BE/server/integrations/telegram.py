@@ -16,6 +16,7 @@ class TelegramNotifier:
     def __init__(self, settings: Settings):
         self.enabled = settings.telegram_notifications_enabled
         self.notify_room_created = settings.telegram_notify_room_created
+        self.notify_participant_joined = settings.telegram_notify_participant_joined
         self.bot_token = (settings.telegram_bot_token or "").strip()
         self.chat_id = (settings.telegram_chat_id or "").strip()
         self.api_base_url = settings.telegram_api_base_url.rstrip("/")
@@ -24,6 +25,9 @@ class TelegramNotifier:
 
     def is_room_created_enabled(self) -> bool:
         return self.enabled and self.notify_room_created
+
+    def is_participant_joined_enabled(self) -> bool:
+        return self.enabled and self.notify_participant_joined
 
     def _configured(self) -> bool:
         return bool(self.bot_token and self.chat_id)
@@ -76,6 +80,39 @@ class TelegramNotifier:
                 creator["participant_id"] = creator_participant_id
             message["creator"] = creator
 
+        return json.dumps(message, ensure_ascii=False, indent=2, default=str)
+
+    def _build_participant_joined_message(
+        self,
+        room: Any,
+        participant: Any,
+        *,
+        participant_count: Optional[int] = None,
+    ) -> str:
+        room_id = self._room_value(room, "room_id", "unknown")
+        meeting_languages = self._room_value(room, "meeting_languages", []) or []
+        brse_enabled = self._room_value(room, "brse_enabled")
+
+        if isinstance(meeting_languages, (list, tuple)):
+            meeting_languages_value = [str(lang) for lang in meeting_languages]
+        else:
+            meeting_languages_value = meeting_languages
+
+        message: dict[str, Any] = {
+            "event": "participant.joined",
+            "room": {
+                "room_id": room_id,
+                "meeting_languages": meeting_languages_value,
+                "brse_enabled": bool(brse_enabled) if brse_enabled is not None else None,
+                "participant_count": participant_count,
+            },
+            "participant": {
+                "participant_id": self._room_value(participant, "participant_id"),
+                "display_name": self._room_value(participant, "display_name"),
+                "language": self._room_value(participant, "language"),
+                "joined_at": self._room_value(participant, "joined_at"),
+            },
+        }
         return json.dumps(message, ensure_ascii=False, indent=2, default=str)
 
     async def send_room_created(
@@ -139,4 +176,73 @@ class TelegramNotifier:
             return False
 
         logger.info("telegram room-created notification sent: room_id=%s", room_id)
+        return True
+
+    async def send_participant_joined(
+        self,
+        room: Any,
+        participant: Any,
+        *,
+        participant_count: Optional[int] = None,
+    ) -> bool:
+        room_id = self._room_value(room, "room_id", "unknown")
+        participant_id = self._room_value(participant, "participant_id", "unknown")
+
+        if not self.is_participant_joined_enabled():
+            return False
+
+        if not self._configured():
+            if not self._warned_missing_config:
+                logger.warning(
+                    "telegram participant-joined notification skipped: missing bot token or chat id; room_id=%s",
+                    room_id,
+                )
+                self._warned_missing_config = True
+            return False
+
+        url = f"{self.api_base_url}/bot{self.bot_token}/sendMessage"
+        payload = {
+            "chat_id": self.chat_id,
+            "text": self._build_participant_joined_message(
+                room,
+                participant,
+                participant_count=participant_count,
+            ),
+            "disable_web_page_preview": True,
+        }
+
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
+                response = await client.post(url, json=payload)
+                response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            logger.warning(
+                "telegram participant-joined notification failed: room_id=%s participant_id=%s status=%s body=%s",
+                room_id,
+                participant_id,
+                exc.response.status_code,
+                exc.response.text[:300],
+            )
+            return False
+        except httpx.RequestError as exc:
+            logger.warning(
+                "telegram participant-joined notification failed: room_id=%s participant_id=%s error=%s",
+                room_id,
+                participant_id,
+                exc,
+            )
+            return False
+        except Exception:
+            logger.exception(
+                "telegram participant-joined notification failed unexpectedly: room_id=%s participant_id=%s",
+                room_id,
+                participant_id,
+            )
+            return False
+
+        logger.info(
+            "telegram participant-joined notification sent: room_id=%s participant_id=%s",
+            room_id,
+            participant_id,
+        )
         return True

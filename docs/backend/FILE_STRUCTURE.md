@@ -63,6 +63,9 @@ BE/
 │   │   │   ├── audio_input.py              # LiveKit AudioStream -> generic AudioInput adapter
 │   │   │   ├── livekit_runtime.py          # LiveKit programmatic participant runtime
 │   │   │   └── output_router.py            # brain audio output -> LiveKit relay track
+│   │   ├── persistence/
+│   │   │   ├── __init__.py
+│   │   │   └── room_history.py             # MongoDB room/conversation archive repository
 │   │   └── gateway/
 │   │       ├── __init__.py
 │   │       ├── api_health.py
@@ -83,6 +86,7 @@ BE/
 │   │       └── ws_test_translation.py
 │   ├── integrations/
 │   │   ├── __init__.py
+│   │   ├── mongodb.py
 │   │   └── telegram.py
 │   └── shared/
 │       ├── __init__.py
@@ -124,6 +128,9 @@ Service owns backend orchestration:
 - `service.brain_runtime.room_manager`: room-level participant/media coordination, routing between room state and brain clients, speaker lifecycle/focus arbitration, transcript publish orchestration.
 - `service.brain_runtime.events`: Redis event publisher/envelope adapter for service-to-gateway events.
 - `service.media`: LiveKit media adapters used by the service runtime.
+- `service.persistence`: additive historical persistence repositories. Current
+  MongoDB room history archive stores room summaries, participant sessions, and
+  conversation items; it does not replace Redis for active room runtime state.
 
 The production Gateway service starts with:
 
@@ -163,6 +170,7 @@ Shared contains generic backend helpers that are not AI-specific:
 Integrations contains external non-AI service adapters:
 
 - `telegram.py`: Telegram notification integration used by Gateway room service.
+- `mongodb.py`: MongoDB client wiring used by Gateway persistence repositories.
 
 ## Notable Moves
 

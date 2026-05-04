@@ -11,6 +11,12 @@ class Settings(BaseSettings):
     redis_url: str = "redis://localhost:6379"
     redis_channel_gateway_control: str = "brseai:v1:gateway:control"
     redis_channel_interpreter_events: str = "brseai:v1:interpreter:events"
+
+    # MongoDB historical persistence (Redis remains hot runtime state)
+    mongodb_url: Optional[str] = None
+    mongodb_database: str = "brseai"
+    mongodb_server_selection_timeout_ms: int = 500
+    mongodb_connect_timeout_ms: int = 500
     
     # JWT
     room_jwt_secret: str
@@ -34,6 +40,7 @@ class Settings(BaseSettings):
     # Telegram notifications
     telegram_notifications_enabled: bool = False
     telegram_notify_room_created: bool = True
+    telegram_notify_participant_joined: bool = True
     telegram_bot_token: Optional[str] = None
     telegram_chat_id: Optional[str] = None
     telegram_api_base_url: str = "https://api.telegram.org"

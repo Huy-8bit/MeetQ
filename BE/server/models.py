@@ -96,6 +96,8 @@ class RoomState(BaseModel):
     room_id: str
     state: RoomStatus
     created_at: str
+    activated_at: Optional[str] = None
+    emptied_at: Optional[str] = None
     expires_at: str
     brse_enabled: bool = DEFAULT_BRSE_ENABLED
     participant_limit: Optional[int] = None  # None = no backend participant cap

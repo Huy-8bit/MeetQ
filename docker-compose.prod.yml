@@ -31,6 +31,14 @@ services:
     expose:
       - "6379"
 
+  mongo:
+    image: mongo:7
+    restart: unless-stopped
+    expose:
+      - "27017"
+    volumes:
+      - mongo_data:/data/db
+
   livekit:
     image: livekit/livekit-server:latest
     restart: unless-stopped
@@ -57,6 +65,8 @@ services:
       OPENAI_API_KEY: ${OPENAI_API_KEY:-replace-with-openai-api-key}
       OPENAI_REALTIME_MODEL: ${OPENAI_REALTIME_MODEL:-gpt-realtime-mini}
       REDIS_URL: redis://redis:6379/0
+      MONGODB_URL: ${MONGODB_URL:-mongodb://mongo:27017}
+      MONGODB_DATABASE: ${MONGODB_DATABASE:-brseai}
       ROOM_JWT_SECRET: ${ROOM_JWT_SECRET:-replace-with-room-jwt-secret}
       ROOM_TOKEN_TTL_SECONDS: ${ROOM_TOKEN_TTL_SECONDS:-86400}
       ROOM_MEETING_DURATION_SECONDS: ${ROOM_MEETING_DURATION_SECONDS:-1800}
@@ -70,6 +80,7 @@ services:
       PUBLIC_GATEWAY_WS_URL: wss://meetqapp.com
       TELEGRAM_NOTIFICATIONS_ENABLED: ${TELEGRAM_NOTIFICATIONS_ENABLED:-false}
       TELEGRAM_NOTIFY_ROOM_CREATED: ${TELEGRAM_NOTIFY_ROOM_CREATED:-true}
+      TELEGRAM_NOTIFY_PARTICIPANT_JOINED: ${TELEGRAM_NOTIFY_PARTICIPANT_JOINED:-true}
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
       TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
       TELEGRAM_API_BASE_URL: ${TELEGRAM_API_BASE_URL:-https://api.telegram.org}
@@ -79,6 +90,7 @@ services:
       - "8000"
     depends_on:
       - redis
+      - mongo
       - livekit
 
   interpreter:
@@ -102,3 +114,6 @@ services:
     depends_on:
       - redis
       - livekit
+
+volumes:
+  mongo_data:
