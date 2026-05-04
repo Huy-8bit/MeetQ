@@ -17,6 +17,7 @@ from server.brain.realtime.session_config import (
     INTERPRETER_VAD_CONFIG,
     INTERPRETER_SEND_QUEUE_MAXSIZE,
     build_interpreter_instructions,
+    build_interpreter_summary_instructions,
     build_interpreter_session_update,
 )
 
@@ -47,7 +48,9 @@ class InterpreterRealtimeClient(RealtimeClient):
         self._send_queue_drop_log_at: float = 0.0
         self._conversation_item_ids: list[str] = []
         self._conversation_item_id_set: set[str] = set()
+        self._accepted_input_item_ids: set[str] = set()
         self._cancelled_response_ids: set[str] = set()
+        self._pending_relay_requests: list[Dict[str, Any]] = []
         self._suppress_response_output = False
         self._active_input_item_id: Optional[str] = None
         self._pending_response_source_id: Optional[str] = None
@@ -59,7 +62,7 @@ class InterpreterRealtimeClient(RealtimeClient):
         self.on_input_transcript_delta: Callable[[str], None] = lambda t: None
         self.on_transcript_complete: Callable[[str], None] = lambda t: None
         self.on_input_audio_committed: Callable[[Optional[str]], None] = lambda item_id: None
-        self.approve_transcript_for_relay: Callable[[str, Optional[str]], Optional[str]] = (
+        self.approve_transcript_for_relay: Callable[[str, Optional[str]], Any] = (
             lambda _text, item_id: item_id or "validated_source_transcript"
         )
         self.on_text_delta: Callable[[str], None] = lambda t: None
@@ -70,6 +73,8 @@ class InterpreterRealtimeClient(RealtimeClient):
         self.on_speech_started: Callable[[], None] = lambda: None
         self.on_speech_stopped: Callable[[Optional[int]], None] = lambda duration_ms: None
         self.on_error: Callable[[Dict[str, Any]], None] = lambda err: None
+        self.on_response_done: Callable[[Optional[str]], None] = lambda source_id: None
+        self.can_start_relay_response: Callable[[str], bool] = lambda _relay_source_id: True
 
     def _current_instructions(self) -> str:
         effective_src = self.src_lang
@@ -104,7 +109,9 @@ class InterpreterRealtimeClient(RealtimeClient):
         self._send_queue_drop_log_at = 0.0
         self._conversation_item_ids = []
         self._conversation_item_id_set.clear()
+        self._accepted_input_item_ids.clear()
         self._cancelled_response_ids.clear()
+        self._pending_relay_requests.clear()
         self._suppress_response_output = False
         self._active_input_item_id = None
         self._pending_response_source_id = None
@@ -251,21 +258,29 @@ class InterpreterRealtimeClient(RealtimeClient):
 
         elif etype == "input_audio_buffer.speech_started":
             now = time.monotonic()
+            output_in_progress = self._assistant_speaking or self._current_response_id is not None
             self._speech_started_at = now
             self._speech_stopped_at = None
             self._utterance_committed_at = None
-            self._response_started_at = None
-            self._first_text_delta_at = None
-            self._first_audio_delta_at = None
-            self._response_audio_chunks = 0
             self._active_input_item_id = None
-            self._pending_response_source_id = None
-            self._active_response_source_id = None
-            self._log(f"speech_started src={self.src_lang} tgt={self.tgt_lang}")
+            if not output_in_progress:
+                self._response_started_at = None
+                self._first_text_delta_at = None
+                self._first_audio_delta_at = None
+                self._response_audio_chunks = 0
+                self._pending_response_source_id = None
+                self._active_response_source_id = None
+            self._log(
+                f"speech_started src={self.src_lang} tgt={self.tgt_lang} "
+                f"output_in_progress={output_in_progress} pending_relays={len(self._pending_relay_requests)}"
+            )
             self.on_speech_started()
             self.on_status_change("capturing")
-            if self._assistant_speaking:
-                await self._cancel_response(ws)
+            if output_in_progress:
+                self._log(
+                    "full_duplex_continue_output_on_new_speech "
+                    f"active_response_id={self._current_response_id or 'n/a'}"
+                )
 
         elif etype == "input_audio_buffer.speech_stopped":
             now = time.monotonic()
@@ -285,6 +300,8 @@ class InterpreterRealtimeClient(RealtimeClient):
             self._utterance_committed_at = now
             item_id = self._input_item_id_from_event(event)
             self._active_input_item_id = item_id
+            if item_id:
+                self._accepted_input_item_ids.add(item_id)
             metric_bits = []
             if item_id:
                 metric_bits.append(f"item_id={item_id}")
@@ -335,46 +352,57 @@ class InterpreterRealtimeClient(RealtimeClient):
                 self.on_transcript_complete(transcript)
                 relay_source_id = self.approve_transcript_for_relay(transcript, item_id)
                 if relay_source_id:
+                    relay_request = self._normalize_relay_approval(
+                        relay_source_id,
+                        default_source_text=transcript,
+                    )
                     await self._create_response_from_source_transcript(
                         ws,
-                        transcript,
-                        relay_source_id=relay_source_id,
+                        relay_request["source_text"],
+                        relay_source_id=relay_request["relay_source_id"],
+                        relay_style=relay_request["relay_style"],
                     )
                 else:
-                    self._suppress_response_output = True
-                    self._pending_response_source_id = None
-                    self._active_response_source_id = None
                     self._log(
                         "input_transcript_rejected_for_relay "
                         f"item_id={item_id or 'n/a'} chars={len(transcript)}"
                     )
-                    self.on_status_change("idle")
-                    await self._prune_conversation(ws)
+                    await self._handle_input_without_relay(
+                        ws,
+                        item_id=item_id,
+                        reason="rejected_for_relay",
+                    )
+                if item_id:
+                    self._accepted_input_item_ids.discard(item_id)
             else:
-                self._suppress_response_output = True
-                self._pending_response_source_id = None
-                self._active_response_source_id = None
                 self._log(
                     "empty_input_transcript_suppressed "
                     f"item_id={item_id or 'n/a'}"
                 )
-                self.on_status_change("idle")
-                await self._prune_conversation(ws)
+                await self._handle_input_without_relay(
+                    ws,
+                    item_id=item_id,
+                    reason="empty_input_transcript",
+                )
+                if item_id:
+                    self._accepted_input_item_ids.discard(item_id)
 
         elif etype == "conversation.item.input_audio_transcription.failed":
             item_id = self._input_item_id_from_event(event)
             if not self._input_transcription_event_is_current(event):
                 return
             error = event.get("error") or {}
-            self._suppress_response_output = True
-            self._pending_response_source_id = None
-            self._active_response_source_id = None
             self._log(
                 "input_transcription_failed_suppressed "
                 f"item_id={item_id or 'n/a'} error={error}"
             )
-            self.on_status_change("idle")
-            await self._prune_conversation(ws)
+            await self._handle_input_without_relay(
+                ws,
+                item_id=item_id,
+                reason="input_transcription_failed",
+            )
+            if item_id:
+                self._accepted_input_item_ids.discard(item_id)
 
         elif etype == "response.created":
             self._current_response_id = event.get("response", {}).get("id")
@@ -521,6 +549,7 @@ class InterpreterRealtimeClient(RealtimeClient):
         elif etype == "response.done":
             dropped_response = self._should_drop_response_event(etype, event)
             response_id = self._event_response_id(event)
+            completed_source_id = self._active_response_source_id
             if response_id:
                 self._cancelled_response_ids.discard(response_id)
             if dropped_response:
@@ -528,7 +557,9 @@ class InterpreterRealtimeClient(RealtimeClient):
                 self._current_response_id = None
                 self._active_response_source_id = None
                 self._pending_response_source_id = None
+                self.on_response_done(completed_source_id)
                 await self._prune_conversation(ws)
+                await self._start_next_pending_relay(ws)
                 return
             self._assistant_speaking = False
             self._current_response_id = None
@@ -551,10 +582,13 @@ class InterpreterRealtimeClient(RealtimeClient):
                         f"{key}={value}"
                         for key, value in sorted(audio_stats.items())
                     )
-                )
-            self._log("response.done " + " ".join(metric_bits))
-            self.on_status_change("idle")
+            )
             await self._prune_conversation(ws)
+            self._log("response.done " + " ".join(metric_bits))
+            self.on_response_done(completed_source_id)
+            if await self._start_next_pending_relay(ws):
+                return
+            self.on_status_change("idle")
 
         elif etype == "error":
             err = event.get("error", {})
@@ -573,14 +607,63 @@ class InterpreterRealtimeClient(RealtimeClient):
         finally:
             self.enable_speaker = original_enable_speaker
 
+    async def _handle_input_without_relay(
+        self,
+        ws,
+        *,
+        item_id: Optional[str],
+        reason: str,
+    ) -> None:
+        if self._relay_response_busy():
+            self._log(
+                "input_without_relay_preserved_active_response "
+                f"reason={reason} item_id={item_id or 'n/a'} "
+                f"active_response_id={self._current_response_id or 'n/a'} "
+                f"pending_source_id={self._pending_response_source_id or 'n/a'}"
+            )
+            return
+
+        self._suppress_response_output = True
+        self._pending_response_source_id = None
+        self._active_response_source_id = None
+        self.on_status_change("idle")
+        await self._prune_conversation(ws)
+
     async def _create_response_from_source_transcript(
         self,
         ws,
         transcript: str,
         *,
         relay_source_id: str,
+        relay_style: str = "normal",
     ) -> None:
         source_text = transcript.strip()
+        if not source_text:
+            return
+
+        request = {
+            "relay_source_id": relay_source_id,
+            "source_text": source_text,
+            "relay_style": relay_style,
+            "queued_at": time.monotonic(),
+        }
+        if self._relay_response_busy() or not self.can_start_relay_response(relay_source_id):
+            self._pending_relay_requests.append(request)
+            self._log(
+                "relay_response_queued "
+                f"source_id={relay_source_id} style={relay_style} "
+                f"queue_depth={len(self._pending_relay_requests)} "
+                f"busy={self._relay_response_busy()}"
+            )
+            self.on_status_change("queued")
+            return
+
+        await self._send_relay_response(ws, request)
+
+    async def _send_relay_response(self, ws, request: Dict[str, Any]) -> None:
+        source_text = str(request["source_text"]).strip()
+        relay_source_id = str(request["relay_source_id"])
+        relay_style = str(request.get("relay_style") or "normal")
         if not source_text:
             return
 
@@ -588,12 +671,23 @@ class InterpreterRealtimeClient(RealtimeClient):
         self._active_response_source_id = None
         self._suppress_response_output = False
         modalities = ["text", "audio"] if self.request_audio_output else ["text"]
-        instructions = (
-            self._current_instructions()
-            + " Relay the following validated source transcript only. "
-            "Do not use prior audio or conversation context. "
-            "If this text is not sufficient for a faithful relay, output nothing."
-        )
+        if relay_style == "summary":
+            instructions = (
+                build_interpreter_summary_instructions(
+                    self.src_lang,
+                    self.tgt_lang,
+                    meeting_languages=self.meeting_languages,
+                )
+                + " Summarize the validated overlap snippets below only. "
+                "Do not translate or summarize anything outside these snippets."
+            )
+        else:
+            instructions = (
+                self._current_instructions()
+                + " Relay the following validated source transcript only. "
+                "Do not use prior audio or conversation context. "
+                "If this text is not sufficient for a faithful relay, output nothing."
+            )
         payload = {
             "type": "response.create",
             "response": {
@@ -617,6 +711,7 @@ class InterpreterRealtimeClient(RealtimeClient):
                     "relay_source_id": relay_source_id,
                     "source_language": self.src_lang,
                     "target_language": self.tgt_lang,
+                    "relay_style": relay_style,
                 },
             },
         }
@@ -624,8 +719,67 @@ class InterpreterRealtimeClient(RealtimeClient):
         self._log(
             "response.create_from_validated_transcript "
             f"source_id={relay_source_id} chars={len(source_text)} "
-            f"modalities={','.join(modalities)}"
+            f"modalities={','.join(modalities)} relay_style={relay_style}"
         )
+
+    async def _start_next_pending_relay(self, ws) -> bool:
+        if self._relay_response_busy():
+            return False
+        while self._pending_relay_requests:
+            request = self._pending_relay_requests[0]
+            relay_source_id = str(request.get("relay_source_id") or "")
+            if not relay_source_id:
+                self._pending_relay_requests.pop(0)
+                continue
+            if not self.can_start_relay_response(relay_source_id):
+                self._log(
+                    "relay_response_pending_waiting_for_room_focus "
+                    f"source_id={relay_source_id} queue_depth={len(self._pending_relay_requests)}"
+                )
+                self.on_status_change("queued")
+                return False
+
+            self._pending_relay_requests.pop(0)
+            queued_ms = int(max(0.0, time.monotonic() - float(request.get("queued_at") or time.monotonic())) * 1000)
+            self._log(
+                "relay_response_dequeued "
+                f"source_id={relay_source_id} style={request.get('relay_style')} "
+                f"queued_ms={queued_ms} remaining={len(self._pending_relay_requests)}"
+            )
+            await self._send_relay_response(ws, request)
+            return True
+        return False
+
+    async def try_start_pending_relay(self) -> bool:
+        ws = self._ws
+        if ws is None:
+            return False
+        return await self._start_next_pending_relay(ws)
+
+    def pending_relay_count(self) -> int:
+        return len(self._pending_relay_requests)
+
+    def _relay_response_busy(self) -> bool:
+        return bool(
+            self._assistant_speaking
+            or self._current_response_id is not None
+            or self._pending_response_source_id is not None
+        )
+
+    def _normalize_relay_approval(self, approval: Any, *, default_source_text: str) -> Dict[str, str]:
+        if isinstance(approval, dict):
+            relay_source_id = str(approval.get("relay_source_id") or "")
+            source_text = str(approval.get("source_text") or default_source_text)
+            relay_style = str(approval.get("relay_style") or "normal")
+        else:
+            relay_source_id = str(approval)
+            source_text = default_source_text
+            relay_style = "normal"
+        return {
+            "relay_source_id": relay_source_id,
+            "source_text": source_text,
+            "relay_style": "summary" if relay_style == "summary" else "normal",
+        }
 
     async def update_routing(self, src_lang: str, tgt_lang: str) -> None:
         self.src_lang = src_lang
@@ -660,10 +814,15 @@ class InterpreterRealtimeClient(RealtimeClient):
         response_id = self._current_response_id
         if response_id:
             self._cancelled_response_ids.add(response_id)
+        pending_count = len(self._pending_relay_requests)
+        self._pending_relay_requests.clear()
         self._suppress_response_output = True
         self._pending_response_source_id = None
         self._active_response_source_id = None
-        self._log(f"barge_in_or_route_change cancelling response id={response_id}")
+        self._log(
+            "controlled_response_cancel "
+            f"id={response_id} pending_cleared={pending_count}"
+        )
         try:
             await ws.send(json.dumps({"type": "response.cancel"}))
         except Exception as exc:
@@ -730,7 +889,7 @@ class InterpreterRealtimeClient(RealtimeClient):
         active_item_id = self._active_input_item_id
         if item_id is None:
             return self._speech_stopped_at is not None
-        return active_item_id == item_id
+        return active_item_id == item_id or item_id in self._accepted_input_item_ids
 
     def _response_source_id_from_event(self, event: Dict[str, Any]) -> Optional[str]:
         response = event.get("response")

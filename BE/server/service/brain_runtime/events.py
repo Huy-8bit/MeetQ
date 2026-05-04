@@ -121,6 +121,7 @@ class RedisEventPublisher:
         audio_track_name: Optional[str] = None,
         audience_participant_ids: Optional[list[str]] = None,
         fallback_used: bool = False,
+        relay_style: str = "normal",
         relay_focus: Optional[Dict[str, Any]] = None,
         overlap: Optional[Dict[str, Any]] = None,
     ) -> None:
@@ -141,6 +142,7 @@ class RedisEventPublisher:
                 audience_participant_ids=audience_participant_ids or [],
                 fallback_used=fallback_used,
                 is_final=False,
+                relay_style=relay_style,
                 relay_focus=relay_focus,
                 overlap=overlap,
             ),
@@ -163,6 +165,7 @@ class RedisEventPublisher:
         audience_participant_ids: Optional[list[str]] = None,
         fallback_used: bool = False,
         latency_ms: Optional[int] = None,
+        relay_style: str = "normal",
         relay_focus: Optional[Dict[str, Any]] = None,
         overlap: Optional[Dict[str, Any]] = None,
     ) -> None:
@@ -181,6 +184,7 @@ class RedisEventPublisher:
             audience_participant_ids=audience_participant_ids or [],
             fallback_used=fallback_used,
             is_final=True,
+            relay_style=relay_style,
             relay_focus=relay_focus,
             overlap=overlap,
         )
@@ -317,6 +321,7 @@ class RedisEventPublisher:
         audience_participant_ids: list[str],
         fallback_used: bool,
         is_final: bool,
+        relay_style: str = "normal",
         relay_focus: Optional[Dict[str, Any]] = None,
         overlap: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
@@ -352,6 +357,7 @@ class RedisEventPublisher:
             "is_final": is_final,
             "created_at": created_at or self._now_str(),
             "relay_mode": INTERPRETER_MODE_BRSE_PARTICIPANT,
+            "relay_style": relay_style,
         }
         if relay_focus is not None:
             payload["relay_focus"] = relay_focus

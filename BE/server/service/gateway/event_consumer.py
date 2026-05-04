@@ -54,6 +54,7 @@ def _build_transcript_event(msg_data: Dict[str, Any]) -> TranscriptEvent:
         audio_track_name=payload.get("audio_track_name"),
         audio_output=payload.get("audio_output"),
         relay_mode=payload.get("relay_mode"),
+        relay_style=payload.get("relay_style"),
         speaker=speaker or None,
         original_speaker=original_speaker or None,
         listener=listener or None,

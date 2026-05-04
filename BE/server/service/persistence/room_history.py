@@ -414,6 +414,7 @@ class MongoRoomHistoryRepository:
             "audio_track_name": transcript.audio_track_name,
             "audio_output": transcript.audio_output,
             "relay_mode": transcript.relay_mode,
+            "relay_style": transcript.relay_style,
             "metadata": {
                 "speaker": self._model_dump(transcript.speaker),
                 "original_speaker": self._model_dump(transcript.original_speaker),

@@ -1,5 +1,104 @@
 # Backend Implementation State
 
+## Turn Update: 2026-05-04 BRSE Full-Duplex Relay Runtime Kickoff
+
+- Time: 2026-05-04T00:00:00+07:00
+- Mode: CODE-ONLY
+- Testing deferred: full test suite not run, per instruction
+
+### Objective
+
+Improve BRSE / AI relay runtime toward practical full-duplex behavior:
+
+- let current BRSE output finish instead of hard-cancelling on new meeting audio
+- keep input listening active while output is playing
+- queue/stage valid next utterances instead of dropping or cutting current relay
+- detect chaotic overlap and fallback to controlled summary-style relay
+
+### Read Status
+
+- Read required docs:
+  - `docs/backend/README.md`
+  - `docs/backend/INTERPRETER_DESIGN.md`
+  - `docs/backend/IMPLEMENTATION_STATE.md`
+  - `docs/backend/API_CONTRACT.md`
+- Read required runtime files:
+  - `BE/server/service/brain_runtime/room_manager.py`
+  - `BE/server/service/media/livekit_runtime.py`
+  - `BE/server/service/media/audio_input.py`
+  - `BE/server/service/media/output_router.py`
+  - `BE/server/brain/realtime/interpreter_client.py`
+  - `BE/server/brain/realtime/client.py`
+  - `BE/server/brain/realtime/session_config.py`
+  - `BE/server/brain/realtime/source_policy.py`
+  - `BE/server/brain/prompts/language.py`
+- Related files read:
+  - `BE/server/service/brain_runtime/events.py`
+
+### Root Cause Traced
+
+- Realtime VAD config already has `interrupt_response=false`, but BRSE wrapper still hard-cancels manually:
+  - `InterpreterRealtimeClient._handle_event(... input_audio_buffer.speech_started ...)`
+  - if `_assistant_speaking` then `await self._cancel_response(ws)`
+- Room manager also cuts output on new capture status:
+  - `RoomInterpreterManager._bind_client_callbacks(... on_status_change ...)`
+  - when status is `capturing`, it pops current `transcript_state` and calls `router.clear_queue()`
+- Existing overlap arbitration suppresses secondary speakers by disabling their `LiveKitAudioInput`, so overlapped valid speech can be dropped instead of being queued for the next turn.
+
+### Planned Runtime Policy
+
+- Replace hard-barge-in with controlled full-duplex:
+  - new speech while output is active does not cancel current response
+  - current output events continue to publish from their validated source utterance
+  - input transcript for the new utterance can still be captured and staged
+- Queue next validated utterance if a response is already active.
+- Only create the next Realtime response when the active response reaches `response.done`.
+- Keep source-transcript-first guardrails for all relay and summary output.
+- Add chaos detection based on overlap pressure, queued turns, and concurrent active speakers.
+- If chaos is high, synthesize a summary relay from validated recent source transcripts only.
+
+### Final Sync
+
+- Status: controlled full-duplex relay policy implemented in the backend runtime path.
+- Root cause fixed:
+  - `InterpreterRealtimeClient` no longer sends `response.cancel` on `input_audio_buffer.speech_started` while BRSE output is active.
+  - `RoomInterpreterManager` no longer resets transcript state or clears the active output router merely because input capture restarted.
+  - overlap handling no longer disables `LiveKitAudioInput` for the secondary speaker, so overlapped input can still be captured and staged.
+- New speaking/listening concurrency policy:
+  - output and input are tracked separately; current response source id continues to own relay output while a new committed input opens a separate utterance state.
+  - if another valid source transcript arrives while a response is active, the realtime client queues it instead of cancelling the current response.
+  - empty/rejected/failed input transcripts preserve the active response instead of flipping global response suppression.
+  - queued relay responses start after `response.done` or after relay focus is released, while preserving generation/route/source validation.
+- Overlap / chaos detection:
+  - recent validated source turns are retained for a short window.
+  - chaos is true only when there are multiple recent valid turns, multiple speakers, and either active overlap pressure or queued relay pressure.
+  - relay focus payload now reports `policy=controlled_full_duplex_serialized_output`, `pending_relay_count`, and overlap chaos state.
+- Summary fallback:
+  - summary mode is conditional, not default.
+  - summary relay is built only from validated recent source transcripts, capped in size, and deduped per target language / utterance set.
+  - relay events include additive `relay_style: "normal" | "summary"` so FE and persistence can distinguish normal relay from overlap-summary fallback without breaking existing transcript fields.
+- Prompt changes:
+  - added explicit overlap-summary instructions in `build_interpreter_summary_instructions`.
+  - summary prompt keeps source-transcript-first guardrails: no guessing, no invented facts, output nothing if snippets are too thin or unclear.
+- Files modified for this runtime change:
+  - `BE/server/brain/realtime/interpreter_client.py`
+  - `BE/server/brain/realtime/session_config.py`
+  - `BE/server/service/brain_runtime/room_manager.py`
+  - `BE/server/service/brain_runtime/events.py`
+  - `BE/server/models.py`
+  - `BE/server/service/gateway/event_consumer.py`
+  - `BE/server/service/persistence/room_history.py`
+  - `docs/backend/IMPLEMENTATION_STATE.md`
+- Verification:
+  - full test suite not run, per CODE-ONLY instruction.
+  - new tests not added.
+  - existing tests not modified.
+  - lightweight syntax/diff checks run:
+    - `python -m py_compile BE/server/brain/realtime/interpreter_client.py BE/server/brain/realtime/session_config.py BE/server/service/brain_runtime/room_manager.py BE/server/service/brain_runtime/events.py BE/server/models.py BE/server/service/gateway/event_consumer.py BE/server/service/persistence/room_history.py`
+    - `git diff --check -- BE/server/brain/realtime/interpreter_client.py BE/server/brain/realtime/session_config.py BE/server/service/brain_runtime/room_manager.py BE/server/service/brain_runtime/events.py BE/server/models.py BE/server/service/gateway/event_consumer.py BE/server/service/persistence/room_history.py docs/backend/IMPLEMENTATION_STATE.md`
+
+---
+
 ## Turn Update: 2026-05-04 Mongo Persistence Layer Kickoff
 
 - Time: 2026-05-04T00:00:00+07:00

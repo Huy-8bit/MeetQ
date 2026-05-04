@@ -32,6 +32,7 @@ CanonicalRemoteAudioPolicy = Literal[
 SameLanguageAudioPolicy = Literal["human_passthrough"]
 AiRelayAudioPolicy = Literal["listener_private_track", "virtual_participant_track"]
 TranscriptKind = Literal["source", "translated", "relay"]
+RelayStyle = Literal["normal", "summary"]
 ScreenShareSource = Literal["screen_share"]
 
 
@@ -148,6 +149,7 @@ class TranscriptEvent(BaseModel):
     audio_track_name: Optional[str] = None
     audio_output: Optional[Dict[str, Any]] = None
     relay_mode: Optional[InterpreterMode] = None
+    relay_style: Optional[RelayStyle] = None
     speaker: Optional[TranscriptParticipantRef] = None
     original_speaker: Optional[TranscriptParticipantRef] = None
     listener: Optional[Dict[str, Any]] = None

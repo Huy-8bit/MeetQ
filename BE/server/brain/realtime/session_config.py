@@ -74,6 +74,13 @@ _OUTPUT_POLICY = (
     "Do not add speaker labels, explanations, confirmations, apologies, commentary, markdown, or meta text. "
     "The text output and spoken audio output must contain the same relay content. "
 )
+_SUMMARY_FALLBACK_POLICY = (
+    "Overlap-summary mode is allowed only when the runtime explicitly asks for it. "
+    "In overlap-summary mode, summarize only the validated source snippets provided in the request. "
+    "Keep the summary short, practical, and source-grounded. "
+    "Do not add facts, decisions, owners, deadlines, causes, risks, or next steps that are not present in the snippets. "
+    "If the snippets are too unclear or too thin to summarize faithfully, output nothing. "
+)
 
 
 def build_interpreter_instructions(
@@ -121,6 +128,21 @@ def build_interpreter_instructions(
         + f"Every word you output must be in {tgt_name} unless preserving a proper noun, code term, product name, or intentionally mixed-language term from the speaker. "
         "If the validated source transcript is not sufficient for a faithful relay, output nothing. "
         + tone
+    )
+
+
+def build_interpreter_summary_instructions(
+    src: str,
+    tgt: str,
+    meeting_languages: Optional[Iterable[str]] = None,
+) -> str:
+    base = build_interpreter_instructions(src, tgt, meeting_languages=meeting_languages)
+    tgt_name = LANG_NAMES.get(tgt, tgt)
+    return (
+        base
+        + _SUMMARY_FALLBACK_POLICY
+        + f" For this response, use overlap-summary mode and output only a concise spoken {tgt_name} summary. "
+        "It is acceptable to say that the previous exchange was overlapping only if that is clear from the provided snippets. "
     )
 
 
