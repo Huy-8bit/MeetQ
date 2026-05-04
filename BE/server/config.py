@@ -14,7 +14,12 @@ class Settings(BaseSettings):
 
     # MongoDB historical persistence (Redis remains hot runtime state)
     mongodb_url: Optional[str] = None
+    mongodb_host: str = "localhost"
+    mongodb_port: int = 27017
     mongodb_database: str = "brseai"
+    mongodb_username: Optional[str] = None
+    mongodb_password: Optional[str] = None
+    mongodb_auth_source: Optional[str] = None
     mongodb_server_selection_timeout_ms: int = 500
     mongodb_connect_timeout_ms: int = 500
     

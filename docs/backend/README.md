@@ -259,6 +259,21 @@ Nếu MongoDB timeout hoặc lỗi tạm thời:
 - lỗi được log
 - historical archive có thể thiếu record tương ứng và cần operational follow-up
 
+MongoDB phải chạy với authentication:
+
+- Docker Compose bật `mongod --auth`.
+- `MONGODB_ROOT_USERNAME` / `MONGODB_ROOT_PASSWORD` tạo root/admin user.
+- `MONGODB_USERNAME` / `MONGODB_PASSWORD` tạo app user có quyền `readWrite`
+  trên `MONGODB_DATABASE`.
+- Gateway ưu tiên `MONGODB_URL` nếu URI đã có credentials.
+- Nếu `MONGODB_URL` còn dạng no-auth nhưng có `MONGODB_USERNAME` /
+  `MONGODB_PASSWORD`, Gateway inject credentials vào URI đó và không connect anonymous.
+- Nếu `MONGODB_URL` trống, Gateway build URI từ `MONGODB_HOST`,
+  `MONGODB_PORT`, `MONGODB_DATABASE`, `MONGODB_USERNAME`,
+  `MONGODB_PASSWORD`, và `MONGODB_AUTH_SOURCE`.
+- Với volume Mongo cũ từng chạy no-auth, cần migrate/create user thủ công hoặc
+  recreate volume cho local dev trước khi bật stack auth.
+
 ## 5. LiveKit đóng vai trò gì
 
 LiveKit là media plane của hệ thống.

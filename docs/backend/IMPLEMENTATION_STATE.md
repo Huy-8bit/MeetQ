@@ -1,5 +1,98 @@
 # Backend Implementation State
 
+## Turn Update: 2026-05-04 MongoDB Authentication Wiring Kickoff
+
+- Time: 2026-05-04T00:00:00+07:00
+- Mode: CODE-ONLY
+- Testing deferred: full test suite not run, per instruction
+
+### Objective
+
+Enable username/password authentication for MongoDB historical persistence without
+changing Redis-backed hot runtime behavior or Mongo persistence business logic.
+
+### Read Status
+
+- Read required docs/config:
+  - `docs/backend/README.md`
+  - `docs/backend/IMPLEMENTATION_STATE.md`
+  - `docker-compose.yml`
+  - `docker-compose.prod.yml`
+  - `.env.example`
+  - `BE/.env.example`
+  - `BE/server/config.py`
+- Read Mongo wiring/persistence files:
+  - `BE/server/integrations/mongodb.py`
+  - `BE/server/service/persistence/room_history.py`
+  - `BE/server/service/gateway/main.py`
+  - related gateway app-state references
+
+### Strategy Locked
+
+- Use MongoDB auth in Docker Compose via `mongod --auth`.
+- Create a root/admin user through `MONGO_INITDB_ROOT_USERNAME` /
+  `MONGO_INITDB_ROOT_PASSWORD`.
+- Create an app-specific user through an init script with `readWrite` on
+  `MONGODB_DATABASE`.
+- Backend connection remains side-effect persistence only:
+  - URI with credentials is accepted when `MONGODB_URL` is set.
+  - URI without credentials has `MONGODB_USERNAME` / `MONGODB_PASSWORD`
+    injected if both are configured.
+  - otherwise backend builds a credentialed URI from
+    `MONGODB_HOST`, `MONGODB_PORT`, `MONGODB_DATABASE`,
+    `MONGODB_USERNAME`, `MONGODB_PASSWORD`, and `MONGODB_AUTH_SOURCE`.
+  - anonymous Mongo URLs are treated as config problems, not silently used.
+
+### Final Sync
+
+- Status: MongoDB auth wiring added for local/dev/prod compose stacks.
+- Docker Compose changes:
+  - `mongo` now starts with `mongod --auth --bind_ip_all`.
+  - `MONGO_INITDB_ROOT_USERNAME` / `MONGO_INITDB_ROOT_PASSWORD` configure the root user.
+  - `ops/mongo/init-app-user.js` creates or updates the app user with `readWrite`
+    on `MONGODB_DATABASE` during first DB initialization.
+  - local compose uses practical dev defaults; prod compose requires Mongo root
+    and app credentials to be set.
+- Backend config/env changes:
+  - added `MONGODB_HOST`, `MONGODB_PORT`, `MONGODB_USERNAME`,
+    `MONGODB_PASSWORD`, and `MONGODB_AUTH_SOURCE`.
+  - `MONGODB_URL` remains supported, but only credentialed URIs are used directly.
+  - if `MONGODB_URL` is blank, backend builds a credentialed URI from field-based config.
+  - if a no-auth `MONGODB_URL` is present and username/password are set, backend logs
+    a warning and injects credentials into that URI instead of connecting anonymously.
+  - if neither credentialed URI nor username/password are available, Mongo persistence
+    is disabled with a clear auth/config log message.
+- Persistence behavior preserved:
+  - no room/chat/transcript persistence business logic was rewritten.
+  - Mongo failures still degrade through existing side-effect logging path.
+  - Redis remains hot runtime state and pub/sub backbone.
+- Existing data note:
+  - Mongo init scripts only run on first volume initialization.
+  - local volumes that were previously created without users must be recreated or
+    manually migrated with users before authenticated Mongo will accept backend writes.
+- Files modified:
+  - `docker-compose.yml`
+  - `docker-compose.prod.yml`
+  - `.env.example`
+  - `BE/.env.example`
+  - `BE/server/config.py`
+  - `BE/server/integrations/mongodb.py`
+  - `ops/mongo/init-app-user.js`
+  - `docs/backend/README.md`
+  - `docs/backend/IMPLEMENTATION_STATE.md`
+- Verification:
+  - full test suite not run, per CODE-ONLY instruction.
+  - new tests not added.
+  - existing tests not modified.
+  - lightweight checks run:
+    - `python -m py_compile BE/server/config.py BE/server/integrations/mongodb.py BE/server/service/persistence/room_history.py BE/server/service/gateway/main.py`
+    - `git diff --check -- docker-compose.yml docker-compose.prod.yml .env.example BE/.env.example BE/server/config.py BE/server/integrations/mongodb.py ops/mongo/init-app-user.js docs/backend/README.md docs/backend/IMPLEMENTATION_STATE.md`
+    - field-based / no-auth-URI credential injection smoke check for `server.integrations.mongodb`
+    - `docker compose config --quiet`
+    - `node --check ops/mongo/init-app-user.js`
+
+---
+
 ## Turn Update: 2026-05-04 BRSE Full-Duplex Relay Runtime Kickoff
 
 - Time: 2026-05-04T00:00:00+07:00

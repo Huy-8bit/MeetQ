@@ -6,10 +6,19 @@ services:
   mongo:
     image: mongo:7
     restart: unless-stopped
+    command: ["mongod", "--auth", "--bind_ip_all"]
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGODB_ROOT_USERNAME:-brseai_root}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGODB_ROOT_PASSWORD:-dev-mongodb-root-password}
+      MONGO_INITDB_DATABASE: ${MONGODB_DATABASE:-brseai}
+      MONGODB_DATABASE: ${MONGODB_DATABASE:-brseai}
+      MONGODB_APP_USERNAME: ${MONGODB_USERNAME:-brseai_app}
+      MONGODB_APP_PASSWORD: ${MONGODB_PASSWORD:-dev-mongodb-password}
     ports:
       - "27017:27017"
     volumes:
       - mongo_data:/data/db
+      - ./ops/mongo/init-app-user.js:/docker-entrypoint-initdb.d/01-create-app-user.js:ro
 
   livekit:
     image: livekit/livekit-server:latest
@@ -36,8 +45,13 @@ services:
       OPENAI_API_KEY: ${OPENAI_API_KEY:-dev-openai-key}
       OPENAI_REALTIME_MODEL: ${OPENAI_REALTIME_MODEL:-gpt-realtime-mini}
       REDIS_URL: redis://redis:6379/0
-      MONGODB_URL: ${MONGODB_URL:-mongodb://mongo:27017}
+      MONGODB_URL: ${MONGODB_URL:-}
+      MONGODB_HOST: ${MONGODB_HOST:-mongo}
+      MONGODB_PORT: ${MONGODB_PORT:-27017}
       MONGODB_DATABASE: ${MONGODB_DATABASE:-brseai}
+      MONGODB_USERNAME: ${MONGODB_USERNAME:-brseai_app}
+      MONGODB_PASSWORD: ${MONGODB_PASSWORD:-dev-mongodb-password}
+      MONGODB_AUTH_SOURCE: ${MONGODB_AUTH_SOURCE:-}
       ROOM_JWT_SECRET: ${ROOM_JWT_SECRET:-dev-room-secret}
       ROOM_TOKEN_TTL_SECONDS: ${ROOM_TOKEN_TTL_SECONDS:-86400}
       LIVEKIT_API_KEY: ${LIVEKIT_API_KEY:-devkey}
