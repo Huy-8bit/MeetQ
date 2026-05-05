@@ -17,6 +17,7 @@ _FRAME_MS = 20
 _CHANNELS = 1
 _BYTES_PER_SAMPLE = 2
 _SOURCE_QUEUE_MS = 6000
+_PUBLIC_AUDIO_HOLD_MAX_MS = 3000
 
 
 @dataclass
@@ -66,6 +67,14 @@ class OutputRouter:
         self._decode_errors = 0
         self._first_frame_at: Optional[float] = None
         self._suppression_logged = False
+        self._public_audio_enabled = True
+        self._public_audio_rejected = False
+        self._public_audio_gate_reason: Optional[str] = None
+        self._public_audio_hold_overflow_logged = False
+        self._public_audio_hold_max_bytes = (
+            int(output_sample_rate * _PUBLIC_AUDIO_HOLD_MAX_MS / 1000)
+            * _BYTES_PER_SAMPLE
+        )
 
     def audio_track_name(self) -> Optional[str]:
         state = self._state
@@ -123,6 +132,9 @@ class OutputRouter:
             "decode_errors": self._decode_errors,
             "output_enabled": self.output_enabled,
             "output_suppressed": not self.output_enabled,
+            "public_audio_enabled": self._public_audio_enabled,
+            "public_audio_rejected": self._public_audio_rejected,
+            "public_audio_gate_reason": self._public_audio_gate_reason,
         }
 
     async def ensure_track(self) -> None:
@@ -221,6 +233,8 @@ class OutputRouter:
             self._log_output_suppressed_once("audio_capture")
             return True
         async with self._op_lock:
+            if self._public_audio_rejected:
+                return True
             state = self._state
             if state is None:
                 await self._ensure_track_locked()
@@ -230,6 +244,9 @@ class OutputRouter:
 
             self._captured_chunks += 1
             state.buffer.extend(pcm_bytes)
+            if not self._public_audio_enabled:
+                self._trim_public_audio_hold_buffer(state)
+                return True
             return await self._publish_buffered_frames(flush=False)
 
     async def flush(self) -> bool:
@@ -238,6 +255,8 @@ class OutputRouter:
             return True
         async with self._op_lock:
             self._flush_count += 1
+            if self._public_audio_rejected or not self._public_audio_enabled:
+                return True
             return await self._publish_buffered_frames(flush=True)
 
     def clear_queue(self) -> None:
@@ -274,6 +293,65 @@ class OutputRouter:
             return
 
         loop.create_task(self._apply_pending_clear())
+
+    def hold_public_output(self, *, reason: str) -> None:
+        if self._public_audio_rejected:
+            return
+        if not self._public_audio_enabled and self._public_audio_gate_reason == reason:
+            return
+        self._public_audio_enabled = False
+        self._public_audio_gate_reason = reason
+        logger.info(
+            "BRSE relay public audio held speaker=%s route=%s->%s reason=%s",
+            self.speaker_id,
+            self.src_lang,
+            self.target_lang,
+            reason,
+        )
+
+    async def release_public_output(self, *, reason: str) -> None:
+        if not self.output_enabled:
+            return
+        async with self._op_lock:
+            if self._public_audio_rejected:
+                return
+            if self._public_audio_enabled:
+                return
+            self._public_audio_enabled = True
+            self._public_audio_gate_reason = None
+            self._public_audio_hold_overflow_logged = False
+            logger.info(
+                "BRSE relay public audio released speaker=%s route=%s->%s reason=%s",
+                self.speaker_id,
+                self.src_lang,
+                self.target_lang,
+                reason,
+            )
+            await self._publish_buffered_frames(flush=False)
+
+    async def reject_public_output(self, *, reason: str) -> None:
+        async with self._op_lock:
+            self._public_audio_rejected = True
+            self._public_audio_enabled = False
+            self._public_audio_gate_reason = reason
+            state = self._state
+            if state is not None:
+                state.buffer.clear()
+            self._pending_clear = True
+            logger.info(
+                "BRSE relay public audio rejected speaker=%s route=%s->%s reason=%s",
+                self.speaker_id,
+                self.src_lang,
+                self.target_lang,
+                reason,
+            )
+        await self._apply_pending_clear()
+
+    def reset_public_output_gate(self) -> None:
+        self._public_audio_enabled = True
+        self._public_audio_rejected = False
+        self._public_audio_gate_reason = None
+        self._public_audio_hold_overflow_logged = False
 
     async def _apply_pending_clear(self) -> None:
         async with self._op_lock:
@@ -336,6 +414,25 @@ class OutputRouter:
                 return False
 
         return True
+
+    def _trim_public_audio_hold_buffer(self, state: _RelayTrackState) -> None:
+        max_bytes = self._public_audio_hold_max_bytes
+        if max_bytes <= 0 or len(state.buffer) <= max_bytes:
+            return
+        overflow = len(state.buffer) - max_bytes
+        del state.buffer[:overflow]
+        if self._public_audio_hold_overflow_logged:
+            return
+        self._public_audio_hold_overflow_logged = True
+        logger.warning(
+            "BRSE relay held audio buffer trimmed speaker=%s route=%s->%s "
+            "overflow_bytes=%d reason=%s",
+            self.speaker_id,
+            self.src_lang,
+            self.target_lang,
+            overflow,
+            self._public_audio_gate_reason,
+        )
 
     async def _capture_frame(self, state: _RelayTrackState, frame_bytes: bytes) -> tuple[bool, str]:
         if self._state is not state or not state.active or not state.track_sid or not self._room_is_connected():

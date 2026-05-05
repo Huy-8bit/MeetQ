@@ -1,5 +1,129 @@
 # Backend Implementation State
 
+## Turn Update: 2026-05-06 BRSE Interpreter-Like Public Relay Policy
+
+- Time: 2026-05-06T00:00:00+07:00
+- Mode: CODE-ONLY
+- Status: implemented
+- Testing deferred: full test suite not run, per instruction
+
+### Objective
+
+Improve BRSE relay runtime behavior so public output behaves like a pragmatic
+meeting interpreter instead of a transcript narrator. Preserve current room,
+LiveKit, Gateway, chat, screen share, expiry, persistence, and silent-listener
+flows while tightening only backend/runtime/AI behavior paths.
+
+### Read Status
+
+- Read required docs:
+  - `docs/backend/README.md`
+  - `docs/backend/INTERPRETER_DESIGN.md`
+  - `docs/backend/IMPLEMENTATION_STATE.md`
+  - `docs/backend/API_CONTRACT.md`
+- Read required runtime files:
+  - `BE/server/service/brain_runtime/room_manager.py`
+  - `BE/server/service/media/output_router.py`
+  - `BE/server/service/media/livekit_runtime.py`
+  - `BE/server/service/media/audio_input.py`
+  - `BE/server/brain/realtime/interpreter_client.py`
+  - `BE/server/brain/realtime/session_config.py`
+  - `BE/server/brain/realtime/source_policy.py`
+  - `BE/server/brain/prompts/language.py`
+- Related files read:
+  - `BE/server/service/brain_runtime/events.py`
+  - `BE/server/service/gateway/event_consumer.py`
+
+### Initial Trace
+
+- Source transcript capture is already separated from relay publication at the
+  room manager / gateway boundary.
+- Current relay approval is still eager once a source final passes basic
+  transcript validation.
+- Existing overlap summary fallback feeds speaker-labelled snippets into the
+  model, which can encourage narrator-style output.
+- Current prompt forbids labels, but it does not strongly teach public
+  usefulness, timing, or interpreter silence as a valid action.
+
+### Root Cause / Hypothesis
+
+- BRSE was source-grounded, but the relay path treated most valid transcript
+  finals as public relay candidates. That made the runtime too eager in normal
+  meeting flow.
+- The model instructions focused on translation fidelity and anti-hallucination,
+  but not strongly enough on interpreter pragmatics: when to stay silent, when
+  not to interrupt, and how to avoid narrator-style openings.
+- Overlap fallback passed speaker-labelled snippets into the summary request,
+  which increased the chance of output that sounds like "A said / B said" rather
+  than a natural relay.
+- Public audio was streamed as soon as response audio arrived, so prompt-only
+  protection was weak against narrator-style response openings.
+
+### Runtime / Prompt Changes
+
+- Added explicit interpreter mindset instructions:
+  - BRSE is not a narrator, meeting-minute bot, MC, or transcript reader.
+  - Output is direct relay content only, not "who said what" commentary.
+  - Silence is valid when content is incomplete, low-value, obvious, or poorly
+    timed.
+- Added pragmatic public relay policy on top of existing source validation:
+  - relay only when there is a target-language audience.
+  - suppress tiny acknowledgements, filler-like turns, short low-signal turns,
+    incomplete fragments, stale queued turns, and chaotic literal relays.
+  - preserve source transcript capture even when public relay is suppressed.
+- Added output text/audio gate:
+  - relay audio is briefly held until initial relay text passes the public text
+    gate.
+  - narrator-style openings such as name/pronoun + "said/is saying/discussing"
+    are rejected and audio buffer is cleared before public playback.
+  - held audio is released once the opening is safe, preserving single-speaker
+    happy path with minimal added delay.
+- Timing updated:
+  - server VAD silence duration moved from 1000ms to 1150ms to reduce early
+    turn cuts.
+  - stale relay starts are suppressed after a short freshness window.
+- Overlap behavior updated:
+  - normal literal relay from secondary overlapped speakers is suppressed unless
+    the runtime enters summary fallback.
+  - chaos fallback prompt no longer includes participant names and explicitly
+    asks for a short interpreter-style relay, not speaker-by-speaker narration.
+- Anti-hallucination preserved:
+  - relay and summary still originate only from completed, validated source
+    transcripts.
+  - prompt still forbids invented facts, decisions, owners, deadlines, causes,
+    risks, and next steps.
+
+### Observability
+
+- Logs now distinguish:
+  - public relay approved
+  - public relay suppressed with reason and signal
+  - stale public relay suppressed
+  - relay output held for more opening context
+  - narrator-style relay rejected
+  - public audio held/released/rejected
+  - overlap summary fallback selected
+
+### Files Modified
+
+- `BE/server/brain/realtime/source_policy.py`
+- `BE/server/brain/realtime/session_config.py`
+- `BE/server/brain/realtime/interpreter_client.py`
+- `BE/server/service/brain_runtime/room_manager.py`
+- `BE/server/service/media/output_router.py`
+- `docs/backend/IMPLEMENTATION_STATE.md`
+
+### Verification
+
+- Full test suite not run, per CODE-ONLY instruction.
+- New tests not added, per instruction.
+- Existing tests not modified.
+- Lightweight checks run:
+  - `PYTHONPATH=BE python -m py_compile BE/server/brain/realtime/source_policy.py BE/server/brain/realtime/session_config.py BE/server/brain/realtime/interpreter_client.py BE/server/service/media/output_router.py BE/server/service/brain_runtime/room_manager.py`
+  - `git diff --check -- BE/server/brain/realtime/source_policy.py BE/server/brain/realtime/session_config.py BE/server/brain/realtime/interpreter_client.py BE/server/service/media/output_router.py BE/server/service/brain_runtime/room_manager.py docs/backend/IMPLEMENTATION_STATE.md`
+
+---
+
 ## Turn Update: 2026-05-05 BRSE Silent Listener Mode
 
 - Time: 2026-05-05T00:00:00+07:00

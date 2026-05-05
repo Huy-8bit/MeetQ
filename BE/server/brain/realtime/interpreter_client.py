@@ -77,6 +77,7 @@ class InterpreterRealtimeClient(RealtimeClient):
         self.on_error: Callable[[Dict[str, Any]], None] = lambda err: None
         self.on_response_done: Callable[[Optional[str]], None] = lambda source_id: None
         self.can_start_relay_response: Callable[[str], bool] = lambda _relay_source_id: True
+        self.on_relay_response_starting: Callable[[str], None] = lambda _relay_source_id: None
 
     def _current_instructions(self) -> str:
         effective_src = self.src_lang
@@ -675,6 +676,7 @@ class InterpreterRealtimeClient(RealtimeClient):
         if not source_text:
             return
 
+        self.on_relay_response_starting(relay_source_id)
         self._pending_response_source_id = relay_source_id
         self._active_response_source_id = None
         self._suppress_response_output = False
@@ -687,12 +689,15 @@ class InterpreterRealtimeClient(RealtimeClient):
                     meeting_languages=self.meeting_languages,
                 )
                 + " Summarize the validated overlap snippets below only. "
-                "Do not translate or summarize anything outside these snippets."
+                "Do not translate or summarize anything outside these snippets. "
+                "Do not use speaker labels, participant names, or narrator wording."
             )
         else:
             instructions = (
                 self._current_instructions()
                 + " Relay the following validated source transcript only. "
+                "Produce the direct interpreted message only, as if speaking for the original speaker. "
+                "Do not say or imply that a person said, is saying, mentioned, or discussed something. "
                 "Do not use prior audio or conversation context. "
                 "If this text is not sufficient for a faithful relay, output nothing."
             )

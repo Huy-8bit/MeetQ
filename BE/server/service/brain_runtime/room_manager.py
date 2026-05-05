@@ -20,7 +20,10 @@ from server.brain.realtime.session_config import (
     INTERPRETER_INPUT_WARMUP_CHUNKS,
 )
 from server.brain.realtime.source_policy import (
+    assess_public_relay_readiness,
     assess_source_transcript,
+    relay_text_has_narrator_opening,
+    relay_text_needs_more_opening_context,
     source_state_is_valid_for_output,
 )
 from server.service.media.output_router import OutputRouter
@@ -51,6 +54,9 @@ _CHAOS_MIN_DISTINCT_SPEAKERS = 2
 _CHAOS_PENDING_RELAY_THRESHOLD = 2
 _SUMMARY_MAX_SOURCE_CHARS = 1400
 _RELAY_STATE_CLEANUP_DELAY_SECONDS = 1.0
+_PUBLIC_TEXT_GATE_REASON = "pending_public_text_gate"
+_PUBLIC_RELAY_MAX_START_DELAY_SECONDS = 8.0
+_PUBLIC_SUMMARY_MAX_START_DELAY_SECONDS = 10.0
 
 
 @dataclass(frozen=True)
@@ -815,7 +821,7 @@ class RoomInterpreterManager:
                 status=_SpeakerLifecycle.BLOCKED_DUE_TO_OVERLAP,
                 message=(
                     "BRSE relay is focused on another active speaker; "
-                    "this overlapping speaker remains audible to the runtime and may be queued or summarized."
+                    "this overlapping turn may be suppressed or summarized only if it becomes useful."
                 ),
             )
         )
@@ -1090,6 +1096,161 @@ class RoomInterpreterManager:
             if now - float(item.get("recorded_at", 0.0)) <= _CHAOS_RECENT_WINDOW_SECONDS
         ]
 
+    def _apply_public_relay_policy(
+        self,
+        *,
+        speaker_id: str,
+        state: Dict[str, Any],
+    ) -> None:
+        audience_count = len(self.speaker_audiences.get(speaker_id, frozenset()))
+        relay_style = str(state.get("relay_style") or "normal")
+        chaos = self._chaos_detected()
+        approved, reason, signal = assess_public_relay_readiness(
+            state.get("relay_source_text") or state.get("source_text") or "",
+            duration_ms=state.get("speech_duration_ms"),
+            relay_style=relay_style,
+            overlap_blocked=bool(state.get("source_blocked_for_overlap")),
+            audience_count=audience_count,
+            chaos=chaos,
+        )
+        state["public_relay_approved"] = approved
+        state["public_relay_reason"] = reason
+        state["public_relay_signal"] = signal
+        if approved:
+            logger.info(
+                "BRSE public relay approved room=%s speaker=%s utterance=%s "
+                "reason=%s relay_style=%s audience=%d chaos=%s",
+                self.room_id,
+                speaker_id,
+                state.get("utterance_id"),
+                reason,
+                relay_style,
+                audience_count,
+                chaos,
+            )
+            return
+
+        logger.info(
+            "BRSE public relay suppressed room=%s speaker=%s utterance=%s "
+            "reason=%s relay_style=%s audience=%d chaos=%s signal=%s",
+            self.room_id,
+            speaker_id,
+            state.get("utterance_id"),
+            reason,
+            relay_style,
+            audience_count,
+            chaos,
+            signal,
+        )
+
+    def _public_relay_is_approved(self, *, speaker_id: str, state: Dict[str, Any], kind: str) -> bool:
+        if state.get("public_relay_approved"):
+            return True
+        logger.info(
+            "Suppressing BRSE %s by public relay policy room=%s speaker=%s utterance=%s reason=%s",
+            kind,
+            self.room_id,
+            speaker_id,
+            state.get("utterance_id"),
+            state.get("public_relay_reason") or "public_relay_not_approved",
+        )
+        return False
+
+    def _public_relay_is_fresh(self, *, speaker_id: str, state: Dict[str, Any], kind: str) -> bool:
+        started_at = state.get("started_at")
+        if not isinstance(started_at, (int, float)):
+            return True
+        max_age = (
+            _PUBLIC_SUMMARY_MAX_START_DELAY_SECONDS
+            if state.get("relay_style") == "summary"
+            else _PUBLIC_RELAY_MAX_START_DELAY_SECONDS
+        )
+        age_seconds = max(0.0, time.monotonic() - float(started_at))
+        if age_seconds <= max_age:
+            return True
+        state["public_relay_approved"] = False
+        state["public_relay_reason"] = "stale_public_relay"
+        logger.info(
+            "BRSE public relay suppressed as stale room=%s speaker=%s utterance=%s "
+            "kind=%s age_ms=%d max_age_ms=%d relay_style=%s",
+            self.room_id,
+            speaker_id,
+            state.get("utterance_id"),
+            kind,
+            int(age_seconds * 1000),
+            int(max_age * 1000),
+            state.get("relay_style", "normal"),
+        )
+        return False
+
+    def _prepare_public_output_gate(self, *, router: OutputRouter, state: Dict[str, Any]) -> None:
+        state["public_output_ready"] = False
+        state["public_output_rejected"] = False
+        state["public_output_gate_reason"] = _PUBLIC_TEXT_GATE_REASON
+        state["public_output_gate_logged"] = False
+        router.reset_public_output_gate()
+        router.hold_public_output(reason=_PUBLIC_TEXT_GATE_REASON)
+
+    def _apply_public_output_text_gate(
+        self,
+        *,
+        speaker_id: str,
+        state: Dict[str, Any],
+        router: OutputRouter,
+        final: bool,
+    ) -> bool:
+        if state.get("public_output_rejected"):
+            return False
+        text = str(state.get("brse_text") or "")
+        if relay_text_has_narrator_opening(
+            text,
+            speaker_name=self._speaker_name(speaker_id),
+        ):
+            state["public_output_rejected"] = True
+            state["public_output_ready"] = False
+            state["public_output_gate_reason"] = "narrator_style_output"
+            state["brse_text"] = ""
+            logger.warning(
+                "BRSE narrator-style relay rejected room=%s speaker=%s utterance=%s "
+                "relay_style=%s text=%r",
+                self.room_id,
+                speaker_id,
+                state.get("utterance_id"),
+                state.get("relay_style", "normal"),
+                text,
+            )
+            asyncio.create_task(router.reject_public_output(reason="narrator_style_output"))
+            return False
+
+        if not final and relay_text_needs_more_opening_context(
+            text,
+            speaker_name=self._speaker_name(speaker_id),
+        ):
+            if not state.get("public_output_gate_logged"):
+                state["public_output_gate_logged"] = True
+                logger.info(
+                    "BRSE relay output held for more opening context room=%s speaker=%s utterance=%s text=%r",
+                    self.room_id,
+                    speaker_id,
+                    state.get("utterance_id"),
+                    text,
+                )
+            return False
+
+        if not state.get("public_output_ready"):
+            state["public_output_ready"] = True
+            state["public_output_gate_reason"] = None
+            asyncio.create_task(router.release_public_output(reason="text_gate_passed"))
+            logger.info(
+                "BRSE relay output text gate passed room=%s speaker=%s utterance=%s chars=%d final=%s",
+                self.room_id,
+                speaker_id,
+                state.get("utterance_id"),
+                len(text.strip()),
+                final,
+            )
+        return True
+
     def _build_summary_plan_if_chaotic(
         self,
         *,
@@ -1124,10 +1285,7 @@ class RoomInterpreterManager:
             text = str(turn.get("text") or "").strip()
             if not text:
                 continue
-            line = (
-                f"- {turn.get('speaker_name') or turn.get('speaker_id')} "
-                f"({turn.get('src_lang')}): {text}"
-            )
+            line = f"- [{turn.get('src_lang')}] {text}"
             if len(line) > remaining_chars:
                 line = line[: max(0, remaining_chars - 3)].rstrip() + "..."
             lines.append(line)
@@ -1138,8 +1296,10 @@ class RoomInterpreterManager:
             return None
 
         source_text = (
-            "The meeting audio overlapped. Summarize only these validated source snippets "
-            f"for {target_lang} listeners:\n"
+            "Create one short interpreter-style relay for the target listeners from only these "
+            "validated chronological snippets. Do not mention participant names, do not list "
+            "speaker-by-speaker, and do not narrate the overlap unless unavoidable.\n"
+            f"Target language: {target_lang}\n"
             + "\n".join(lines)
         )
         logger.warning(
@@ -1174,6 +1334,18 @@ class RoomInterpreterManager:
         if state.get("speaker_id") != speaker_id or state.get("generation") != generation:
             return False
         if not self._source_state_is_valid_for_output(state):
+            return False
+        if not self._public_relay_is_approved(
+            speaker_id=speaker_id,
+            state=state,
+            kind="queued_relay_start",
+        ):
+            return False
+        if not self._public_relay_is_fresh(
+            speaker_id=speaker_id,
+            state=state,
+            kind="queued_relay_start",
+        ):
             return False
         focus_speaker_id = self.relay_focus_speaker_id
         if focus_speaker_id is None:
@@ -1384,10 +1556,14 @@ class RoomInterpreterManager:
                 else:
                     state["relay_style"] = "normal"
                     state["relay_source_text"] = normalized_text
+                self._apply_public_relay_policy(
+                    speaker_id=speaker_id,
+                    state=state,
+                )
                 logger.info(
                     "BRSE source transcript completed room=%s speaker=%s utterance=%s "
                     "route=%s->%s chars=%d tokens=%s duration_ms=%s generation=%d "
-                    "relay_style=%s blocked=%s pending_relays=%d",
+                    "relay_style=%s blocked=%s public_relay=%s public_reason=%s pending_relays=%d",
                     self.room_id,
                     speaker_id,
                     state["utterance_id"],
@@ -1399,6 +1575,8 @@ class RoomInterpreterManager:
                     generation,
                     state.get("relay_style", "normal"),
                     state.get("source_blocked_for_overlap"),
+                    state.get("public_relay_approved"),
+                    state.get("public_relay_reason"),
                     self._pending_relay_count(),
                 )
                 if self.silent_summary_mode:
@@ -1462,6 +1640,20 @@ class RoomInterpreterManager:
                     len(state.get("source_text") or text or ""),
                 )
                 return None
+            if not self._public_relay_is_approved(
+                speaker_id=speaker_id,
+                state=state,
+                kind="source_approval",
+            ):
+                router.clear_queue()
+                return None
+            if not self._public_relay_is_fresh(
+                speaker_id=speaker_id,
+                state=state,
+                kind="source_approval",
+            ):
+                router.clear_queue()
+                return None
             if speaker_id in self.overlap_blocked_speakers and state.get("relay_style") != "summary":
                 logger.info(
                     "BRSE relay source queued behind active focus room=%s speaker=%s utterance=%s "
@@ -1513,6 +1705,13 @@ class RoomInterpreterManager:
             if state is None:
                 return
             state["brse_text"] = f"{state['brse_text']}{delta}"
+            if not self._apply_public_output_text_gate(
+                speaker_id=speaker_id,
+                state=state,
+                router=router,
+                final=False,
+            ):
+                return
             asyncio.create_task(
                 self._publish_partial(
                     speaker_id,
@@ -1527,7 +1726,12 @@ class RoomInterpreterManager:
                 return
             final_text = text or state["brse_text"].strip()
             state["brse_text"] = final_text
-            if final_text:
+            if final_text and self._apply_public_output_text_gate(
+                speaker_id=speaker_id,
+                state=state,
+                router=router,
+                final=True,
+            ):
                 asyncio.create_task(
                     self._publish_final(
                         speaker_id,
@@ -1568,6 +1772,10 @@ class RoomInterpreterManager:
         def on_response_done(relay_source_id: Optional[str]) -> None:
             if relay_source_id is None:
                 return
+            state = self.transcript_states.get(relay_source_id)
+            if state is not None and not state.get("public_output_ready"):
+                reason = str(state.get("public_output_gate_reason") or "relay_completed_without_public_text")
+                asyncio.create_task(router.reject_public_output(reason=reason))
             asyncio.create_task(
                 self._cleanup_relay_state_after_response(
                     speaker_id=speaker_id,
@@ -1575,6 +1783,28 @@ class RoomInterpreterManager:
                     generation=generation,
                 )
             )
+
+        def on_relay_response_starting(relay_source_id: str) -> None:
+            if not is_current_callback():
+                return
+            state = self.transcript_states.get(relay_source_id)
+            if state is None:
+                return
+            if not self._public_relay_is_approved(
+                speaker_id=speaker_id,
+                state=state,
+                kind="response_start",
+            ):
+                asyncio.create_task(router.reject_public_output(reason="public_relay_not_approved"))
+                return
+            if not self._public_relay_is_fresh(
+                speaker_id=speaker_id,
+                state=state,
+                kind="response_start",
+            ):
+                asyncio.create_task(router.reject_public_output(reason="stale_public_relay"))
+                return
+            self._prepare_public_output_gate(router=router, state=state)
 
         def on_speech_started() -> None:
             if not is_current_callback():
@@ -1677,6 +1907,7 @@ class RoomInterpreterManager:
         client.on_speech_stopped = on_speech_stopped
         client.on_error = on_error
         client.on_response_done = on_response_done
+        client.on_relay_response_starting = on_relay_response_starting
         client.can_start_relay_response = (
             lambda relay_source_id: self._relay_source_can_start(
                 speaker_id=speaker_id,
@@ -1821,6 +2052,31 @@ class RoomInterpreterManager:
                 state=state,
                 kind=kind,
                 reason=str(state.get("source_rejected_reason") or "source_not_validated"),
+            )
+        if not state.get("public_relay_approved"):
+            return self._log_source_gate_drop(
+                speaker_id=speaker_id,
+                state=state,
+                kind=kind,
+                reason=str(state.get("public_relay_reason") or "public_relay_not_approved"),
+            )
+        if not self._public_relay_is_fresh(
+            speaker_id=speaker_id,
+            state=state,
+            kind=kind,
+        ):
+            return self._log_source_gate_drop(
+                speaker_id=speaker_id,
+                state=state,
+                kind=kind,
+                reason=str(state.get("public_relay_reason") or "stale_public_relay"),
+            )
+        if state.get("public_output_rejected"):
+            return self._log_source_gate_drop(
+                speaker_id=speaker_id,
+                state=state,
+                kind=kind,
+                reason=str(state.get("public_output_gate_reason") or "public_output_rejected"),
             )
         if response_source_id != state.get("utterance_id"):
             return self._log_source_gate_drop(
@@ -2149,6 +2405,13 @@ class RoomInterpreterManager:
             "target_lang": target_lang,
             "generation": generation,
             "relay_style": "normal",
+            "public_relay_approved": False,
+            "public_relay_reason": None,
+            "public_relay_signal": {},
+            "public_output_ready": False,
+            "public_output_rejected": False,
+            "public_output_gate_reason": None,
+            "public_output_gate_logged": False,
         }
         self.transcript_state[speaker_id] = state
         self.transcript_states[utterance_id] = state
