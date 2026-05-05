@@ -7,6 +7,11 @@ from server.brain.prompts.language import PLATFORM_SUPPORTED_LANGS
 
 MEETING_MODE_DIRECT_TRANSLATION = "direct_translation"
 MEETING_MODE_BRSE_RELAY = "brse_relay"
+MEETING_MODE_BRSE_SILENT_SUMMARY = "brse_silent_summary"
+
+BRSE_MODE_RELAY = "relay"
+BRSE_MODE_SILENT_SUMMARY = "silent_summary"
+DEFAULT_BRSE_MODE = BRSE_MODE_RELAY
 
 INTERPRETER_MODE_PER_LISTENER = "per_listener"
 INTERPRETER_MODE_BRSE_PARTICIPANT = "brse_participant"
@@ -32,12 +37,31 @@ def build_brse_livekit_identity(room_id: str) -> str:
     return f"{BRSE_LIVEKIT_IDENTITY_PREFIX}::{room_id}"
 
 
+def normalize_brse_mode(value: Optional[str]) -> str:
+    if value == BRSE_MODE_SILENT_SUMMARY:
+        return BRSE_MODE_SILENT_SUMMARY
+    return BRSE_MODE_RELAY
+
+
+def meeting_mode_for_brse_mode(brse_mode: Optional[str]) -> str:
+    if normalize_brse_mode(brse_mode) == BRSE_MODE_SILENT_SUMMARY:
+        return MEETING_MODE_BRSE_SILENT_SUMMARY
+    return MEETING_MODE_BRSE_RELAY
+
+
+def brse_output_enabled(brse_enabled: bool, brse_mode: Optional[str]) -> bool:
+    return bool(brse_enabled and normalize_brse_mode(brse_mode) == BRSE_MODE_RELAY)
+
+
 def build_brse_virtual_participant(
     room_id: str,
     joined_at: Optional[str],
     meeting_languages: Optional[Iterable[str]] = None,
+    brse_mode: Optional[str] = DEFAULT_BRSE_MODE,
 ) -> Dict[str, Any]:
     pair = list(meeting_languages or [])[:2]
+    normalized_mode = normalize_brse_mode(brse_mode)
+    output_enabled = normalized_mode == BRSE_MODE_RELAY
     return {
         "participant_id": BRSE_PARTICIPANT_ID,
         "display_name": BRSE_PARTICIPANT_DISPLAY_NAME,
@@ -48,12 +72,14 @@ def build_brse_virtual_participant(
         "is_virtual": True,
         "livekit_identity": build_brse_livekit_identity(room_id),
         "metadata": {
-            "meeting_mode": MEETING_MODE_BRSE_RELAY,
+            "meeting_mode": meeting_mode_for_brse_mode(normalized_mode),
+            "brse_mode": normalized_mode,
             "interpreter_mode": INTERPRETER_MODE_BRSE_PARTICIPANT,
             "meeting_languages": pair,
-            "publishes_audio": True,
+            "publishes_audio": output_enabled,
             "publishes_video": False,
             "subscribes_human_audio": True,
+            "summary_ready": normalized_mode == BRSE_MODE_SILENT_SUMMARY,
         },
     }
 
@@ -68,18 +94,27 @@ def build_relay_language_map(meeting_languages: Iterable[str]) -> Dict[str, str]
     }
 
 
-def build_brse_audio_routing(meeting_languages: Iterable[str]) -> Dict[str, Any]:
+def build_brse_audio_routing(
+    meeting_languages: Iterable[str],
+    brse_mode: Optional[str] = DEFAULT_BRSE_MODE,
+) -> Dict[str, Any]:
     relay_map = build_relay_language_map(meeting_languages)
+    normalized_mode = normalize_brse_mode(brse_mode)
+    output_enabled = normalized_mode == BRSE_MODE_RELAY
     return {
-        "model": "brse_participant_audio",
-        "cross_language_remote_audio": "human_original_plus_brse",
+        "model": "brse_participant_audio" if output_enabled else "brse_silent_listener",
+        "cross_language_remote_audio": "human_original_plus_brse" if output_enabled else "human_original_only",
         "canonical_remote_audio": "human_original_track",
         "same_language_policy": "human_passthrough",
-        "ai_relay_audio": "virtual_participant_track",
+        "ai_relay_audio": "virtual_participant_track" if output_enabled else "disabled",
         "interpreter_mode": INTERPRETER_MODE_BRSE_PARTICIPANT,
         "bridge_strategy": "speaker_language_map",
         "relay_language_map": relay_map,
         "virtual_participant_id": BRSE_PARTICIPANT_ID,
+        "brse_mode": normalized_mode,
+        "ai_audio_output_enabled": output_enabled,
+        "source_transcript_capture": True,
+        "relay_transcript_policy": "publish_realtime" if output_enabled else "source_only_internal",
     }
 
 

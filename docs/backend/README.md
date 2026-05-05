@@ -17,11 +17,13 @@ Backend của MeetQ phục vụ một meeting room realtime có các capability 
 - room websocket để đồng bộ state realtime
 - phát hành token LiveKit cho browser participant
 - BRSE / AI relay participant để nghe và relay nội dung đa ngôn ngữ
+- BRSE silent listener mode để nghe/capture transcript mà không phát audio relay
 - transcript / relay history
 - chat room với tùy chọn dịch hoặc không dịch
 - screen share
 - room expiry 30 phút
 - MongoDB historical persistence cho room / participant / conversation archive
+- post-meeting summary dựa trên archive thật của room
 - Telegram notification khi tạo room
 - Telegram notification khi user join room
 
@@ -168,6 +170,7 @@ Khối này chịu trách nhiệm:
 - lắng nghe control events từ Gateway qua Redis
 - spawn / stop room-level brain managers
 - gate runtime theo `brse_enabled`
+- chọn BRSE runtime behavior theo `brse_mode`: `relay` hoặc `silent_summary`
 - điều phối room-level AI lifecycle
 - publish transcript / relay / status events ngược về Gateway
 
@@ -252,6 +255,7 @@ Gateway ghi side effect vào MongoDB để lưu:
 - `rooms`: metadata room, languages, BRSE mode, lifecycle timestamps, duration, participant totals.
 - `room_participants`: participant summaries và session join/leave history.
 - `room_messages`: chat messages, source transcripts, translated transcripts, và BRSE relay lines.
+- `meeting_summaries`: post-meeting summary status và generated summary gắn với `room_id`.
 
 Nếu MongoDB timeout hoặc lỗi tạm thời:
 
@@ -273,6 +277,42 @@ MongoDB phải chạy với authentication:
   `MONGODB_PASSWORD`, và `MONGODB_AUTH_SOURCE`.
 - Với volume Mongo cũ từng chạy no-auth, cần migrate/create user thủ công hoặc
   recreate volume cho local dev trước khi bật stack auth.
+
+### 4.2 Post-meeting summary
+
+Post-meeting summary là feature additive chạy sau khi meeting đã kết thúc.
+
+Trigger hiện tại:
+
+- room chuyển sang `empty` khi participant cuối rời room
+- room được archival là `expired` ở scheduled expiry / expired join / expired websocket path
+
+Flow:
+
+1. Gateway hoàn tất Redis room lifecycle và schedule Mongo side effect.
+2. Mongo archive cập nhật terminal lifecycle trước.
+3. Summary service tạo record `pending` idempotent theo `room_id`.
+4. Summary service đọc `rooms`, `room_participants`, và chronological
+   `room_messages` từ MongoDB.
+5. `server.brain.meeting_summary` gọi model text-only để tạo grounded summary.
+6. Kết quả được lưu vào `meeting_summaries` và status rút gọn được gắn lại vào
+   `rooms.meeting_summary`.
+
+Grounding policy:
+
+- source transcript là evidence chính
+- trong `brse_mode=silent_summary`, source transcript vẫn được archive làm
+  evidence cho summary dù relay audio/text realtime bị suppress
+- relay / translated lines chỉ hỗ trợ hiểu nội dung đa ngôn ngữ
+- chat được đưa vào nếu có trong archive
+- model không được thêm quyết định, owner, deadline, hoặc next step nếu source
+  không nói rõ
+- nếu dữ liệu quá ít, summary được mark `skipped` thay vì bịa
+
+Language strategy:
+
+- summary dùng canonical language `MEETING_SUMMARY_LANGUAGE`, mặc định `en`
+- backend hiện chưa có host/admin language preference nên không tự đổi language theo room
 
 ## 5. LiveKit đóng vai trò gì
 

@@ -126,9 +126,14 @@ class InterpreterDaemon:
             logger.info("Room %s is expired; not spawning interpreter manager", room_id)
             return None
 
-        logger.info("Spawning interpreter manager for room %s", room_id)
+        brse_mode = getattr(snapshot.room, "brse_mode", "relay")
+        logger.info(
+            "Spawning interpreter manager for room %s brse_mode=%s",
+            room_id,
+            brse_mode,
+        )
         publisher = RedisEventPublisher(self.redis, room_id, self.interpreter_events_channel)
-        manager = RoomInterpreterManager(room_id, self.settings, publisher)
+        manager = RoomInterpreterManager(room_id, self.settings, publisher, brse_mode=brse_mode)
         self.managers[room_id] = manager
 
         try:

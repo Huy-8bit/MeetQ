@@ -26,10 +26,14 @@ from server.brain.realtime.source_policy import (
 from server.service.media.output_router import OutputRouter
 from server.meeting_modes import (
     BRSE_PARTICIPANT_ID,
+    BRSE_MODE_SILENT_SUMMARY,
+    DEFAULT_BRSE_MODE,
     DEFAULT_ROOM_MEETING_LANGUAGES,
     SUPPORTED_MEETING_LANGUAGES,
     build_relay_language_map,
+    brse_output_enabled,
     is_active_human_participant,
+    normalize_brse_mode,
     relay_target_language,
 )
 
@@ -85,16 +89,27 @@ class _SpeakerArbitrationState:
 
 
 class RoomInterpreterManager:
-    def __init__(self, room_id: str, settings: Settings, publisher: RedisEventPublisher):
+    def __init__(
+        self,
+        room_id: str,
+        settings: Settings,
+        publisher: RedisEventPublisher,
+        *,
+        brse_mode: str = DEFAULT_BRSE_MODE,
+    ):
         self.room_id = room_id
         self.settings = settings
         self.publisher = publisher
+        self.brse_mode = normalize_brse_mode(brse_mode)
+        self.relay_output_enabled = brse_output_enabled(True, self.brse_mode)
+        self.silent_summary_mode = self.brse_mode == BRSE_MODE_SILENT_SUMMARY
         self.runtime = LiveKitRuntime(
             room_id=room_id,
             settings=settings,
             on_media_connected=self._on_media_connected,
             on_media_disconnected=self._on_media_disconnected,
             on_audio_stream=self._on_audio_stream,
+            output_audio_enabled=self.relay_output_enabled,
         )
         self.participants: Dict[str, Dict[str, Any]] = {}
         self.active_streams: Dict[str, rtc.AudioStream] = {}
@@ -125,6 +140,12 @@ class RoomInterpreterManager:
         self._closed = False
 
     async def start(self) -> None:
+        logger.info(
+            "Starting BRSE room runtime room=%s brse_mode=%s relay_output_enabled=%s",
+            self.room_id,
+            self.brse_mode,
+            self.relay_output_enabled,
+        )
         await self.runtime.connect()
 
     async def stop(self) -> None:
@@ -389,6 +410,7 @@ class RoomInterpreterManager:
             target_lang=plan.tgt_lang,
             output_sample_rate=getattr(self.settings, "realtime_output_sample_rate", 24000),
             on_track_failure=on_track_failure,
+            output_enabled=self.relay_output_enabled,
         )
         self.routers[speaker_id] = router
         await router.ensure_track()
@@ -400,6 +422,8 @@ class RoomInterpreterManager:
             tgt_lang=plan.tgt_lang,
             meeting_languages=list(self.meeting_languages),
             audio_input=audio_input,
+            request_audio_output=self.relay_output_enabled,
+            silent_listener_mode=self.silent_summary_mode,
         )
         generation = self._next_speaker_generation(speaker_id)
         self.speaker_sources[speaker_id] = plan.src_lang
@@ -477,6 +501,7 @@ class RoomInterpreterManager:
             target_lang=plan.tgt_lang,
             output_sample_rate=getattr(self.settings, "realtime_output_sample_rate", 24000),
             on_track_failure=on_track_failure,
+            output_enabled=self.relay_output_enabled,
         )
         self.routers[speaker_id] = router
         await router.ensure_track()
@@ -494,6 +519,9 @@ class RoomInterpreterManager:
             router=router,
         )
         client.meeting_languages = list(self.meeting_languages)
+        client.request_audio_output = self.relay_output_enabled
+        if hasattr(client, "silent_listener_mode"):
+            client.silent_listener_mode = self.silent_summary_mode
         await client.update_routing(plan.src_lang, plan.tgt_lang)
 
     async def _publish_route_failure(
@@ -1138,6 +1166,8 @@ class RoomInterpreterManager:
         generation: int,
         relay_source_id: str,
     ) -> bool:
+        if not self.relay_output_enabled:
+            return False
         state = self.transcript_states.get(relay_source_id)
         if state is None:
             return False
@@ -1157,7 +1187,7 @@ class RoomInterpreterManager:
         return focus_speaker_id == speaker_id
 
     async def _try_start_pending_relays(self, *, reason: str) -> None:
-        if self._closed or self.relay_focus_speaker_id is not None:
+        if self._closed or not self.relay_output_enabled or self.relay_focus_speaker_id is not None:
             return
         for speaker_id, client in list(self.clients.items()):
             starter = getattr(client, "try_start_pending_relay", None)
@@ -1337,16 +1367,20 @@ class RoomInterpreterManager:
                     speaker_id=speaker_id,
                     state=state,
                 )
-                summary_plan = self._build_summary_plan_if_chaotic(
-                    speaker_id=speaker_id,
-                    target_lang=target_lang,
-                    current_state=state,
-                )
-                if summary_plan is not None:
-                    state["relay_style"] = "summary"
-                    state["relay_source_text"] = summary_plan["source_text"]
-                    state["summary_item_count"] = summary_plan["item_count"]
-                    state["summary_speaker_ids"] = summary_plan["speaker_ids"]
+                if self.relay_output_enabled:
+                    summary_plan = self._build_summary_plan_if_chaotic(
+                        speaker_id=speaker_id,
+                        target_lang=target_lang,
+                        current_state=state,
+                    )
+                    if summary_plan is not None:
+                        state["relay_style"] = "summary"
+                        state["relay_source_text"] = summary_plan["source_text"]
+                        state["summary_item_count"] = summary_plan["item_count"]
+                        state["summary_speaker_ids"] = summary_plan["speaker_ids"]
+                    else:
+                        state["relay_style"] = "normal"
+                        state["relay_source_text"] = normalized_text
                 else:
                     state["relay_style"] = "normal"
                     state["relay_source_text"] = normalized_text
@@ -1367,6 +1401,15 @@ class RoomInterpreterManager:
                     state.get("source_blocked_for_overlap"),
                     self._pending_relay_count(),
                 )
+                if self.silent_summary_mode:
+                    logger.info(
+                        "BRSE silent listener source captured room=%s speaker=%s utterance=%s "
+                        "chars=%d summary_ready=True relay_output_enabled=False",
+                        self.room_id,
+                        speaker_id,
+                        state["utterance_id"],
+                        len(normalized_text),
+                    )
                 asyncio.create_task(
                     self._publish_source_final(
                         speaker_id,
@@ -1406,6 +1449,17 @@ class RoomInterpreterManager:
                     item_id,
                     state_item_id,
                     generation,
+                )
+                return None
+            if not self.relay_output_enabled:
+                logger.info(
+                    "BRSE relay response suppressed by mode room=%s speaker=%s utterance=%s "
+                    "brse_mode=%s source_chars=%d",
+                    self.room_id,
+                    speaker_id,
+                    state.get("utterance_id"),
+                    self.brse_mode,
+                    len(state.get("source_text") or text or ""),
                 )
                 return None
             if speaker_id in self.overlap_blocked_speakers and state.get("relay_style") != "summary":
@@ -1640,6 +1694,14 @@ class RoomInterpreterManager:
         router: OutputRouter,
         encoded: str,
     ) -> None:
+        if not self.relay_output_enabled:
+            logger.debug(
+                "Suppressing BRSE audio delta by silent listener mode room=%s speaker=%s generation=%d",
+                self.room_id,
+                speaker_id,
+                generation,
+            )
+            return
         if not self._runtime_generation_matches(speaker_id, generation, router):
             return
         state = self._transcript_state_for_publish(speaker_id, utterance_id, generation)
@@ -1663,6 +1725,14 @@ class RoomInterpreterManager:
         generation: int,
         router: OutputRouter,
     ) -> None:
+        if not self.relay_output_enabled:
+            logger.debug(
+                "Suppressing BRSE audio flush by silent listener mode room=%s speaker=%s generation=%d",
+                self.room_id,
+                speaker_id,
+                generation,
+            )
+            return
         if not self._runtime_generation_matches(speaker_id, generation, router):
             return
         state = self._transcript_state_for_publish(speaker_id, utterance_id, generation)
@@ -1876,6 +1946,8 @@ class RoomInterpreterManager:
         utterance_id: str,
         generation: int,
     ) -> None:
+        if not self.relay_output_enabled:
+            return
         state = self._transcript_state_for_publish(speaker_id, utterance_id, generation)
         target_lang = state.get("target_lang") if state is not None else None
         router = self.routers.get(speaker_id)
@@ -1911,6 +1983,8 @@ class RoomInterpreterManager:
         utterance_id: str,
         generation: int,
     ) -> None:
+        if not self.relay_output_enabled:
+            return
         state = self._transcript_state_for_publish(speaker_id, utterance_id, generation)
         target_lang = state.get("target_lang") if state is not None else None
         router = self.routers.get(speaker_id)
@@ -1971,7 +2045,9 @@ class RoomInterpreterManager:
         source_language = self.speaker_sources.get(speaker_id)
         audience_ids = sorted(self.speaker_audiences.get(speaker_id, frozenset()))
         output_suppressed = status == _SpeakerLifecycle.BLOCKED_DUE_TO_OVERLAP
-        audio_track = None if output_suppressed or router is None else router.track_descriptor()
+        audio_track = None if router is None else router.track_descriptor()
+        if output_suppressed and self.relay_output_enabled:
+            audio_track = None
         audio_track_name = None
         if audio_track is not None and audio_track.get("track_available"):
             audio_track_name = audio_track.get("track_name")

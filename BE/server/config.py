@@ -6,6 +6,9 @@ class Settings(BaseSettings):
     # OpenAI
     openai_api_key: str
     openai_realtime_model: str = "gpt-realtime-mini"
+    openai_summary_model: str = "gpt-4o-mini"
+    meeting_summary_language: str = "en"
+    meeting_summary_max_source_items: int = 240
     
     # Redis
     redis_url: str = "redis://localhost:6379"
@@ -26,7 +29,7 @@ class Settings(BaseSettings):
     # JWT
     room_jwt_secret: str
     room_token_ttl_seconds: int = 86400
-    room_meeting_duration_seconds: int = 1800  # 30 minutes logical meeting duration
+    room_meeting_duration_seconds: int = 3600  # 60 minutes logical meeting duration
     room_max_participants: int = 0  # 0 = no backend participant cap enforcement
     
     # LiveKit

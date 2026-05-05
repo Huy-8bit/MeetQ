@@ -3,6 +3,7 @@ from typing import Any, Dict, List, Optional
 
 import redis.asyncio as redis
 
+from server.meeting_modes import BRSE_MODE_SILENT_SUMMARY
 from server.models import (
     ChatMessage,
     ParticipantSnapshot,
@@ -87,7 +88,7 @@ class RoomStore:
 
         trans_data = await self.client.lrange(self._trans_key(room_id), 0, -1)
         transcripts = [TranscriptEvent.model_validate_json(t) for t in trans_data]
-        if not room_state.brse_enabled:
+        if not room_state.brse_enabled or room_state.brse_mode == BRSE_MODE_SILENT_SUMMARY:
             transcripts = []
         chat_data = await self.client.lrange(self._chat_key(room_id), 0, -1)
         messages = [ChatMessage.model_validate_json(t) for t in chat_data]
@@ -98,6 +99,7 @@ class RoomStore:
             created_at=room_state.created_at,
             expires_at=room_state.expires_at,
             brse_enabled=room_state.brse_enabled,
+            brse_mode=room_state.brse_mode,
             participant_limit=room_state.participant_limit,
             supported_languages=room_state.supported_languages,
             meeting_languages=room_state.meeting_languages,

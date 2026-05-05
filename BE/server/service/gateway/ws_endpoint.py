@@ -77,17 +77,12 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str, token: str = Qu
 
     # Check room expiry before allowing WS connection
     if _is_room_snapshot_expired(snapshot):
-        if app_state.room_history:
-            app_state.room_history.schedule(
-                lambda: app_state.room_history.persist_room_expired(
-                    snapshot.room,
-                    expired_at=snapshot.room.expires_at,
-                    current_human_count=active_human_participant_count(snapshot.participants),
-                    reason="ws_rejected_expired",
-                ),
-                action="room_expired",
-                room_id=room_id,
-            )
+        app_state.room_service.schedule_room_expired_archival(
+            snapshot.room,
+            expired_at=snapshot.room.expires_at,
+            current_human_count=active_human_participant_count(snapshot.participants),
+            reason="ws_rejected_expired",
+        )
         await websocket.close(code=4410, reason="Room expired")
         return
 

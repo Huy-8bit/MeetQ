@@ -6,7 +6,9 @@ ChatTranslationMode = Literal["original_only", "translate"]
 
 from server.meeting_modes import (
     BRSE_PARTICIPANT_ID,
+    BRSE_MODE_RELAY,
     DEFAULT_BRSE_ENABLED,
+    DEFAULT_BRSE_MODE,
     DEFAULT_RELAY_LANGUAGE_MAP,
     DEFAULT_ROOM_MEETING_LANGUAGES,
     INTERPRETER_MODE_BRSE_PARTICIPANT,
@@ -20,20 +22,23 @@ RoomStatus = Literal["created", "active", "empty"]
 ParticipantStatus = Literal["joining", "connected", "reconnecting", "disconnected"]
 Language = Literal["vi", "en", "ja", "zh", "ko", "fr", "es", "auto"]
 MeetingLanguage = Literal["vi", "en", "ja", "zh", "ko", "fr", "es"]
-MeetingMode = Literal["direct_translation", "brse_relay"]
+BrseMode = Literal["relay", "silent_summary"]
+MeetingMode = Literal["direct_translation", "brse_relay", "brse_silent_summary"]
 InterpreterMode = Literal["per_listener", "brse_participant"]
 ParticipantKind = Literal["human", "virtual_brse"]
-MeetingAudioModel = Literal["translated_audio_first", "brse_participant_audio"]
-CrossLanguageAudioPolicy = Literal["interpreter_track", "human_original_plus_brse"]
+MeetingAudioModel = Literal["translated_audio_first", "brse_participant_audio", "brse_silent_listener"]
+CrossLanguageAudioPolicy = Literal["interpreter_track", "human_original_plus_brse", "human_original_only"]
 CanonicalRemoteAudioPolicy = Literal[
     "interpreter_track_for_cross_language",
     "human_original_track",
 ]
 SameLanguageAudioPolicy = Literal["human_passthrough"]
-AiRelayAudioPolicy = Literal["listener_private_track", "virtual_participant_track"]
+AiRelayAudioPolicy = Literal["listener_private_track", "virtual_participant_track", "disabled"]
+RelayTranscriptPolicy = Literal["publish_realtime", "source_only_internal"]
 TranscriptKind = Literal["source", "translated", "relay"]
 RelayStyle = Literal["normal", "summary"]
 ScreenShareSource = Literal["screen_share"]
+MeetingSummaryStatus = Literal["pending", "completed", "failed", "skipped"]
 
 
 class RoomAudioRouting(BaseModel):
@@ -48,6 +53,10 @@ class RoomAudioRouting(BaseModel):
         default_factory=lambda: dict(DEFAULT_RELAY_LANGUAGE_MAP)
     )
     virtual_participant_id: str = BRSE_PARTICIPANT_ID
+    brse_mode: BrseMode = BRSE_MODE_RELAY
+    ai_audio_output_enabled: bool = True
+    source_transcript_capture: bool = True
+    relay_transcript_policy: RelayTranscriptPolicy = "publish_realtime"
 
 
 class ParticipantState(BaseModel):
@@ -101,6 +110,7 @@ class RoomState(BaseModel):
     emptied_at: Optional[str] = None
     expires_at: str
     brse_enabled: bool = DEFAULT_BRSE_ENABLED
+    brse_mode: BrseMode = DEFAULT_BRSE_MODE
     participant_limit: Optional[int] = None  # None = no backend participant cap
     supported_languages: List[MeetingLanguage] = Field(
         default_factory=lambda: list(SUPPORTED_MEETING_LANGUAGES)
@@ -186,6 +196,7 @@ class CreateRoomResponseRoom(BaseModel):
     created_at: str
     expires_at: str
     brse_enabled: bool
+    brse_mode: BrseMode = DEFAULT_BRSE_MODE
     participant_limit: Optional[int] = None
     supported_languages: List[MeetingLanguage]
     meeting_languages: List[MeetingLanguage]
@@ -209,6 +220,7 @@ class CreateRoomRequest(BaseModel):
         default_factory=lambda: list(DEFAULT_ROOM_MEETING_LANGUAGES)
     )
     brse_enabled: bool = DEFAULT_BRSE_ENABLED
+    brse_mode: BrseMode = DEFAULT_BRSE_MODE
 
 
 class JoinRoomRequestClient(BaseModel):
@@ -285,6 +297,34 @@ class RoomSnapshotResponse(BaseModel):
     participants: List[ParticipantSnapshot]
     recent_transcripts: List[TranscriptEvent]
     recent_messages: List[ChatMessage] = Field(default_factory=list)
+
+
+class MeetingSummaryActionItem(BaseModel):
+    text: str
+    owner: Optional[str] = None
+    due: Optional[str] = None
+
+
+class MeetingSummaryParticipantItem(BaseModel):
+    participant_id: Optional[str] = None
+    display_name: Optional[str] = None
+    summary: str
+
+
+class MeetingSummaryResponse(BaseModel):
+    room_id: str
+    status: MeetingSummaryStatus
+    created_at: str
+    generated_at: Optional[str] = None
+    summary_language: str = "en"
+    summary_text: Optional[str] = None
+    highlights: List[str] = Field(default_factory=list)
+    decisions: List[str] = Field(default_factory=list)
+    action_items: List[MeetingSummaryActionItem] = Field(default_factory=list)
+    participant_summary: List[MeetingSummaryParticipantItem] = Field(default_factory=list)
+    duration_seconds: Optional[int] = None
+    source_stats: Dict[str, Any] = Field(default_factory=dict)
+    error: Optional[str] = None
 
 
 TestSessionStatus = Literal[

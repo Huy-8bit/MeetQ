@@ -9,6 +9,7 @@ from server.events import EventType
 from server.service.gateway.app_state import app_state
 from server.service.gateway.room_service import ParticipantNotFoundError
 from server.models import TranscriptEvent
+from server.meeting_modes import BRSE_MODE_SILENT_SUMMARY
 
 logger = logging.getLogger(__name__)
 
@@ -90,6 +91,7 @@ async def _handle_interpreter_events(msg_data: dict):
     snapshot = await app_state.room_store.get_room_snapshot(room_id)
     if snapshot is None or not snapshot.room.brse_enabled:
         return
+    silent_summary_mode = snapshot.room.brse_mode == BRSE_MODE_SILENT_SUMMARY
 
     if event_type == EventType.PARTICIPANT_MEDIA_CONNECTED:
         p_id = payload.get("participant_id")
@@ -115,6 +117,13 @@ async def _handle_interpreter_events(msg_data: dict):
 
     elif event_type == EventType.TRANSCRIPT_FINAL:
         transcript = _build_transcript_event(msg_data)
+        if silent_summary_mode and transcript.kind != "source":
+            logger.warning(
+                "Suppressing non-source transcript in BRSE silent summary mode: room_id=%s kind=%s",
+                room_id,
+                transcript.kind,
+            )
+            return
         try:
             await app_state.room_store.append_transcript(room_id, transcript)
         except Exception as exc:
@@ -130,12 +139,22 @@ async def _handle_interpreter_events(msg_data: dict):
                 room_id=room_id,
             )
 
+        if silent_summary_mode:
+            logger.debug(
+                "BRSE silent summary source transcript retained without websocket fan-out: room_id=%s transcript_id=%s",
+                room_id,
+                transcript.transcript_id,
+            )
+            return
+
         if transcript.kind in {"source", "relay"}:
             await app_state.ws_hub.broadcast_to_room(room_id, msg_data)
         elif transcript.listener_id:
             await app_state.ws_hub.send_to_participant(room_id, transcript.listener_id, msg_data)
 
     elif event_type == EventType.TRANSCRIPT_PARTIAL:
+        if silent_summary_mode:
+            return
         transcript = _build_transcript_event(msg_data)
         if transcript.kind in {"source", "relay"}:
             await app_state.ws_hub.broadcast_to_room(room_id, msg_data)

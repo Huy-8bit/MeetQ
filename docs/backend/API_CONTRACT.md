@@ -4,6 +4,8 @@
 >
 > Update note (2026-05-01): rooms now expose explicit `brse_enabled`. Create-room can set it, snapshots/events expose it, and `brse_enabled=false` means a normal human-only meeting: no `brse_ai` virtual participant, no BRSE interpreter runtime, no BRSE transcript/audio output.
 >
+> Update note (2026-05-05): create-room also accepts additive `brse_mode="relay" | "silent_summary"`. `brse_enabled=true` with `relay` preserves existing BRSE audio relay behavior. `brse_enabled=true` with `silent_summary` starts BRSE as a silent listener: it subscribes to human audio and archives source transcripts for post-meeting summary, but suppresses relay audio and realtime relay transcript fan-out.
+>
 > Update note (2026-04-30): new rooms now default to BRSE relay semantics. FE should expect `meeting_mode=brse_relay`, `interpreter_mode=brse_participant`, a virtual participant `brse_ai`, room-wide relay transcripts with `kind=relay`, and BRSE audio as virtual participant track metadata. Older per-listener translated-audio sections below are legacy reference and are no longer the authoritative output model for BRSE rooms.
 
 Tài liệu này là contract duy nhất FE cần biết để code độc lập với BE.
@@ -228,7 +230,8 @@ Tạo room trống.
 ```json
 {
   "meeting_languages": ["vi", "ja"],
-  "brse_enabled": true
+  "brse_enabled": true,
+  "brse_mode": "relay"
 }
 ```
 
@@ -239,6 +242,7 @@ Rules:
 3. Chỉ nhận `vi | en | ja | zh | ko | fr | es`.
 4. Nếu omitted, backend mặc định `meeting_languages=["vi", "ja"]` để giữ tương thích flow cũ.
 5. `brse_enabled` optional; nếu omitted, backend mặc định `true`.
+6. `brse_mode` optional; nếu omitted, backend mặc định `relay`. Chỉ có hiệu lực khi `brse_enabled=true`.
 
 ### Response JSON Schema
 
@@ -250,6 +254,7 @@ Rules:
     "created_at": "ISO-8601 UTC string",
     "expires_at": "ISO-8601 UTC string",
     "brse_enabled": true,
+    "brse_mode": "relay",
     "participant_limit": null,
     "supported_languages": ["vi", "en", "ja", "zh", "ko", "fr", "es"],
     "meeting_languages": ["vi", "ja"]
@@ -271,6 +276,7 @@ Rules:
     "created_at": "2026-04-29T13:00:00.000Z",
     "expires_at": "2026-04-29T13:30:00.000Z",
     "brse_enabled": true,
+    "brse_mode": "relay",
     "participant_limit": null,
     "supported_languages": ["vi", "en", "ja", "zh", "ko", "fr", "es"],
     "meeting_languages": ["vi", "ja"]
@@ -302,6 +308,7 @@ Lấy snapshot room khi FE load room page hoặc reconnect.
     "created_at": "ISO-8601 UTC string",
     "expires_at": "ISO-8601 UTC string",
     "brse_enabled": true,
+    "brse_mode": "relay",
     "participant_limit": null,
     "supported_languages": ["vi", "en", "ja", "zh", "ko", "fr", "es"],
     "meeting_languages": ["vi", "ja"],
@@ -364,6 +371,7 @@ Lấy snapshot room khi FE load room page hoặc reconnect.
     "created_at": "2026-04-29T13:00:00.000Z",
     "expires_at": "2026-04-29T13:30:00.000Z",
     "brse_enabled": true,
+    "brse_mode": "relay",
     "participant_limit": null,
     "supported_languages": ["vi", "en", "ja", "zh", "ko", "fr", "es"],
     "meeting_languages": ["vi", "ja"],
@@ -392,6 +400,60 @@ Lấy snapshot room khi FE load room page hoặc reconnect.
     }
   ],
   "recent_transcripts": []
+}
+```
+
+## `GET /api/rooms/{room_id}/summary`
+
+Lấy post-meeting summary đã được backend generate sau khi room kết thúc hoặc
+expire. Endpoint này đọc MongoDB historical archive, không đọc Redis hot state.
+
+Summary có thể ở một trong các trạng thái:
+
+- `pending`: đã request generation, model chưa hoàn tất.
+- `completed`: generation thành công.
+- `skipped`: room không có đủ transcript / relay / chat content để tóm tắt có grounding.
+- `failed`: model hoặc persistence path lỗi; room finalization vẫn không bị ảnh hưởng.
+
+Nếu chưa có summary record, trả `404 meeting_summary_not_found`.
+
+### Response JSON Schema
+
+```json
+{
+  "room_id": "rm_...",
+  "status": "completed",
+  "created_at": "ISO-8601 UTC string",
+  "generated_at": "ISO-8601 UTC string | null",
+  "summary_language": "en",
+  "summary_text": "The meeting discussed ...",
+  "highlights": ["..."],
+  "decisions": ["..."],
+  "action_items": [
+    {
+      "text": "...",
+      "owner": "string | null",
+      "due": "string | null"
+    }
+  ],
+  "participant_summary": [
+    {
+      "participant_id": "pt_...",
+      "display_name": "Huy",
+      "summary": "..."
+    }
+  ],
+  "duration_seconds": 900,
+  "source_stats": {
+    "transcript_count": 12,
+    "source_transcript_count": 6,
+    "relay_count": 6,
+    "translated_transcript_count": 0,
+    "chat_count": 2,
+    "included_message_count": 14,
+    "truncated": false
+  },
+  "error": null
 }
 ```
 
@@ -565,6 +627,7 @@ Response là room summary đã cập nhật:
   "room_id": "rm_8f3k2v1m",
   "state": "active",
   "brse_enabled": true,
+  "brse_mode": "relay",
   "participant_limit": null,
   "supported_languages": ["vi", "en", "ja", "zh", "ko", "fr", "es"],
   "meeting_languages": ["vi", "ja"],

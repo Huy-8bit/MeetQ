@@ -31,6 +31,7 @@ class MongoRoomHistoryRepository:
     rooms_collection = "rooms"
     participants_collection = "room_participants"
     messages_collection = "room_messages"
+    summaries_collection = "meeting_summaries"
 
     def __init__(self, db: Optional[Any]):
         self.db = db
@@ -120,6 +121,15 @@ class MongoRoomHistoryRepository:
             [("room_id", ASCENDING), ("message_id", ASCENDING), ("kind", ASCENDING)],
             unique=True,
             name="uniq_room_message_kind",
+        )
+        await self.db[self.summaries_collection].create_index(
+            [("room_id", ASCENDING)],
+            unique=True,
+            name="uniq_meeting_summary_room_id",
+        )
+        await self.db[self.summaries_collection].create_index(
+            [("status", ASCENDING), ("generated_at", DESCENDING)],
+            name="meeting_summaries_by_status",
         )
 
     async def persist_room_created(self, room: RoomState, *, share_url: Optional[str] = None) -> None:
@@ -450,6 +460,264 @@ class MongoRoomHistoryRepository:
                 upsert=True,
             )
 
+    async def create_meeting_summary_pending(
+        self,
+        *,
+        room_id: str,
+        requested_at: str,
+        trigger_reason: str,
+        summary_language: str,
+    ) -> bool:
+        summary_id = f"sum_{uuid.uuid4().hex[:12]}"
+        doc = {
+            "summary_id": summary_id,
+            "room_id": room_id,
+            "status": "pending",
+            "created_at": requested_at,
+            "created_at_dt": self._parse_dt(requested_at),
+            "generated_at": None,
+            "generated_at_dt": None,
+            "summary_language": summary_language,
+            "summary_text": None,
+            "highlights": [],
+            "decisions": [],
+            "action_items": [],
+            "participant_summary": [],
+            "duration_seconds": None,
+            "source_stats": {},
+            "trigger_reason": trigger_reason,
+            "error": None,
+            "updated_at": requested_at,
+            "updated_at_dt": self._parse_dt(requested_at),
+        }
+        result = await self.db[self.summaries_collection].update_one(
+            {"room_id": room_id},
+            {"$setOnInsert": doc},
+            upsert=True,
+        )
+        if result.upserted_id is None:
+            return False
+
+        await self.db[self.rooms_collection].update_one(
+            {"room_id": room_id},
+            {
+                "$setOnInsert": {
+                    "room_id": room_id,
+                    "created_by": "gateway",
+                },
+                "$set": {
+                    "meeting_summary": {
+                        "summary_id": summary_id,
+                        "status": "pending",
+                        "created_at": requested_at,
+                        "generated_at": None,
+                        "summary_language": summary_language,
+                        "trigger_reason": trigger_reason,
+                    },
+                    "updated_at": requested_at,
+                    "updated_at_dt": self._parse_dt(requested_at),
+                },
+            },
+            upsert=True,
+        )
+        return True
+
+    async def collect_meeting_summary_source(
+        self,
+        room_id: str,
+        *,
+        max_messages: int,
+    ) -> Dict[str, Any]:
+        room_doc = await self.db[self.rooms_collection].find_one(
+            {"room_id": room_id},
+            {"_id": 0},
+        ) or {"room_id": room_id}
+        participant_docs = await self.db[self.participants_collection].find(
+            {"room_id": room_id, "is_virtual": {"$ne": True}},
+            {
+                "_id": 0,
+                "participant_id": 1,
+                "display_name": 1,
+                "language": 1,
+                "kind": 1,
+                "is_virtual": 1,
+                "first_joined_at": 1,
+                "last_joined_at": 1,
+                "last_left_at": 1,
+                "join_count": 1,
+            },
+        ).sort("first_joined_at_dt", ASCENDING).to_list(length=None)
+
+        kind_filter = {"$in": ["source", "translated", "relay", "chat"]}
+        total_count = await self.db[self.messages_collection].count_documents(
+            {"room_id": room_id, "kind": kind_filter}
+        )
+        source_count = await self.db[self.messages_collection].count_documents(
+            {"room_id": room_id, "kind": "source"}
+        )
+        translated_count = await self.db[self.messages_collection].count_documents(
+            {"room_id": room_id, "kind": "translated"}
+        )
+        relay_count = await self.db[self.messages_collection].count_documents(
+            {"room_id": room_id, "kind": "relay"}
+        )
+        chat_count = await self.db[self.messages_collection].count_documents(
+            {"room_id": room_id, "kind": "chat"}
+        )
+        message_docs = await self.db[self.messages_collection].find(
+            {"room_id": room_id, "kind": kind_filter},
+            {"_id": 0},
+        ).sort("created_at_dt", ASCENDING).limit(max(max_messages, 1)).to_list(length=max(max_messages, 1))
+        messages = [
+            summary_message
+            for message in message_docs
+            if (summary_message := self._summary_source_message(message)) is not None
+        ]
+        duration_seconds = room_doc.get("duration_seconds")
+        if duration_seconds is None:
+            duration_seconds = self._duration_seconds(
+                room_doc.get("activated_at") or room_doc.get("created_at"),
+                room_doc.get("ended_at") or room_doc.get("expires_at"),
+            )
+
+        source_stats = {
+            "message_count": total_count,
+            "transcript_count": source_count + translated_count + relay_count,
+            "source_transcript_count": source_count,
+            "translated_transcript_count": translated_count,
+            "relay_count": relay_count,
+            "chat_count": chat_count,
+            "included_message_count": len(messages),
+            "max_source_items": max_messages,
+            "truncated": total_count > len(message_docs),
+        }
+        return {
+            "room": self._summary_room_doc(room_doc, duration_seconds=duration_seconds),
+            "participants": participant_docs,
+            "messages": messages,
+            "source_stats": source_stats,
+            "duration_seconds": duration_seconds,
+        }
+
+    async def persist_meeting_summary_completed(
+        self,
+        *,
+        room_id: str,
+        generated_at: str,
+        summary: Dict[str, Any],
+        source: Dict[str, Any],
+    ) -> None:
+        source_stats = source.get("source_stats") or {}
+        duration_seconds = source.get("duration_seconds")
+        update_doc = {
+            "status": "completed",
+            "generated_at": generated_at,
+            "generated_at_dt": self._parse_dt(generated_at),
+            "summary_text": summary.get("summary_text") or "",
+            "highlights": summary.get("highlights") or [],
+            "decisions": summary.get("decisions") or [],
+            "action_items": summary.get("action_items") or [],
+            "participant_summary": summary.get("participant_summary") or [],
+            "duration_seconds": duration_seconds,
+            "source_stats": source_stats,
+            "error": None,
+            "updated_at": generated_at,
+            "updated_at_dt": self._parse_dt(generated_at),
+        }
+        result = await self.db[self.summaries_collection].find_one_and_update(
+            {"room_id": room_id},
+            {"$set": update_doc},
+            return_document=ReturnDocument.AFTER,
+        )
+        summary_id = (result or {}).get("summary_id")
+        await self._update_room_meeting_summary_status(
+            room_id,
+            summary_id=summary_id,
+            status="completed",
+            timestamp=generated_at,
+            summary_language=(result or {}).get("summary_language"),
+            source_stats=source_stats,
+        )
+
+    async def persist_meeting_summary_skipped(
+        self,
+        *,
+        room_id: str,
+        generated_at: str,
+        source: Dict[str, Any],
+        reason: str,
+    ) -> None:
+        source_stats = source.get("source_stats") or {}
+        duration_seconds = source.get("duration_seconds")
+        update_doc = {
+            "status": "skipped",
+            "generated_at": generated_at,
+            "generated_at_dt": self._parse_dt(generated_at),
+            "summary_text": "Not enough meeting content was available to generate a grounded summary.",
+            "highlights": [],
+            "decisions": [],
+            "action_items": [],
+            "participant_summary": [],
+            "duration_seconds": duration_seconds,
+            "source_stats": source_stats,
+            "error": reason,
+            "updated_at": generated_at,
+            "updated_at_dt": self._parse_dt(generated_at),
+        }
+        result = await self.db[self.summaries_collection].find_one_and_update(
+            {"room_id": room_id},
+            {"$set": update_doc},
+            return_document=ReturnDocument.AFTER,
+        )
+        summary_id = (result or {}).get("summary_id")
+        await self._update_room_meeting_summary_status(
+            room_id,
+            summary_id=summary_id,
+            status="skipped",
+            timestamp=generated_at,
+            summary_language=(result or {}).get("summary_language"),
+            source_stats=source_stats,
+            error=reason,
+        )
+
+    async def persist_meeting_summary_failed(
+        self,
+        *,
+        room_id: str,
+        failed_at: str,
+        error: str,
+    ) -> None:
+        update_doc = {
+            "status": "failed",
+            "generated_at": failed_at,
+            "generated_at_dt": self._parse_dt(failed_at),
+            "error": error[:1000],
+            "updated_at": failed_at,
+            "updated_at_dt": self._parse_dt(failed_at),
+        }
+        result = await self.db[self.summaries_collection].find_one_and_update(
+            {"room_id": room_id},
+            {"$set": update_doc},
+            return_document=ReturnDocument.AFTER,
+        )
+        summary_id = (result or {}).get("summary_id")
+        await self._update_room_meeting_summary_status(
+            room_id,
+            summary_id=summary_id,
+            status="failed",
+            timestamp=failed_at,
+            summary_language=(result or {}).get("summary_language"),
+            source_stats=(result or {}).get("source_stats") or {},
+            error=error[:1000],
+        )
+
+    async def get_meeting_summary(self, room_id: str) -> Optional[Dict[str, Any]]:
+        doc = await self.db[self.summaries_collection].find_one(
+            {"room_id": room_id},
+            {"_id": 0},
+        )
+        return doc
+
     async def _refresh_room_participant_summary(
         self,
         room: Any,
@@ -590,6 +858,7 @@ class MongoRoomHistoryRepository:
             "ended_at_dt": self._parse_dt(self._value(room, "ended_at")),
             "meeting_languages": list(self._value(room, "meeting_languages", []) or []),
             "brse_enabled": bool(self._value(room, "brse_enabled", False)),
+            "brse_mode": self._value(room, "brse_mode"),
             "meeting_mode": self._value(room, "meeting_mode"),
             "interpreter_mode": self._value(room, "interpreter_mode"),
             "audio_routing": self._model_dump(self._value(room, "audio_routing", {})),
@@ -611,6 +880,96 @@ class MongoRoomHistoryRepository:
             "joined_at": self._value(participant, "joined_at"),
             "left_at": self._value(participant, "left_at"),
         }
+
+    def _summary_source_message(self, message: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        kind = message.get("kind")
+        text = ""
+        source_text = message.get("source_text") or None
+        if kind == "chat":
+            text = message.get("text") or ""
+        elif kind == "source":
+            text = message.get("source_text") or message.get("text") or ""
+        elif kind == "relay":
+            text = message.get("brse_text") or message.get("text") or message.get("translated_text") or ""
+        elif kind == "translated":
+            text = message.get("translated_text") or message.get("text") or ""
+        else:
+            return None
+
+        text = text.strip() if isinstance(text, str) else ""
+        if not text and not source_text:
+            return None
+
+        return {
+            "kind": kind,
+            "conversation_type": message.get("conversation_type"),
+            "created_at": message.get("created_at"),
+            "message_id": message.get("message_id"),
+            "utterance_id": message.get("utterance_id"),
+            "participant_id": message.get("participant_id"),
+            "display_name": message.get("display_name"),
+            "language": message.get("language"),
+            "src_lang": message.get("src_lang"),
+            "target_lang": message.get("target_lang"),
+            "text": text,
+            "source_text": source_text,
+            "translation_mode": message.get("translation_mode"),
+            "translations": message.get("translations") or [],
+        }
+
+    def _summary_room_doc(self, room_doc: Dict[str, Any], *, duration_seconds: Optional[int]) -> Dict[str, Any]:
+        return {
+            "room_id": room_doc.get("room_id"),
+            "state": room_doc.get("state"),
+            "created_at": room_doc.get("created_at"),
+            "activated_at": room_doc.get("activated_at"),
+            "ended_at": room_doc.get("ended_at"),
+            "expires_at": room_doc.get("expires_at"),
+            "duration_seconds": duration_seconds,
+            "meeting_languages": room_doc.get("meeting_languages") or [],
+            "brse_enabled": room_doc.get("brse_enabled"),
+            "brse_mode": room_doc.get("brse_mode"),
+            "meeting_mode": room_doc.get("meeting_mode"),
+            "interpreter_mode": room_doc.get("interpreter_mode"),
+            "participant_count_total": room_doc.get("participant_count_total"),
+            "status_summary": room_doc.get("status_summary") or {},
+        }
+
+    async def _update_room_meeting_summary_status(
+        self,
+        room_id: str,
+        *,
+        summary_id: Optional[str],
+        status: str,
+        timestamp: str,
+        summary_language: Optional[str],
+        source_stats: Dict[str, Any],
+        error: Optional[str] = None,
+    ) -> None:
+        meeting_summary = {
+            "summary_id": summary_id,
+            "status": status,
+            "generated_at": timestamp,
+            "summary_language": summary_language,
+            "source_stats": source_stats,
+        }
+        if error:
+            meeting_summary["error"] = error
+        await self.db[self.rooms_collection].update_one(
+            {"room_id": room_id},
+            {
+                "$setOnInsert": {
+                    "room_id": room_id,
+                    "created_by": "gateway",
+                },
+                "$set": {
+                    "meeting_summary": meeting_summary,
+                    "updated_at": timestamp,
+                    "updated_at_dt": self._parse_dt(timestamp),
+                },
+            },
+            upsert=True,
+        )
 
     def _value(self, obj: Any, field: str, default: Any = None) -> Any:
         if hasattr(obj, field):

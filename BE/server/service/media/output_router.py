@@ -41,6 +41,7 @@ class OutputRouter:
         target_lang: str,
         output_sample_rate: int = 24000,
         on_track_failure: Optional[Callable[[str, str], None]] = None,
+        output_enabled: bool = True,
     ) -> None:
         self.room = room
         self.brse_participant_id = brse_participant_id
@@ -49,6 +50,7 @@ class OutputRouter:
         self.src_lang = src_lang
         self.target_lang = target_lang
         self.output_sample_rate = output_sample_rate
+        self.output_enabled = output_enabled
         self._frame_bytes = int(output_sample_rate * _FRAME_MS / 1000) * _BYTES_PER_SAMPLE
         self._closed = False
         self._on_track_failure = on_track_failure
@@ -63,6 +65,7 @@ class OutputRouter:
         self._reset_count = 0
         self._decode_errors = 0
         self._first_frame_at: Optional[float] = None
+        self._suppression_logged = False
 
     def audio_track_name(self) -> Optional[str]:
         state = self._state
@@ -72,6 +75,24 @@ class OutputRouter:
 
     def track_descriptor(self) -> Dict[str, Any]:
         state = self._state
+        if not self.output_enabled:
+            return {
+                "model": "brse_silent_listener",
+                "mode": "disabled",
+                "canonical": False,
+                "track_available": False,
+                "track_name": None,
+                "track_sid": None,
+                "participant_id": self.brse_participant_id,
+                "participant_kind": "virtual_brse",
+                "livekit_identity": self.brse_livekit_identity,
+                "speaker_id": self.speaker_id,
+                "source_language": self.src_lang,
+                "target_language": self.target_lang,
+                "output_suppressed": True,
+                "suppressed_reason": "brse_silent_summary_mode",
+                "stats": self.stats_snapshot(),
+            }
         return {
             "model": "brse_participant_audio",
             "mode": "virtual_participant_track",
@@ -100,6 +121,8 @@ class OutputRouter:
             "clear_count": self._clear_count,
             "reset_count": self._reset_count,
             "decode_errors": self._decode_errors,
+            "output_enabled": self.output_enabled,
+            "output_suppressed": not self.output_enabled,
         }
 
     async def ensure_track(self) -> None:
@@ -108,6 +131,9 @@ class OutputRouter:
 
     async def _ensure_track_locked(self) -> None:
         if self._closed:
+            return
+        if not self.output_enabled:
+            self._log_output_suppressed_once("track_publish")
             return
 
         current = self._state
@@ -191,6 +217,9 @@ class OutputRouter:
         return await self.capture_pcm(pcm)
 
     async def capture_pcm(self, pcm_bytes: bytes) -> bool:
+        if not self.output_enabled:
+            self._log_output_suppressed_once("audio_capture")
+            return True
         async with self._op_lock:
             state = self._state
             if state is None:
@@ -204,11 +233,16 @@ class OutputRouter:
             return await self._publish_buffered_frames(flush=False)
 
     async def flush(self) -> bool:
+        if not self.output_enabled:
+            self._log_output_suppressed_once("audio_flush")
+            return True
         async with self._op_lock:
             self._flush_count += 1
             return await self._publish_buffered_frames(flush=True)
 
     def clear_queue(self) -> None:
+        if not self.output_enabled:
+            return
         state = self._state
         if state is None:
             return
@@ -393,3 +427,15 @@ class OutputRouter:
 
     def _room_is_connected(self) -> bool:
         return self.room.connection_state == rtc.ConnectionState.CONN_CONNECTED
+
+    def _log_output_suppressed_once(self, operation: str) -> None:
+        if self._suppression_logged:
+            return
+        self._suppression_logged = True
+        logger.info(
+            "BRSE relay output suppressed by silent summary mode speaker=%s route=%s->%s operation=%s",
+            self.speaker_id,
+            self.src_lang,
+            self.target_lang,
+            operation,
+        )

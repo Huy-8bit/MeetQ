@@ -392,6 +392,18 @@ class RedisEventPublisher:
         }
         if audio_track is not None:
             payload["track"] = audio_track
+            for key in (
+                "model",
+                "mode",
+                "canonical",
+                "track_available",
+                "track_name",
+                "track_sid",
+                "output_suppressed",
+                "suppressed_reason",
+            ):
+                if key in audio_track:
+                    payload[key] = audio_track.get(key)
             if payload["track_name"] is None:
                 payload["track_name"] = audio_track.get("track_name")
                 payload["track_available"] = bool(audio_track.get("track_available"))

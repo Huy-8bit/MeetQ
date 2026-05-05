@@ -1,5 +1,263 @@
 # Backend Implementation State
 
+## Turn Update: 2026-05-05 BRSE Silent Listener Mode
+
+- Time: 2026-05-05T00:00:00+07:00
+- Mode: CODE-ONLY
+- Testing deferred: full test suite not run, per instruction
+
+### Objective
+
+Add backend/runtime support for a BRSE silent listener summary mode. In this
+mode BRSE runtime still joins and listens to meeting audio, source transcript
+capture remains active for post-meeting summary, but BRSE does not publish or
+relay AI audio back into the LiveKit room.
+
+### Read Status
+
+- Read required docs:
+  - `docs/backend/README.md`
+  - `docs/backend/IMPLEMENTATION_STATE.md`
+  - `docs/backend/GATEWAY_DESIGN.md`
+  - `docs/backend/INTERPRETER_DESIGN.md`
+  - `docs/backend/API_CONTRACT.md`
+- Read required backend/runtime files:
+  - `BE/server/meeting_modes.py`
+  - `BE/server/models.py`
+  - `BE/server/service/gateway/api_rooms.py`
+  - `BE/server/service/gateway/room_service.py`
+  - `BE/server/service/gateway/room_store.py`
+  - `BE/server/service/brain_runtime/daemon.py`
+  - `BE/server/service/brain_runtime/room_manager.py`
+  - `BE/server/service/media/livekit_runtime.py`
+  - `BE/server/service/media/output_router.py`
+  - `BE/server/brain/realtime/interpreter_client.py`
+  - `BE/server/service/gateway/event_consumer.py`
+  - `BE/server/service/gateway/meeting_summary_service.py`
+  - `BE/server/brain/meeting_summary.py`
+  - `BE/server/service/persistence/room_history.py`
+
+### Strategy Locked
+
+- Add explicit room-level `brse_mode: "relay" | "silent_summary"` while
+  preserving `brse_enabled` as the runtime gate.
+- Keep semantics distinct:
+  - `brse_enabled=false`: no BRSE runtime.
+  - `brse_enabled=true`, `brse_mode="relay"`: existing production relay behavior.
+  - `brse_enabled=true`, `brse_mode="silent_summary"`: runtime listens and
+    captures source transcripts, but output relay is suppressed.
+- Silent mode will be supported at room creation/runtime start. Live switching
+  between relay and silent modes remains deferred unless the current path needs
+  a small preservation fix.
+
+### Final Sync
+
+- Room config/state:
+  - `CreateRoomRequest` now accepts additive `brse_mode`, defaulting to `relay`.
+  - Room state, create/join/snapshot responses, Mongo archive docs, and summary
+    source room metadata now carry `brse_mode`.
+  - `meeting_mode` is derived as `brse_relay` for relay and
+    `brse_silent_summary` for silent summary.
+  - `brse_enabled=false` remains no-BRSE/no-runtime mode.
+- Silent listener behavior:
+  - Interpreter daemon still spawns a room manager when `brse_enabled=true`,
+    including `brse_mode=silent_summary`.
+  - LiveKit runtime still joins the room and subscribes to human microphone
+    audio tracks.
+  - The virtual BRSE participant metadata marks `publishes_audio=false` and
+    `subscribes_human_audio=true` in silent mode.
+- Relay suppression strategy:
+  - Silent mode sets the internal LiveKit token `can_publish=false`.
+  - `OutputRouter` gets an explicit `output_enabled` gate and does not create,
+    publish, capture, flush, or unpublish relay audio tracks when disabled.
+  - `InterpreterRealtimeClient` runs with `request_audio_output=false` and
+    silent listener instructions.
+  - Room manager does not approve validated source transcript turns for relay
+    response creation in silent mode, so BRSE relay text/audio is not generated
+    for the meeting.
+- Transcript/source capture behavior:
+  - Valid source transcript finals are still published internally, appended to
+    Redis, and persisted to Mongo for summary evidence.
+  - Gateway suppresses websocket fan-out for transcript partial/final events in
+    silent mode.
+  - Gateway drops any non-source transcript event that reaches it while the room
+    is in silent mode, preventing accidental relay text from entering archive.
+  - REST/join snapshots hide recent transcripts for silent rooms; the source
+    archive remains available to summary generation.
+- Summary integration strategy:
+  - Existing post-meeting summary trigger/path is reused.
+  - Silent mode contributes source transcript lines through `room_messages` in
+    Mongo; summary collection reads the same archived source data and records
+    `brse_mode` in source room metadata.
+  - Summary remains source-grounded and can be skipped if there is not enough
+    captured meeting content.
+- Live toggle:
+  - Existing enable/disable BRSE toggle remains supported and preserves the
+    stored `brse_mode`.
+  - Live switching between `relay` and `silent_summary` is not exposed yet and
+    is deferred.
+- Files modified:
+  - `BE/server/meeting_modes.py`
+  - `BE/server/models.py`
+  - `BE/server/service/gateway/api_rooms.py`
+  - `BE/server/service/gateway/room_service.py`
+  - `BE/server/service/gateway/room_store.py`
+  - `BE/server/service/gateway/event_consumer.py`
+  - `BE/server/service/gateway/livekit_tokens.py`
+  - `BE/server/service/brain_runtime/daemon.py`
+  - `BE/server/service/brain_runtime/room_manager.py`
+  - `BE/server/service/brain_runtime/events.py`
+  - `BE/server/service/media/livekit_runtime.py`
+  - `BE/server/service/media/output_router.py`
+  - `BE/server/brain/realtime/interpreter_client.py`
+  - `BE/server/brain/realtime/session_config.py`
+  - `BE/server/service/persistence/room_history.py`
+  - `docs/backend/API_CONTRACT.md`
+  - `docs/backend/README.md`
+  - `docs/backend/IMPLEMENTATION_STATE.md`
+- Verification:
+  - Full test suite not run, per CODE-ONLY instruction.
+  - New tests not added.
+  - Existing tests not modified.
+  - Lightweight checks run:
+    - `PYTHONPATH=BE python -m py_compile BE/server/meeting_modes.py BE/server/models.py BE/server/service/gateway/api_rooms.py BE/server/service/gateway/room_service.py BE/server/service/gateway/room_store.py BE/server/service/gateway/event_consumer.py BE/server/service/gateway/livekit_tokens.py BE/server/service/brain_runtime/daemon.py BE/server/service/brain_runtime/room_manager.py BE/server/service/brain_runtime/events.py BE/server/service/media/livekit_runtime.py BE/server/service/media/output_router.py BE/server/brain/realtime/interpreter_client.py BE/server/brain/realtime/session_config.py BE/server/service/persistence/room_history.py`
+    - `git diff --check` on touched backend/docs files
+
+## Turn Update: 2026-05-05 Post-Meeting Summary
+
+- Time: 2026-05-05T00:00:00+07:00
+- Mode: CODE-ONLY
+- Testing deferred: full test suite not run, per instruction
+
+### Objective
+
+Add an additive backend/runtime/persistence path for post-meeting summary after
+the meeting ends, without changing live room, relay, chat, expiry, or Redis hot
+state behavior.
+
+### Read Status
+
+- Read required docs:
+  - `docs/backend/README.md`
+  - `docs/backend/API_CONTRACT.md`
+  - `docs/backend/IMPLEMENTATION_STATE.md`
+  - `docs/backend/GATEWAY_DESIGN.md`
+  - `docs/backend/INTERPRETER_DESIGN.md`
+- Read required runtime/persistence files:
+  - `BE/server/service/gateway/room_service.py`
+  - `BE/server/service/gateway/room_store.py`
+  - `BE/server/service/gateway/event_consumer.py`
+  - `BE/server/service/persistence/room_history.py`
+  - `BE/server/models.py`
+  - `BE/server/brain/*`
+  - `BE/server/config.py`
+  - `.env.example`
+  - `BE/.env.example`
+  - `docker-compose.yml`
+  - `docker-compose.prod.yml`
+
+### Trigger Strategy
+
+- Summary generation is post-meeting only.
+- Triggers are deterministic terminal archive paths:
+  - participant cleanup marks the room `empty` when the last human participant leaves.
+  - scheduled expiry marks the room `expired` at `expires_at`.
+  - join/websocket rejection for already-expired rooms also archives expiry and requests summary.
+- The trigger runs in background side-effect tasks after room lifecycle archival, so leave/join/ws
+  shutdown paths are not blocked by the model call.
+- Summary creation is idempotent by unique `meeting_summaries.room_id`; duplicate terminal
+  triggers return without regenerating.
+
+### Source Data Strategy
+
+- Summary generation reads durable Mongo archive data, not ad hoc live state:
+  - `rooms` for metadata, lifecycle, languages, duration, participant totals.
+  - `room_participants` for participant identity/language/session summaries.
+  - `room_messages` in chronological order for `source`, `translated`, `relay`, and `chat`.
+- Source transcript lines are treated as primary evidence.
+- Relay and translated transcript lines are included as multilingual context but prompt policy tells
+  the model not to double-count translated/relay versions of the same utterance.
+- Chat messages are included when present.
+- `source_stats` records counts for source transcript, translated transcript, relay, chat, included
+  messages, and truncation.
+- If there is no usable transcript/relay/chat text, the summary record is persisted as `skipped`
+  with a conservative insufficient-content message.
+
+### Summary Output
+
+Persisted summary records include:
+
+- `summary_id`
+- `room_id`
+- `status`: `pending`, `completed`, `failed`, or `skipped`
+- `created_at`
+- `generated_at`
+- `summary_language`
+- `summary_text`
+- `highlights`
+- `decisions`
+- `action_items`
+- `participant_summary`
+- `duration_seconds`
+- `source_stats`
+- `error` for failed/skipped states
+
+### Grounding / Language Policy
+
+- Prompt/model-call logic lives in `BE/server/brain/meeting_summary.py`.
+- The prompt explicitly forbids invented facts, decisions, owners, deadlines, risks, causes, and
+  next steps.
+- Ambiguous decisions/action items must be omitted.
+- Summary language is canonical `MEETING_SUMMARY_LANGUAGE`, default `en`.
+- The backend does not infer language from room participants because there is no host/admin
+  summary preference in current room metadata.
+
+### Persistence / Retrieval
+
+- MongoDB gets a new `meeting_summaries` collection with unique `room_id`.
+- `rooms.meeting_summary` stores a compact status pointer for room-level archive visibility.
+- Retrieval path added:
+  - `GET /api/rooms/{room_id}/summary`
+  - returns pending/completed/skipped/failed summary records from Mongo.
+  - returns `404 meeting_summary_not_found` if no summary record exists or Mongo archive is disabled.
+
+### Failure Behavior
+
+- Model/API/JSON/persistence failures are caught by the summary service.
+- Room finalization still succeeds even if summary generation fails.
+- Failure is logged and persisted as `status=failed` when possible.
+
+### Files Modified
+
+- `BE/server/brain/meeting_summary.py`
+- `BE/server/service/gateway/meeting_summary_service.py`
+- `BE/server/service/gateway/room_service.py`
+- `BE/server/service/gateway/api_rooms.py`
+- `BE/server/service/gateway/ws_endpoint.py`
+- `BE/server/service/persistence/room_history.py`
+- `BE/server/models.py`
+- `BE/server/config.py`
+- `.env.example`
+- `BE/.env.example`
+- `docker-compose.yml`
+- `docker-compose.prod.yml`
+- `docs/backend/API_CONTRACT.md`
+- `docs/backend/README.md`
+- `docs/backend/IMPLEMENTATION_STATE.md`
+
+### Verification
+
+- Full test suite not run, per CODE-ONLY instruction.
+- New tests not added, per instruction.
+- Existing tests not modified.
+- Lightweight checks run:
+  - `PYTHONPATH=BE python -m py_compile BE/server/brain/meeting_summary.py BE/server/service/gateway/meeting_summary_service.py BE/server/service/persistence/room_history.py BE/server/service/gateway/room_service.py BE/server/service/gateway/api_rooms.py BE/server/service/gateway/ws_endpoint.py BE/server/models.py BE/server/config.py`
+  - `git diff --check`
+  - targeted import/model smoke check for `server.brain.meeting_summary`,
+    `MeetingSummaryResponse`, and `RoomService`
+
+---
+
 ## Turn Update: 2026-05-04 MongoDB Authentication Wiring Kickoff
 
 - Time: 2026-05-04T00:00:00+07:00

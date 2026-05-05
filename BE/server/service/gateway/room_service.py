@@ -17,14 +17,16 @@ from server.service.gateway.room_store import RoomStore
 from server.integrations.telegram import TelegramNotifier
 from server.meeting_modes import (
     BRSE_PARTICIPANT_ID,
+    DEFAULT_BRSE_MODE,
     DEFAULT_BRSE_ENABLED,
     DEFAULT_ROOM_MEETING_LANGUAGES,
-    MEETING_MODE_BRSE_RELAY,
     INTERPRETER_MODE_BRSE_PARTICIPANT,
     SUPPORTED_MEETING_LANGUAGES,
     active_human_participant_count,
     build_brse_audio_routing,
     build_brse_virtual_participant,
+    meeting_mode_for_brse_mode,
+    normalize_brse_mode,
 )
 from server.models import (
     ChatMessage,
@@ -40,6 +42,7 @@ from server.models import (
     JoinRoomResponseRoomToken,
     JoinRoomResponseWebsocket,
     Language,
+    MeetingSummaryResponse,
     MeetingLanguage,
     ParticipantState,
     RoomSnapshotResponse,
@@ -52,6 +55,7 @@ from server.service.gateway.chat_translator import (
     resolve_chat_target_language,
     translate_chat_message,
 )
+from server.service.gateway.meeting_summary_service import MeetingSummaryService
 from server.service.persistence.room_history import MongoRoomHistoryRepository
 
 
@@ -93,6 +97,10 @@ class RoomExpiredError(Exception):
     pass
 
 
+class MeetingSummaryNotFoundError(Exception):
+    pass
+
+
 class InvalidChatMessageError(Exception):
     def __init__(self, message: str, code: str = "invalid_chat_message"):
         super().__init__(message)
@@ -115,6 +123,10 @@ class RoomService:
         self.room_history = room_history
         self.gateway_control_channel = settings.redis_channel_gateway_control
         self.telegram_notifier = TelegramNotifier(settings)
+        self.meeting_summary_service = MeetingSummaryService(
+            settings=settings,
+            room_history=room_history,
+        )
         self._notification_tasks: set[asyncio.Task] = set()
         self._expiry_summary_tasks: set[asyncio.Task] = set()
 
@@ -225,7 +237,7 @@ class RoomService:
         snapshot = await self.store.get_room_snapshot(room_id)
         room = snapshot.room if snapshot else {"room_id": room_id, "expires_at": expires_at, "state": "expired"}
         current_human_count = active_human_participant_count(snapshot.participants) if snapshot else 0
-        await self.room_history.persist_room_expired(
+        await self._persist_room_expired_and_summary(
             room,
             expired_at=expires_at,
             current_human_count=current_human_count,
@@ -241,15 +253,63 @@ class RoomService:
         except Exception:
             logger.exception("Mongo room expiry summary task failed unexpectedly")
 
+    def schedule_room_expired_archival(
+        self,
+        room: Any,
+        *,
+        expired_at: Optional[str],
+        current_human_count: int,
+        reason: str,
+    ) -> None:
+        room_id = self._room_id_from_any(room)
+        if room_id == "unknown":
+            return
+
+        self._schedule_history(
+            "room_expired",
+            room_id,
+            lambda: self._persist_room_expired_and_summary(
+                room,
+                expired_at=expired_at,
+                current_human_count=current_human_count,
+                reason=reason,
+            ),
+        )
+
+    async def _persist_room_expired_and_summary(
+        self,
+        room: Any,
+        *,
+        expired_at: Optional[str],
+        current_human_count: int,
+        reason: str,
+    ) -> None:
+        if not self.room_history:
+            return
+        room_id = self._room_id_from_any(room)
+        await self.room_history.persist_room_expired(
+            room,
+            expired_at=expired_at,
+            current_human_count=current_human_count,
+            reason=reason,
+        )
+        await self.meeting_summary_service.generate_for_room_end(
+            room_id=room_id,
+            trigger_reason=reason,
+            ended_at=expired_at,
+        )
+
     async def shutdown_side_effects(self) -> None:
         pending_tasks = list(self._notification_tasks | self._expiry_summary_tasks)
         if not pending_tasks:
+            await self.meeting_summary_service.shutdown()
             return
         for task in pending_tasks:
             task.cancel()
         await asyncio.gather(*pending_tasks, return_exceptions=True)
         self._notification_tasks.clear()
         self._expiry_summary_tasks.clear()
+        await self.meeting_summary_service.shutdown()
 
     def _schedule_room_created_notification(self, room: RoomState, share_url: str) -> None:
         if not self.telegram_notifier.is_room_created_enabled():
@@ -364,18 +424,21 @@ class RoomService:
         room_id: str,
         timestamp: str,
         meeting_languages: List[MeetingLanguage],
+        brse_mode: str,
     ) -> List[Dict[str, Any]]:
-        return [build_brse_virtual_participant(room_id, timestamp, meeting_languages)]
+        return [build_brse_virtual_participant(room_id, timestamp, meeting_languages, brse_mode)]
 
     async def create_room(
         self,
         meeting_languages: List[str],
         brse_enabled: bool = DEFAULT_BRSE_ENABLED,
+        brse_mode: str = DEFAULT_BRSE_MODE,
     ) -> CreateRoomResponse:
         room_id = self._generate_id("rm")
         now = self._now_str()
         exp = self._exp_str()
         normalized_meeting_languages = self._normalize_meeting_languages(meeting_languages)
+        normalized_brse_mode = normalize_brse_mode(brse_mode)
 
         room = RoomState(
             room_id=room_id,
@@ -383,14 +446,20 @@ class RoomService:
             created_at=now,
             expires_at=exp,
             brse_enabled=brse_enabled,
+            brse_mode=normalized_brse_mode,
             participant_limit=None,  # No backend participant cap
             supported_languages=list(SUPPORTED_MEETING_LANGUAGES),
             meeting_languages=normalized_meeting_languages,
-            meeting_mode=MEETING_MODE_BRSE_RELAY,
+            meeting_mode=meeting_mode_for_brse_mode(normalized_brse_mode),
             interpreter_mode=INTERPRETER_MODE_BRSE_PARTICIPANT,
-            audio_routing=build_brse_audio_routing(normalized_meeting_languages),
+            audio_routing=build_brse_audio_routing(normalized_meeting_languages, normalized_brse_mode),
             virtual_participants=(
-                self._build_brse_virtual_participants(room_id, now, normalized_meeting_languages)
+                self._build_brse_virtual_participants(
+                    room_id,
+                    now,
+                    normalized_meeting_languages,
+                    normalized_brse_mode,
+                )
                 if brse_enabled
                 else []
             ),
@@ -452,13 +521,15 @@ class RoomService:
 
         now = self._now_str()
         meeting_languages = list(snapshot.room.meeting_languages)
+        brse_mode = normalize_brse_mode(getattr(snapshot.room, "brse_mode", DEFAULT_BRSE_MODE))
         patch: Dict[str, Any] = {
             "brse_enabled": brse_enabled,
-            "meeting_mode": MEETING_MODE_BRSE_RELAY,
+            "brse_mode": brse_mode,
+            "meeting_mode": meeting_mode_for_brse_mode(brse_mode),
             "interpreter_mode": INTERPRETER_MODE_BRSE_PARTICIPANT,
-            "audio_routing": build_brse_audio_routing(meeting_languages),
+            "audio_routing": build_brse_audio_routing(meeting_languages, brse_mode),
             "virtual_participants": (
-                self._build_brse_virtual_participants(room_id, now, meeting_languages)
+                self._build_brse_virtual_participants(room_id, now, meeting_languages, brse_mode)
                 if brse_enabled
                 else []
             ),
@@ -482,6 +553,7 @@ class RoomService:
             {
                 "room_id": room_id,
                 "brse_enabled": brse_enabled,
+                "brse_mode": brse_mode,
                 "timestamp": now,
                 "changed_by": actor_participant_id,
                 "reason": reason,
@@ -520,6 +592,14 @@ class RoomService:
         if not snapshot:
             raise RoomNotFoundError()
         return snapshot
+
+    async def get_meeting_summary(self, room_id: str) -> MeetingSummaryResponse:
+        if not self.room_history or not self.room_history.enabled:
+            raise MeetingSummaryNotFoundError()
+        summary = await self.room_history.get_meeting_summary(room_id)
+        if not summary:
+            raise MeetingSummaryNotFoundError()
+        return MeetingSummaryResponse.model_validate(summary)
 
     def build_snapshot_data_for_participant(
         self,
@@ -566,15 +646,11 @@ class RoomService:
 
         # Check room expiry: 30-minute meeting duration
         if self._is_room_expired(snapshot):
-            self._schedule_history(
-                "room_expired",
-                room_id,
-                lambda: self.room_history.persist_room_expired(
-                    snapshot.room,
-                    expired_at=snapshot.room.expires_at,
-                    current_human_count=active_human_participant_count(snapshot.participants),
-                    reason="join_rejected_expired",
-                ),
+            self.schedule_room_expired_archival(
+                snapshot.room,
+                expired_at=snapshot.room.expires_at,
+                current_human_count=active_human_participant_count(snapshot.participants),
+                reason="join_rejected_expired",
             )
             raise RoomExpiredError()
 
@@ -866,17 +942,26 @@ class RoomService:
         if terminal_state:
             await self.store.mark_room_empty(room_id, emptied_at=now)
 
-        self._schedule_history(
-            "participant_left",
-            room_id,
-            lambda: self.room_history.persist_participant_left(
+        async def persist_left_and_summary() -> None:
+            await self.room_history.persist_participant_left(
                 room_id,
                 participant,
                 left_at=now,
                 reason=reason,
                 current_human_count=current_human_count,
                 terminal_state=terminal_state,
-            ),
+            )
+            if terminal_state:
+                await self.meeting_summary_service.generate_for_room_end(
+                    room_id=room_id,
+                    trigger_reason=f"{terminal_state}:{reason}",
+                    ended_at=now,
+                )
+
+        self._schedule_history(
+            "participant_left",
+            room_id,
+            persist_left_and_summary,
         )
 
         return True
@@ -1065,10 +1150,14 @@ class RoomService:
             created_at=payload["created_at"],
             expires_at=payload["expires_at"],
             brse_enabled=payload.get("brse_enabled", DEFAULT_BRSE_ENABLED),
+            brse_mode=payload.get("brse_mode", DEFAULT_BRSE_MODE),
             participant_limit=payload.get("participant_limit"),  # None = no cap
             supported_languages=payload["supported_languages"],
             meeting_languages=payload.get("meeting_languages", list(DEFAULT_ROOM_MEETING_LANGUAGES)),
-            meeting_mode=payload.get("meeting_mode", MEETING_MODE_BRSE_RELAY),
+            meeting_mode=payload.get(
+                "meeting_mode",
+                meeting_mode_for_brse_mode(payload.get("brse_mode", DEFAULT_BRSE_MODE)),
+            ),
             interpreter_mode=payload.get("interpreter_mode", INTERPRETER_MODE_BRSE_PARTICIPANT),
             audio_routing=payload["audio_routing"],
         )

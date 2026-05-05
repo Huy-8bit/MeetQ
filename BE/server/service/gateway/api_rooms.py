@@ -4,6 +4,7 @@ from server.service.gateway.room_service import (
     BrseToggleForbiddenError,
     InvalidLanguageError,
     InvalidMeetingLanguagesError,
+    MeetingSummaryNotFoundError,
     ParticipantNotFoundError,
     RoomExpiredError,
     RoomFullError,
@@ -18,6 +19,7 @@ from server.models import (
     RoomSnapshotResponse,
     JoinRoomRequest,
     JoinRoomResponse,
+    MeetingSummaryResponse,
     ScreenShareStartRequest,
     ScreenShareStateResponse,
 )
@@ -44,7 +46,11 @@ async def create_room(
 ):
     try:
         payload = req or CreateRoomRequest()
-        return await service.create_room(payload.meeting_languages, payload.brse_enabled)
+        return await service.create_room(
+            payload.meeting_languages,
+            payload.brse_enabled,
+            payload.brse_mode,
+        )
     except InvalidMeetingLanguagesError as exc:
         return _error_response("invalid_meeting_languages", str(exc), 422, exc.details)
 
@@ -54,6 +60,14 @@ async def get_room(room_id: str, service: RoomService = Depends(get_room_service
         return await service.get_room(room_id)
     except RoomNotFoundError:
         return _error_response("room_not_found", "Room not found", 404)
+
+
+@router.get("/api/rooms/{room_id}/summary", response_model=MeetingSummaryResponse)
+async def get_room_summary(room_id: str, service: RoomService = Depends(get_room_service)):
+    try:
+        return await service.get_meeting_summary(room_id)
+    except MeetingSummaryNotFoundError:
+        return _error_response("meeting_summary_not_found", "Meeting summary not found", 404)
 
 @router.post("/api/rooms/{room_id}/join", response_model=JoinRoomResponse)
 async def join_room(room_id: str, req: JoinRoomRequest, service: RoomService = Depends(get_room_service)):

@@ -12,11 +12,12 @@ def generate_livekit_token(
     ttl_seconds: int = 86400,
     kind: str = "human",
     livekit_identity: str | None = None,
+    can_publish: bool = True,
 ) -> str:
     grant = VideoGrants(
         room_join=True,
         room=room_name,
-        can_publish=True,
+        can_publish=can_publish,
         can_subscribe=True,
         can_publish_data=False
     )

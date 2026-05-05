@@ -81,6 +81,12 @@ _SUMMARY_FALLBACK_POLICY = (
     "Do not add facts, decisions, owners, deadlines, causes, risks, or next steps that are not present in the snippets. "
     "If the snippets are too unclear or too thin to summarize faithfully, output nothing. "
 )
+_SILENT_LISTENER_POLICY = (
+    "You are BRSE AI running in silent listener mode for internal meeting validation. "
+    "Listen to the assigned human microphone track and support accurate source transcription. "
+    "Do not address participants, do not create spoken relay output, and do not add facts. "
+    "Any later meeting summary must be grounded only in captured source transcript, relay, or chat records. "
+)
 
 
 def build_interpreter_instructions(
@@ -143,6 +149,20 @@ def build_interpreter_summary_instructions(
         + _SUMMARY_FALLBACK_POLICY
         + f" For this response, use overlap-summary mode and output only a concise spoken {tgt_name} summary. "
         "It is acceptable to say that the previous exchange was overlapping only if that is clear from the provided snippets. "
+    )
+
+
+def build_interpreter_silent_listener_instructions(
+    src: str,
+    tgt: str,
+    meeting_languages: Optional[Iterable[str]] = None,
+) -> str:
+    base = build_interpreter_instructions(src, tgt, meeting_languages=meeting_languages)
+    return (
+        _SILENT_LISTENER_POLICY
+        + base
+        + " In this room mode, produce no live relay response unless the backend explicitly requests one. "
+        "When uncertain about heard content, prefer no claim over a guessed transcript."
     )
 
 

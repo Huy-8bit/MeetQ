@@ -17,6 +17,7 @@ from server.brain.realtime.session_config import (
     INTERPRETER_VAD_CONFIG,
     INTERPRETER_SEND_QUEUE_MAXSIZE,
     build_interpreter_instructions,
+    build_interpreter_silent_listener_instructions,
     build_interpreter_summary_instructions,
     build_interpreter_session_update,
 )
@@ -32,6 +33,7 @@ class InterpreterRealtimeClient(RealtimeClient):
 
     def __init__(self, *args, **kwargs):
         self.request_audio_output = kwargs.pop("request_audio_output", True)
+        self.silent_listener_mode = kwargs.pop("silent_listener_mode", False)
         self.meeting_languages = kwargs.pop("meeting_languages", None)
         kwargs["enable_speaker"] = False
         super().__init__(*args, **kwargs)
@@ -80,6 +82,12 @@ class InterpreterRealtimeClient(RealtimeClient):
         effective_src = self.src_lang
         if effective_src == "auto" and self._last_detected_src:
             effective_src = self._last_detected_src
+        if self.silent_listener_mode:
+            return build_interpreter_silent_listener_instructions(
+                effective_src,
+                self.tgt_lang,
+                meeting_languages=self.meeting_languages,
+            )
         return build_interpreter_instructions(
             effective_src,
             self.tgt_lang,

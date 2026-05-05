@@ -23,10 +23,12 @@ class LiveKitRuntime:
         on_media_connected: Callable[[str], None],
         on_media_disconnected: Callable[[str], None],
         on_audio_stream: Callable[[str, rtc.AudioStream], None],
+        output_audio_enabled: bool = True,
     ):
         self.room_id = room_id
         self.settings = settings
         self.room = rtc.Room()
+        self.output_audio_enabled = output_audio_enabled
         self.on_media_connected = on_media_connected
         self.on_media_disconnected = on_media_disconnected
         self.on_audio_stream = on_audio_stream
@@ -50,11 +52,16 @@ class LiveKitRuntime:
             api_secret=self.settings.livekit_api_secret,
             kind="virtual_brse",
             livekit_identity=self.livekit_identity,
+            can_publish=self.output_audio_enabled,
         )
 
         await self.room.connect(self.settings.livekit_ws_url_internal, token)
         self._sync_existing_audio_tracks()
-        logger.info("BRSE runtime connected to LiveKit room %s", self.room_id)
+        logger.info(
+            "BRSE runtime connected to LiveKit room %s output_audio_enabled=%s",
+            self.room_id,
+            self.output_audio_enabled,
+        )
 
     async def disconnect(self):
         await self.room.disconnect()
