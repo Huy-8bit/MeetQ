@@ -11,7 +11,7 @@ INTERPRETER_VAD_CONFIG = {
     "type": "server_vad",
     "threshold": 0.58,
     "prefix_padding_ms": 300,
-    "silence_duration_ms": 1150,
+    "silence_duration_ms": 1050,
     "create_response": False,
     "interrupt_response": False,
 }
@@ -32,10 +32,12 @@ _ROLE_POLICY = (
 )
 _PRAGMATIC_SPEAKING_POLICY = (
     "A real interpreter does not need to speak for every captured sound. "
+    "When a speaker clearly finishes a meaningful turn, provide the relay normally and promptly. "
+    "Clear short turns such as confirmations, answers, refusals, or acknowledgements can be useful and should be relayed when the source transcript is valid. "
     "Speak only when the relay will help the target-language listeners follow the meeting. "
-    "If the utterance is a tiny acknowledgement, filler, an unfinished fragment, obvious context, or too low-value to interrupt the flow, output nothing. "
-    "If the timing is poor or the speaker has not finished a usable thought, output nothing. "
-    "Prefer fewer, useful, well-timed relays over mechanically relaying every transcript. "
+    "If the utterance is filler-only, an unfinished fragment, obvious room noise, or too low-value to interrupt the flow, output nothing. "
+    "If the timing is poor or the speaker has not finished a usable thought, wait for a completed validated transcript instead of guessing. "
+    "Do not default to silence for normal completed speech; default to a concise direct relay when the meaning is clear enough. "
 )
 _OVERLAP_DISCIPLINE_POLICY = (
     "This runtime is assigned to exactly one speaker microphone track. "
@@ -50,6 +52,7 @@ _SOURCE_TRANSCRIPT_POLICY = (
     "Never speak just because audio, silence, noise, VAD speech_start, VAD speech_stop, or an incomplete transcript exists. "
     "Use only words and meaning present in the validated source utterance. "
     "If the utterance is empty, mostly noise, filler-only, ambiguous, unclear, cut off, or too low-signal to relay faithfully, output nothing. "
+    "If the validated utterance is clear enough to relay faithfully, relay it directly instead of staying silent. "
     "When uncertain, say nothing. "
     "Do not guess missing words. Do not complete fragments. Do not fill gaps. Do not infer context from the meeting. "
 )
@@ -149,7 +152,7 @@ def build_interpreter_instructions(
         + _LONG_UTTERANCE_POLICY
         + _OUTPUT_POLICY
         + f"Every word you output must be in {tgt_name} unless preserving a proper noun, code term, product name, or intentionally mixed-language term from the speaker. "
-        "If the validated source transcript is not sufficient for a faithful relay, output nothing. "
+        "If the validated source transcript is sufficient for a faithful relay, relay it directly; if it is not sufficient, output nothing. "
         + tone
     )
 

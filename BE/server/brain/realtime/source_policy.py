@@ -9,9 +9,10 @@ SOURCE_MIN_FINAL_MEANINGFUL_TOKENS = 1
 SOURCE_MIN_PARTIAL_MEANINGFUL_CHARS = 8
 SOURCE_MIN_PARTIAL_MEANINGFUL_TOKENS = 2
 SOURCE_MIN_SPEECH_DURATION_MS = 420
-PUBLIC_RELAY_MIN_MEANINGFUL_CHARS = 8
-PUBLIC_RELAY_MIN_MEANINGFUL_TOKENS = 2
-PUBLIC_RELAY_MIN_SPEECH_DURATION_MS = 650
+SOURCE_MIN_SHORT_MEANINGFUL_DURATION_MS = 250
+PUBLIC_RELAY_MIN_MEANINGFUL_CHARS = SOURCE_MIN_FINAL_MEANINGFUL_CHARS
+PUBLIC_RELAY_MIN_MEANINGFUL_TOKENS = SOURCE_MIN_FINAL_MEANINGFUL_TOKENS
+PUBLIC_RELAY_MIN_SPEECH_DURATION_MS = SOURCE_MIN_SPEECH_DURATION_MS
 
 _SOURCE_TOKEN_RE = re.compile(
     r"[A-Za-zÀ-ÖØ-öø-ÿ0-9]+|[\u3040-\u30ff\u3400-\u9fff\uf900-\ufaff\uac00-\ud7af]+"
@@ -59,9 +60,11 @@ _SOURCE_FILLER_TOKENS = {
     "啊",
     "呃",
 }
-_PUBLIC_RELAY_ACK_ONLY_PHRASES = {
+_SOURCE_SHORT_MEANINGFUL_PHRASES = {
     "ok",
     "okay",
+    "yes",
+    "no",
     "yeah",
     "yep",
     "yup",
@@ -72,25 +75,42 @@ _PUBLIC_RELAY_ACK_ONLY_PHRASES = {
     "got it",
     "i see",
     "uh huh",
+    "not yet",
+    "can't",
+    "cannot",
     "vâng",
-    "ừ",
-    "ừm",
-    "ờ",
     "ok anh",
     "ok em",
+    "đúng",
+    "đúng rồi",
     "được rồi",
     "rồi",
+    "em hiểu",
+    "anh hiểu",
     "hiểu rồi",
+    "không",
+    "chưa",
+    "không được",
+    "không thể",
     "はい",
     "うん",
+    "いいえ",
+    "まだです",
     "そうですね",
     "わかりました",
     "了解",
+    "無理",
+    "ダメ",
     "네",
     "응",
+    "아니요",
+    "안 됩니다",
     "알겠습니다",
     "嗯",
     "好的",
+    "不",
+    "不是",
+    "不行",
 }
 _PUBLIC_RELAY_HIGH_VALUE_SHORT_PHRASES = {
     "no",
@@ -128,12 +148,6 @@ _NARRATOR_OPENING_PATTERNS = (
         re.IGNORECASE,
     ),
     re.compile(
-        r"^\s*[\wÀ-ÖØ-öø-ÿ'.-]{1,40}\s+"
-        r"(?:said|says|is\s+saying|was\s+saying|mentioned|explained|asked|is\s+asking|"
-        r"told|is\s+telling|stated)\b",
-        re.IGNORECASE,
-    ),
-    re.compile(
         r"^\s*(?:they|people|the\s+team|everyone|the\s+group)\s+"
         r"(?:are\s+)?(?:discussing|talking\s+about|going\s+over)\b",
         re.IGNORECASE,
@@ -147,9 +161,11 @@ _NARRATOR_OPENING_PATTERNS = (
 _NARRATOR_HOLD_OPENING_RE = re.compile(
     r"^\s*(?:the\s+speaker|this\s+speaker|that\s+speaker|someone|one\s+person|"
     r"he|she|they|người\s+nói|anh\s+ấy|cô\s+ấy|họ|mọi\s+người|"
-    r"[\wÀ-ÖØ-öø-ÿ'.-]{1,40})\s*$",
+    r"they|people|the\s+team|everyone|the\s+group)\s*$",
     re.IGNORECASE,
 )
+_PHRASE_EDGE_RE = re.compile(r"^[\s\"`*_.:,;!?。！？、，()\[\]{}-]+|[\s\"`*_.:,;!?。！？、，()\[\]{}-]+$")
+_PHRASE_SPACE_RE = re.compile(r"[\s\"`*_.:,;!?。！？、，()\[\]{}-]+")
 
 
 def source_state_is_valid_for_output(state: Dict[str, Any]) -> bool:
@@ -169,6 +185,7 @@ def assess_public_relay_readiness(
     overlap_blocked: bool = False,
     audience_count: int = 0,
     chaos: bool = False,
+    overlap_level: str = "single",
 ) -> tuple[bool, str, Dict[str, Any]]:
     normalized = normalize_source_text(text)
     tokens = _SOURCE_TOKEN_RE.findall(normalized)
@@ -178,7 +195,7 @@ def assess_public_relay_readiness(
         if token.lower() not in _SOURCE_FILLER_TOKENS
     ]
     meaningful_chars = sum(1 for char in normalized if char.isalnum())
-    normalized_phrase = normalized.casefold()
+    normalized_phrase = normalize_phrase_key(normalized)
     signal = {
         "chars": len(normalized),
         "meaningful_chars": meaningful_chars,
@@ -189,39 +206,39 @@ def assess_public_relay_readiness(
         "overlap_blocked": overlap_blocked,
         "audience_count": audience_count,
         "chaos": chaos,
+        "overlap_level": overlap_level,
     }
 
     if not normalized:
         return False, "empty_public_relay", signal
-    if audience_count <= 0:
-        return False, "no_target_audience", signal
     if relay_style == "summary":
         return True, "summary_fallback", signal
-    if overlap_blocked:
-        return False, "overlap_secondary_literal_relay_suppressed", signal
-    if chaos:
-        return False, "chaotic_context_literal_relay_suppressed", signal
-    if normalized_phrase in _PUBLIC_RELAY_ACK_ONLY_PHRASES:
-        return False, "low_usefulness_acknowledgement", signal
+    if chaos or overlap_level == "heavy":
+        return False, "heavy_overlap_literal_relay_suppressed", signal
 
-    high_value_short = normalized_phrase in _PUBLIC_RELAY_HIGH_VALUE_SHORT_PHRASES
+    short_meaningful = normalized_phrase in _SOURCE_SHORT_MEANINGFUL_PHRASES
+    high_value_short = short_meaningful or normalized_phrase in _PUBLIC_RELAY_HIGH_VALUE_SHORT_PHRASES
+    if short_meaningful:
+        signal["short_meaningful_turn"] = True
+    if audience_count <= 0:
+        signal["audience_unavailable_observed"] = True
     if _PUBLIC_RELAY_FRAGMENT_END_RE.search(normalized):
         return False, "incomplete_fragment", signal
     if (
         duration_ms is not None
         and duration_ms < PUBLIC_RELAY_MIN_SPEECH_DURATION_MS
         and not high_value_short
-        and meaningful_chars < PUBLIC_RELAY_MIN_MEANINGFUL_CHARS + 4
+        and meaningful_chars < PUBLIC_RELAY_MIN_MEANINGFUL_CHARS
     ):
         return False, "speech_too_short_for_public_relay", signal
     if (
         len(meaningful_tokens) < PUBLIC_RELAY_MIN_MEANINGFUL_TOKENS
         and not high_value_short
-        and meaningful_chars < PUBLIC_RELAY_MIN_MEANINGFUL_CHARS + 4
+        and meaningful_chars < PUBLIC_RELAY_MIN_MEANINGFUL_CHARS
     ):
         return False, "low_usefulness_short_turn", signal
 
-    return True, "ok", signal
+    return True, "short_meaningful_turn" if short_meaningful else "ok", signal
 
 
 def relay_text_has_narrator_opening(
@@ -281,6 +298,8 @@ def assess_source_transcript(
         if token.lower() not in _SOURCE_FILLER_TOKENS
     ]
     meaningful_chars = sum(1 for char in normalized if char.isalnum())
+    normalized_phrase = normalize_phrase_key(normalized)
+    short_meaningful = normalized_phrase in _SOURCE_SHORT_MEANINGFUL_PHRASES
     signal = {
         "chars": len(normalized),
         "meaningful_chars": meaningful_chars,
@@ -288,6 +307,7 @@ def assess_source_transcript(
         "meaningful_tokens": len(meaningful_tokens),
         "duration_ms": duration_ms,
         "final": final,
+        "short_meaningful_turn": short_meaningful,
     }
 
     if not normalized:
@@ -298,11 +318,23 @@ def assess_source_transcript(
         return False, "punctuation_only_transcript", normalized, signal
 
     collapsed_meaningful = "".join(char.lower() for char in normalized if char.isalnum())
-    if len(collapsed_meaningful) <= 3 and len(set(collapsed_meaningful)) <= 1:
+    if (
+        not short_meaningful
+        and len(collapsed_meaningful) <= 3
+        and len(set(collapsed_meaningful)) <= 1
+    ):
         return False, "repetitive_low_signal_transcript", normalized, signal
 
-    if not meaningful_tokens:
+    if not meaningful_tokens and not short_meaningful:
         return False, "filler_only_transcript", normalized, signal
+
+    if final and short_meaningful:
+        if (
+            duration_ms is not None
+            and duration_ms < SOURCE_MIN_SHORT_MEANINGFUL_DURATION_MS
+        ):
+            return False, "speech_too_short", normalized, signal
+        return True, "short_meaningful_turn", normalized, signal
 
     min_chars = (
         SOURCE_MIN_FINAL_MEANINGFUL_CHARS
@@ -329,3 +361,9 @@ def assess_source_transcript(
 
 def normalize_source_text(text: str) -> str:
     return re.sub(r"\s+", " ", (text or "").strip())
+
+
+def normalize_phrase_key(text: str) -> str:
+    normalized = normalize_source_text(text).casefold()
+    normalized = _PHRASE_EDGE_RE.sub("", normalized)
+    return _PHRASE_SPACE_RE.sub(" ", normalized).strip()

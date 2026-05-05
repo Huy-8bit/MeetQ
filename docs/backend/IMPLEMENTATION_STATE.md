@@ -1,5 +1,122 @@
 # Backend Implementation State
 
+## Turn Update: 2026-05-06 BRSE Relay Over-Suppression Calibration
+
+- Time: 2026-05-06T00:00:00+07:00
+- Mode: CODE-ONLY
+- Status: implemented
+- Testing deferred: full test suite not run, per instruction
+
+### Objective
+
+Restore usable live BRSE relay on the healthy single-speaker path while keeping
+the newer interpreter-style behavior. This pass is calibration only: preserve
+room lifecycle, LiveKit, Gateway, chat, screen share, expiry, persistence,
+archive, and post-meeting summary behavior.
+
+### Read Status
+
+- Read required docs:
+  - `docs/backend/README.md`
+  - `docs/backend/INTERPRETER_DESIGN.md`
+  - `docs/backend/IMPLEMENTATION_STATE.md`
+  - `docs/backend/API_CONTRACT.md`
+- Read required runtime files:
+  - `BE/server/service/brain_runtime/room_manager.py`
+  - `BE/server/service/media/output_router.py`
+  - `BE/server/service/media/livekit_runtime.py`
+  - `BE/server/brain/realtime/interpreter_client.py`
+  - `BE/server/brain/realtime/session_config.py`
+  - `BE/server/brain/realtime/source_policy.py`
+  - `BE/server/brain/prompts/language.py`
+- Related relay/summary/transcript files read:
+  - `BE/server/service/media/audio_input.py`
+  - `BE/server/service/brain_runtime/events.py`
+  - `BE/server/service/gateway/event_consumer.py`
+  - `BE/server/service/gateway/meeting_summary_service.py`
+  - `BE/server/brain/meeting_summary.py`
+
+### Over-Suppression Trace
+
+- Public relay readiness currently hard-drops normal relay when
+  `audience_count <= 0`. That is too strict for the hot path because audience
+  membership can be temporarily empty or stale while the BRSE participant can
+  still publish room-wide relay audio/text.
+- The public relay policy treats short acknowledgements as low usefulness and
+  suppresses phrases such as `ok`, `được rồi`, and `hiểu rồi`. In real meeting
+  relay these short turns are often meaningful and should pass when the source
+  transcript itself is valid.
+- Overlap gating is too binary. Any `source_blocked_for_overlap` normal relay is
+  suppressed, and chaos mode activates with only two recent turns plus one
+  overlap/pending condition. This pushes light overlap and normal sequential
+  handoffs into suppress/summary behavior too often.
+- The prompt now over-emphasizes silence, including "tiny acknowledgement" and
+  "prefer fewer" wording, which can reinforce runtime suppression instead of
+  direct relay for clear completed turns.
+- The narrator opening gate rejects complete responses on broad name + reporting
+  verb patterns and holds single-word openings broadly. This is useful for clear
+  narrator leakage, but it should be narrower so it does not become a second
+  mute path for otherwise valid relay.
+
+### Calibration Implemented
+
+- Make single-speaker clear source transcript the healthy default path.
+- Keep source transcript validation as the anti-noise / anti-hallucination base.
+- Change public relay gating from hard suppress to calibrated suppress:
+  - validated normal turns now pass by default, including meaningful short
+    turns such as `ok`, `đúng rồi`, `em hiểu`, and `được rồi`.
+  - missing target audience is logged in the readiness signal as
+    `audience_unavailable_observed`, but no longer hard-kills relay.
+  - suppress remains for empty/invalid source, incomplete fragments, stale
+    responses, and heavy-overlap literal relay.
+- Source policy now allows a controlled short-meaningful path with a lower
+  minimum duration floor for real acknowledgements/answers while preserving
+  filler/noise rejection.
+- Overlap behavior now uses explicit levels:
+  - `single`: direct relay.
+  - `light`: direct relay remains eligible, focused speaker preferred, queued
+    overlap turns can still relay after focus release.
+  - `heavy`: summary fallback or suppress literal relay when the context is
+    actually chaotic.
+- Summary fallback is rarer: it now requires at least three recent validated
+  turns, multiple speakers, and heavier overlap/pending pressure.
+- Prompt and response instructions were rebalanced:
+  - still forbid narrator/minutes/MC wording.
+  - explicitly say clear completed meaningful turns should be relayed normally.
+  - no longer push the model toward silence for every short acknowledgement.
+- Narrator handling remains, but the broad generic `name said` regex was
+  narrowed so only clear pronoun/meta openings and the actual speaker name are
+  rejected. Single generic opening words are no longer held by default.
+
+### Observability
+
+- Public relay logs now include `overlap_level`, approval/suppression counts,
+  and a `single_speaker_total` counter for healthy-path relay approvals.
+- Relay final logs include the selected overlap level.
+- Existing logs still cover stale suppress, narrator-style rejection, public
+  audio hold/release/reject, and summary fallback selection.
+
+### Files Modified
+
+- `BE/server/brain/realtime/source_policy.py`
+- `BE/server/brain/realtime/session_config.py`
+- `BE/server/brain/realtime/interpreter_client.py`
+- `BE/server/service/brain_runtime/room_manager.py`
+- `docs/backend/IMPLEMENTATION_STATE.md`
+
+### Verification
+
+- Full test suite not run, per CODE-ONLY instruction.
+- New tests not added, per instruction.
+- Existing tests not modified.
+- Lightweight checks run:
+  - `PYTHONPATH=BE python -m py_compile BE/server/brain/realtime/source_policy.py BE/server/brain/realtime/session_config.py BE/server/brain/realtime/interpreter_client.py BE/server/service/brain_runtime/room_manager.py BE/server/service/media/output_router.py BE/server/service/media/livekit_runtime.py`
+  - targeted source/public policy smoke check for short meaningful turns,
+    light overlap, and heavy overlap.
+  - `git diff --check -- BE/server/brain/realtime/source_policy.py BE/server/brain/realtime/session_config.py BE/server/brain/realtime/interpreter_client.py BE/server/service/brain_runtime/room_manager.py docs/backend/IMPLEMENTATION_STATE.md`
+
+---
+
 ## Turn Update: 2026-05-06 BRSE Interpreter-Like Public Relay Policy
 
 - Time: 2026-05-06T00:00:00+07:00

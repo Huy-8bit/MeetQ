@@ -49,9 +49,13 @@ _INPUT_QUEUE_MAXSIZE = INTERPRETER_INPUT_QUEUE_MAXSIZE
 _INPUT_WARMUP_CHUNKS = INTERPRETER_INPUT_WARMUP_CHUNKS
 _OVERLAP_FOCUS_COOLDOWN_SECONDS = 0.85
 _CHAOS_RECENT_WINDOW_SECONDS = 7.0
-_CHAOS_MIN_SUMMARY_TURNS = 2
+_CHAOS_MIN_SUMMARY_TURNS = 3
 _CHAOS_MIN_DISTINCT_SPEAKERS = 2
-_CHAOS_PENDING_RELAY_THRESHOLD = 2
+_CHAOS_PENDING_RELAY_THRESHOLD = 3
+_OVERLAP_LEVEL_SINGLE = "single"
+_OVERLAP_LEVEL_LIGHT = "light"
+_OVERLAP_LEVEL_HEAVY = "heavy"
+_OVERLAP_HEAVY_BLOCKED_SPEAKER_THRESHOLD = 2
 _SUMMARY_MAX_SOURCE_CHARS = 1400
 _RELAY_STATE_CLEANUP_DELAY_SECONDS = 1.0
 _PUBLIC_TEXT_GATE_REASON = "pending_public_text_gate"
@@ -144,6 +148,9 @@ class RoomInterpreterManager:
         self.meeting_languages: tuple[str, str] = DEFAULT_ROOM_MEETING_LANGUAGES
         self._meeting_languages_ready = False
         self._closed = False
+        self.public_relay_approved_count = 0
+        self.public_relay_suppressed_count = 0
+        self.single_speaker_relay_approved_count = 0
 
     async def start(self) -> None:
         logger.info(
@@ -1037,15 +1044,17 @@ class RoomInterpreterManager:
         overlap_window_ms = None
         if speaker_id in self.overlap_blocked_speakers:
             overlap_window_ms = self._overlap_window_ms()
+        level = self._overlap_level()
         return {
             "detected": bool(blocked_speaker_ids),
+            "level": level,
             "speaker_blocked": speaker_id in self.overlap_blocked_speakers,
             "primary_speaker_id": self.relay_focus_speaker_id,
             "blocked_by": state.blocked_by if state is not None else None,
             "blocked_speaker_ids": blocked_speaker_ids,
             "suppressed_speaker_count": len(blocked_speaker_ids),
             "overlap_window_ms": overlap_window_ms,
-            "chaos": self._chaos_detected(),
+            "chaos": level == _OVERLAP_LEVEL_HEAVY,
         }
 
     def _pending_relay_count(self) -> int:
@@ -1060,21 +1069,43 @@ class RoomInterpreterManager:
         return total
 
     def _chaos_detected(self) -> bool:
+        return self._overlap_level() == _OVERLAP_LEVEL_HEAVY
+
+    def _recent_overlap_context(self) -> tuple[list[Dict[str, Any]], set[Any]]:
         now = time.monotonic()
         recent_turns = [
             turn
             for turn in self.recent_validated_source_turns
             if now - float(turn.get("recorded_at", 0.0)) <= _CHAOS_RECENT_WINDOW_SECONDS
         ]
-        distinct_speakers = {turn.get("speaker_id") for turn in recent_turns if turn.get("speaker_id")}
-        return bool(
+        distinct_speakers = {
+            turn.get("speaker_id")
+            for turn in recent_turns
+            if turn.get("speaker_id")
+        }
+        return recent_turns, distinct_speakers
+
+    def _overlap_level(self) -> str:
+        recent_turns, distinct_speakers = self._recent_overlap_context()
+        blocked_count = len(self.overlap_blocked_speakers)
+        pending_count = self._pending_relay_count()
+        heavy = bool(
             len(recent_turns) >= _CHAOS_MIN_SUMMARY_TURNS
             and len(distinct_speakers) >= _CHAOS_MIN_DISTINCT_SPEAKERS
             and (
-                self.overlap_blocked_speakers
-                or self._pending_relay_count() >= _CHAOS_PENDING_RELAY_THRESHOLD
+                blocked_count >= _OVERLAP_HEAVY_BLOCKED_SPEAKER_THRESHOLD
+                or pending_count >= _CHAOS_PENDING_RELAY_THRESHOLD
             )
         )
+        if heavy:
+            return _OVERLAP_LEVEL_HEAVY
+        if (
+            blocked_count
+            or pending_count
+            or len(distinct_speakers) >= _CHAOS_MIN_DISTINCT_SPEAKERS
+        ):
+            return _OVERLAP_LEVEL_LIGHT
+        return _OVERLAP_LEVEL_SINGLE
 
     def _record_validated_source_turn(self, *, speaker_id: str, state: Dict[str, Any]) -> None:
         now = time.monotonic()
@@ -1104,7 +1135,8 @@ class RoomInterpreterManager:
     ) -> None:
         audience_count = len(self.speaker_audiences.get(speaker_id, frozenset()))
         relay_style = str(state.get("relay_style") or "normal")
-        chaos = self._chaos_detected()
+        overlap_level = self._overlap_level()
+        chaos = overlap_level == _OVERLAP_LEVEL_HEAVY
         approved, reason, signal = assess_public_relay_readiness(
             state.get("relay_source_text") or state.get("source_text") or "",
             duration_ms=state.get("speech_duration_ms"),
@@ -1112,34 +1144,47 @@ class RoomInterpreterManager:
             overlap_blocked=bool(state.get("source_blocked_for_overlap")),
             audience_count=audience_count,
             chaos=chaos,
+            overlap_level=overlap_level,
         )
         state["public_relay_approved"] = approved
         state["public_relay_reason"] = reason
         state["public_relay_signal"] = signal
+        state["public_relay_overlap_level"] = overlap_level
         if approved:
+            self.public_relay_approved_count += 1
+            if relay_style == "normal" and overlap_level == _OVERLAP_LEVEL_SINGLE:
+                self.single_speaker_relay_approved_count += 1
             logger.info(
                 "BRSE public relay approved room=%s speaker=%s utterance=%s "
-                "reason=%s relay_style=%s audience=%d chaos=%s",
+                "reason=%s relay_style=%s audience=%d overlap_level=%s chaos=%s "
+                "approved_total=%d single_speaker_total=%d",
                 self.room_id,
                 speaker_id,
                 state.get("utterance_id"),
                 reason,
                 relay_style,
                 audience_count,
+                overlap_level,
                 chaos,
+                self.public_relay_approved_count,
+                self.single_speaker_relay_approved_count,
             )
             return
 
+        self.public_relay_suppressed_count += 1
         logger.info(
             "BRSE public relay suppressed room=%s speaker=%s utterance=%s "
-            "reason=%s relay_style=%s audience=%d chaos=%s signal=%s",
+            "reason=%s relay_style=%s audience=%d overlap_level=%s chaos=%s "
+            "suppressed_total=%d signal=%s",
             self.room_id,
             speaker_id,
             state.get("utterance_id"),
             reason,
             relay_style,
             audience_count,
+            overlap_level,
             chaos,
+            self.public_relay_suppressed_count,
             signal,
         )
 
@@ -1258,15 +1303,11 @@ class RoomInterpreterManager:
         target_lang: str,
         current_state: Dict[str, Any],
     ) -> Optional[Dict[str, Any]]:
-        if not self._chaos_detected():
+        overlap_level = self._overlap_level()
+        if overlap_level != _OVERLAP_LEVEL_HEAVY:
             return None
 
-        now = time.monotonic()
-        recent_turns = [
-            turn
-            for turn in self.recent_validated_source_turns
-            if now - float(turn.get("recorded_at", 0.0)) <= _CHAOS_RECENT_WINDOW_SECONDS
-        ]
+        recent_turns, _distinct_speaker_set = self._recent_overlap_context()
         distinct_speakers = sorted({str(turn.get("speaker_id")) for turn in recent_turns if turn.get("speaker_id")})
         if len(recent_turns) < _CHAOS_MIN_SUMMARY_TURNS or len(distinct_speakers) < _CHAOS_MIN_DISTINCT_SPEAKERS:
             return None
@@ -1304,7 +1345,7 @@ class RoomInterpreterManager:
         )
         logger.warning(
             "BRSE chaos summary fallback selected room=%s speaker=%s target=%s "
-            "items=%d distinct_speakers=%d pending_relays=%d blocked=%d",
+            "items=%d distinct_speakers=%d pending_relays=%d blocked=%d overlap_level=%s",
             self.room_id,
             speaker_id,
             target_lang,
@@ -1312,6 +1353,7 @@ class RoomInterpreterManager:
             len(distinct_speakers),
             self._pending_relay_count(),
             len(self.overlap_blocked_speakers),
+            overlap_level,
         )
         return {
             "source_text": source_text,
@@ -1563,7 +1605,8 @@ class RoomInterpreterManager:
                 logger.info(
                     "BRSE source transcript completed room=%s speaker=%s utterance=%s "
                     "route=%s->%s chars=%d tokens=%s duration_ms=%s generation=%d "
-                    "relay_style=%s blocked=%s public_relay=%s public_reason=%s pending_relays=%d",
+                    "relay_style=%s blocked=%s overlap_level=%s public_relay=%s "
+                    "public_reason=%s pending_relays=%d",
                     self.room_id,
                     speaker_id,
                     state["utterance_id"],
@@ -1575,6 +1618,7 @@ class RoomInterpreterManager:
                     generation,
                     state.get("relay_style", "normal"),
                     state.get("source_blocked_for_overlap"),
+                    state.get("public_relay_overlap_level"),
                     state.get("public_relay_approved"),
                     state.get("public_relay_reason"),
                     self._pending_relay_count(),
@@ -2255,7 +2299,8 @@ class RoomInterpreterManager:
         latency_ms = int(max(0.0, time.monotonic() - state["started_at"]) * 1000)
         logger.info(
             "BRSE relay final room=%s speaker=%s utterance=%s route=%s->%s "
-            "source_chars=%d relay_chars=%d latency_ms=%d audience=%d generation=%d relay_style=%s",
+            "source_chars=%d relay_chars=%d latency_ms=%d audience=%d generation=%d "
+            "relay_style=%s overlap_level=%s",
             self.room_id,
             speaker_id,
             state["utterance_id"],
@@ -2267,6 +2312,7 @@ class RoomInterpreterManager:
             len(self.speaker_audiences.get(speaker_id, frozenset())),
             generation,
             state.get("relay_style", "normal"),
+            state.get("public_relay_overlap_level", _OVERLAP_LEVEL_SINGLE),
         )
         await self.publisher.publish_relay_transcript_final(
             transcript_id=state["relay_transcript_id"],
@@ -2408,6 +2454,7 @@ class RoomInterpreterManager:
             "public_relay_approved": False,
             "public_relay_reason": None,
             "public_relay_signal": {},
+            "public_relay_overlap_level": _OVERLAP_LEVEL_SINGLE,
             "public_output_ready": False,
             "public_output_rejected": False,
             "public_output_gate_reason": None,

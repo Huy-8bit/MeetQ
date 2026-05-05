@@ -699,7 +699,8 @@ class InterpreterRealtimeClient(RealtimeClient):
                 "Produce the direct interpreted message only, as if speaking for the original speaker. "
                 "Do not say or imply that a person said, is saying, mentioned, or discussed something. "
                 "Do not use prior audio or conversation context. "
-                "If this text is not sufficient for a faithful relay, output nothing."
+                "If this text is clear enough for a faithful relay, provide the relay; "
+                "output nothing only when the text is insufficient, unclear, or incomplete."
             )
         payload = {
             "type": "response.create",
