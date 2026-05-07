@@ -1,5 +1,95 @@
 # Frontend Implementation State
 
+## Turn Update: 2026-05-07 Final Summary Fetch-First Flow
+
+- Time: 2026-05-07T00:00:00+07:00
+- Mode: CODE-ONLY
+- Status: implemented
+- Testing deferred: yes, per instruction
+
+### Objective
+
+Fix the frontend final-summary runtime path so the ended-room summary screen
+reads an existing `final` summary before offering any generation action.
+
+### Root Cause
+
+- The ended-room path in `RoomPage` automatically called
+  `prepareFinalSummary()`.
+- `prepareFinalSummary()` maps to `POST /api/rooms/{room_id}/summary?type=final`,
+  which is the backend generate path.
+- Because that action ran on screen load and last-leave/expiry transitions, FE
+  could show final preparation/error states even when a completed `final`
+  summary was already persisted in MongoDB and readable through the contract
+  `GET /api/rooms/{room_id}/summary?type=final`.
+
+### Fix Strategy
+
+- Keep `GET` and `POST` summary calls separate in the FE runtime.
+- Make final-summary screen entry fetch `final` first.
+- Keep generation only behind explicit user actions such as prepare/retry.
+- Render final summary states distinctly: loading, completed, pending, failed,
+  and no summary yet.
+- Preserve active-room interim summary generation/refresh behavior.
+
+### Runtime Changes
+
+- Ended-room page entry now calls
+  `GET /api/rooms/{room_id}/summary?type=final` with not-found treated as the
+  product state "not available yet".
+- Expiry shutdown and last-human-leave summary transitions now read final
+  summary first instead of auto-posting generation.
+- `POST /summary?type=final` remains available only through the explicit
+  Prepare/Retry final action.
+- Final summary polling remains bounded and read-only after a pending final
+  record is observed.
+- The hook guards final generation when a final summary is already
+  `completed` or `pending`, preventing accidental duplicate generate requests.
+- Fetch and generate failures now use operation-specific messages:
+  - fetch: `Could not load final summary.`
+  - generate: `Could not generate final summary.`
+
+### Render State Machine
+
+- Loading: shows saved-summary lookup state while final `GET` is in flight.
+- Completed: renders the final artifact immediately and hides prepare as the
+  primary path.
+- Pending: shows final-summary preparation state and allows read-only
+  "Check latest".
+- Failed: shows failure copy and an explicit retry action.
+- No summary yet: shows final summary unavailable state and allows explicit
+  prepare.
+- Skipped/not enough content: shows unavailable content state without treating
+  it as a completed artifact.
+
+### Payload Rendering
+
+- Completed summaries render available `summary_text`, `highlights`,
+  `decisions`, `action_items`, `participant_summary`, `generated_at`, and
+  `summary_language`.
+- `source_stats` is shown as a compact source-count section when useful.
+- Optional fields remain backward-safe and hidden when absent.
+
+### Files Changed
+
+| File | Change |
+|------|--------|
+| `FE/src/pages/RoomPage.tsx` | Changed ended-room and last-leave final summary entry from auto-generate to fetch-first; wired separate final check action |
+| `FE/src/features/room/useMeetingRoom.ts` | Separated fetch/generate error handling, cleared stale cross-type summaries, guarded final generate when completed/pending, and changed expiry flow to fetch final |
+| `FE/src/lib/api.ts` | Uses distinct read/generate response aliases for summary API calls |
+| `FE/src/types/api.ts` | Added `FetchMeetingSummaryResponse` and `GenerateMeetingSummaryResponse` aliases over the shared backend schema |
+| `FE/src/components/MeetingSummaryPanel.tsx` | Added final-specific state machine/actions and renders optional summary payload sections safely |
+| `FE/src/index.css` | Added compact source-stat and summary metadata styling, including dark theme support |
+| `docs/frontend/IMPLEMENTATION_STATE.md` | Documented root cause, fetch-first strategy, state changes, files changed, and deferred testing |
+
+### Testing
+
+- Full test suite not run, per CODE-ONLY instruction.
+- New tests not added.
+- Existing tests not modified.
+
+---
+
 ## Turn Update: 2026-05-07 Meeting Theme, Layout, and Stage Focus UX
 
 - Time: 2026-05-07T00:00:00+07:00

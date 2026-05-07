@@ -148,7 +148,9 @@ export function RoomPage() {
       return;
     }
 
-    void meeting.prepareFinalSummary();
+    void meeting.fetchMeetingSummary("final", {
+      suppressNotFound: true,
+    });
   }, [roomId, session, snapshotExpired, showEndedSummary]);
 
   const activeScreenShareParticipants = meeting.participants.filter(
@@ -175,12 +177,18 @@ export function RoomPage() {
       isLoading={meeting.isLoadingSummary}
       isGenerating={meeting.isGeneratingSummary}
       error={meeting.summaryError}
+      errorSource={meeting.summaryErrorSource}
       canRefreshInterim={meeting.canRefreshInterimSummary && !isRoomExpired}
       onRefreshInterim={() => {
         void meeting.refreshInterimSummary();
       }}
       onCheckInterim={() => {
         void meeting.fetchMeetingSummary("interim", {
+          suppressNotFound: true,
+        });
+      }}
+      onCheckFinal={() => {
+        void meeting.fetchMeetingSummary("final", {
           suppressNotFound: true,
         });
       }}
@@ -462,7 +470,9 @@ export function RoomPage() {
               void meeting.leaveRoom().then(() => {
                 if (shouldShowFinalSummary) {
                   setShowEndedSummary(true);
-                  void meeting.prepareFinalSummary();
+                  void meeting.fetchMeetingSummary("final", {
+                    suppressNotFound: true,
+                  });
                   return;
                 }
 

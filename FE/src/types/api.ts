@@ -344,6 +344,9 @@ export interface MeetingSummaryResponse {
   error?: string | null;
 }
 
+export type FetchMeetingSummaryResponse = MeetingSummaryResponse;
+export type GenerateMeetingSummaryResponse = MeetingSummaryResponse;
+
 // ─── Chat types ───────────────────────────────────────────────────────────────
 
 export type ChatTranslationMode = "original_only" | "translate";

@@ -168,11 +168,9 @@ class MongoRoomHistoryRepository:
             {
                 "$setOnInsert": {
                     "room_id": room.room_id,
-                    "created_at": room.created_at,
-                    "created_at_dt": self._parse_dt(room.created_at),
                     "created_by": "gateway",
                 },
-                "$set": room_doc,
+                "$set": self._without_keys(room_doc, {"room_id"}),
             },
             upsert=True,
         )
@@ -207,11 +205,9 @@ class MongoRoomHistoryRepository:
             {
                 "$setOnInsert": {
                     "room_id": room_id,
-                    "created_at": self._value(room, "created_at"),
-                    "created_at_dt": self._parse_dt(self._value(room, "created_at")),
                     "created_by": "gateway",
                 },
-                "$set": room_doc | {"last_event_at": changed_at},
+                "$set": self._without_keys(room_doc | {"last_event_at": changed_at}, {"room_id"}),
             },
             upsert=True,
         )
@@ -874,11 +870,9 @@ class MongoRoomHistoryRepository:
             {
                 "$setOnInsert": {
                     "room_id": room_id,
-                    "created_at": self._value(room, "created_at"),
-                    "created_at_dt": self._parse_dt(self._value(room, "created_at")),
                     "created_by": "gateway",
                 },
-                "$set": update_doc,
+                "$set": self._without_keys(update_doc, {"room_id"}),
             },
             upsert=True,
         )
@@ -1109,6 +1103,9 @@ class MongoRoomHistoryRepository:
         if isinstance(value, list):
             return [self._model_dump(item) for item in value]
         return value
+
+    def _without_keys(self, doc: Dict[str, Any], keys: set[str]) -> Dict[str, Any]:
+        return {key: value for key, value in doc.items() if key not in keys}
 
     def _now_str(self) -> str:
         return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")

@@ -618,9 +618,25 @@ class RoomService:
         if not self.room_history or not self.room_history.enabled:
             raise MeetingSummaryNotFoundError()
         normalized_type = self._normalize_summary_type(summary_type)
+        logger.info(
+            "meeting summary fetch requested: room_id=%s type=%s",
+            room_id,
+            normalized_type,
+        )
         summary = await self.room_history.get_meeting_summary(room_id, summary_type=normalized_type)
         if not summary:
+            logger.info(
+                "meeting summary fetch miss: room_id=%s type=%s",
+                room_id,
+                normalized_type,
+            )
             raise MeetingSummaryNotFoundError()
+        logger.info(
+            "meeting summary fetch hit: room_id=%s type=%s status=%s",
+            room_id,
+            normalized_type,
+            summary.get("status"),
+        )
         return MeetingSummaryResponse.model_validate(summary)
 
     async def generate_meeting_summary(
@@ -635,9 +651,17 @@ class RoomService:
             room_id,
             include_silent_transcripts=True,
         )
+        raw_room = await self.store.get_room_state(room_id) if snapshot is not None else None
         normalized_type = self._resolve_summary_type(summary_type, snapshot)
         if snapshot is None and not await self.room_history.room_exists(room_id):
             raise RoomNotFoundError()
+        logger.info(
+            "meeting summary generate requested: room_id=%s type=%s snapshot_state=%s expired=%s",
+            room_id,
+            normalized_type,
+            snapshot.room.state if snapshot is not None else None,
+            self._is_room_expired(snapshot) if snapshot is not None else None,
+        )
         if normalized_type == SUMMARY_TYPE_INTERIM:
             if snapshot is None:
                 raise RoomNotFoundError()
@@ -648,31 +672,58 @@ class RoomService:
                 trigger_reason="on_demand_interim_refresh",
             )
         else:
-            if snapshot is not None and not self._is_room_expired(snapshot) and snapshot.room.state != "empty":
+            existing_final = await self.room_history.get_meeting_summary(
+                room_id,
+                summary_type=SUMMARY_TYPE_FINAL,
+            )
+            if existing_final is not None:
+                logger.info(
+                    "meeting final summary generate reused existing: room_id=%s status=%s",
+                    room_id,
+                    existing_final.get("status"),
+                )
+                return MeetingSummaryResponse.model_validate(existing_final)
+
+            lifecycle_room = raw_room or (snapshot.room if snapshot is not None else None)
+            room_state = self._room_value(lifecycle_room, "state")
+            is_expired = snapshot is not None and self._is_room_expired(snapshot)
+            is_empty = room_state == "empty"
+            if snapshot is not None and not is_expired and not is_empty:
                 raise MeetingSummaryNotReadyError()
-            if snapshot is not None and snapshot.room.state == "empty":
+
+            current_human_count = active_human_participant_count(snapshot.participants) if snapshot is not None else 0
+            if snapshot is not None and is_empty:
+                emptied_at = (
+                    self._room_value(lifecycle_room, "emptied_at")
+                    or self._room_value(lifecycle_room, "ended_at")
+                )
                 await self.room_history.persist_room_emptied(
-                    snapshot.room,
-                    emptied_at=snapshot.room.emptied_at,
-                    current_human_count=active_human_participant_count(snapshot.participants),
+                    lifecycle_room,
+                    emptied_at=emptied_at,
+                    current_human_count=current_human_count,
                     reason="on_demand_final_empty",
                 )
-            if snapshot is not None and self._is_room_expired(snapshot):
+            if snapshot is not None and is_expired:
+                expired_at = (
+                    self._room_value(lifecycle_room, "ended_at")
+                    or self._room_value(lifecycle_room, "expires_at")
+                    or self._room_value(snapshot.room, "expires_at")
+                )
                 await self.room_history.persist_room_expired(
-                    snapshot.room,
-                    expired_at=snapshot.room.expires_at,
-                    current_human_count=active_human_participant_count(snapshot.participants),
+                    lifecycle_room,
+                    expired_at=expired_at,
+                    current_human_count=current_human_count,
                     reason="on_demand_final_expired",
                 )
+            ended_at = self._final_summary_ended_at(
+                lifecycle_room,
+                is_empty=is_empty,
+                is_expired=is_expired,
+            )
             summary = await self.meeting_summary_service.generate_for_room_end(
                 room_id=room_id,
                 trigger_reason="on_demand_final",
-                ended_at=(
-                    snapshot.room.emptied_at
-                    if snapshot is not None and snapshot.room.state == "empty"
-                    else snapshot.room.expires_at if snapshot is not None and self._is_room_expired(snapshot)
-                    else None
-                ),
+                ended_at=ended_at,
             )
         if not summary:
             raise MeetingSummaryNotFoundError()
@@ -840,6 +891,34 @@ class RoomService:
         if start_dt is None or end_dt is None:
             return None
         return max(int((end_dt - start_dt).total_seconds()), 0)
+
+    def _room_value(self, room: Any, field: str, default: Any = None) -> Any:
+        if room is None:
+            return default
+        if hasattr(room, field):
+            return getattr(room, field)
+        if isinstance(room, dict):
+            return room.get(field, default)
+        return default
+
+    def _final_summary_ended_at(
+        self,
+        room: Any,
+        *,
+        is_empty: bool,
+        is_expired: bool,
+    ) -> Optional[str]:
+        if is_empty:
+            return (
+                self._room_value(room, "emptied_at")
+                or self._room_value(room, "ended_at")
+            )
+        if is_expired:
+            return (
+                self._room_value(room, "ended_at")
+                or self._room_value(room, "expires_at")
+            )
+        return self._room_value(room, "ended_at")
 
     def build_snapshot_data_for_participant(
         self,

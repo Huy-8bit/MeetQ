@@ -1,5 +1,93 @@
 # Backend Implementation State
 
+## Turn Update: 2026-05-07 Mongo Persistence + Final Summary Runtime Fix
+
+- Time: 2026-05-07T00:00:00+07:00
+- Mode: CODE-ONLY
+- Status: implemented
+- Testing deferred: yes, per instruction
+
+### Objective
+
+Fix two backend runtime failures without changing the room, relay, chat, screen
+share, expiry, websocket, or summary architecture:
+
+- Mongo room persistence update conflict on `room_id`.
+- Final summary generation crash when optional lifecycle fields are missing from
+  the runtime snapshot response model.
+
+### Root Cause Trace
+
+- `MongoRoomHistoryRepository.persist_room_created()` and
+  `_refresh_room_participant_summary()` build a room document that includes
+  `room_id`, then use it under `$set` while also setting `$setOnInsert.room_id`.
+  MongoDB rejects that update because the same path is present in both update
+  operators.
+- `RoomService.generate_meeting_summary()` accesses
+  `snapshot.room.emptied_at`, but `snapshot.room` is a
+  `RoomSnapshotResponseRoom` whose public response model does not include
+  `emptied_at`. That makes valid final summary generation crash with
+  `AttributeError`.
+
+### Fix Strategy
+
+- Remove immutable insert-only fields from `$set` documents where
+  `$setOnInsert` already owns those paths.
+- Keep persisted room metadata shape intact after insert while avoiding
+  operator conflicts.
+- Use safe lifecycle field access in final summary generation, especially for
+  `activated_at`, `emptied_at`, `expires_at`, and terminal `ended_at` fallback.
+- Preserve summary semantics:
+  - `GET /summary` reads an existing stored summary.
+  - `POST /summary` generates/refreshes or idempotently returns existing final
+    summary.
+
+### Persistence Changes
+
+- `persist_room_created()` now keeps `room_id` under `$setOnInsert` and strips
+  it from the `$set` room metadata document.
+- `persist_room_mode_updated()` uses the same conflict-free split.
+- `_refresh_room_participant_summary()` strips `room_id` from the `$set` update
+  used after participant joins.
+- `created_at` and `created_at_dt` remain in the room metadata `$set` document,
+  so existing placeholder room archive records can still be completed with full
+  room metadata without conflicting with `$setOnInsert`.
+
+### Summary Runtime Changes
+
+- `RoomService.generate_meeting_summary()` checks for an existing `final`
+  summary before touching terminal lifecycle fields. This preserves the
+  idempotent final summary behavior and lets `POST .../summary?type=final`
+  return an existing final record instead of crashing.
+- On-demand final generation now reads raw Redis `RoomState` via
+  `RoomStore.get_room_state()` for internal lifecycle fields when available.
+- Final lifecycle access now uses safe helper accessors and fallbacks:
+  - empty rooms prefer `emptied_at`, then `ended_at`.
+  - expired rooms prefer `ended_at`, then `expires_at`.
+  - missing optional fields resolve to `None` rather than raising
+    `AttributeError`.
+- Existing `GET /summary?type=final` remains a pure read path and now logs
+  concise hit/miss/status information.
+- Summary generation logs the requested type, snapshot state, and expiry
+  decision used by the runtime.
+
+### Files Changed
+
+| File | Change |
+|------|--------|
+| `BE/server/service/persistence/room_history.py` | Removed `room_id` from room `$set` documents that also use `$setOnInsert.room_id`; kept room metadata fields in `$set` |
+| `BE/server/service/gateway/room_service.py` | Added final-summary existing-record reuse before lifecycle persistence, safe lifecycle accessors/fallbacks, and concise summary fetch/generate logs |
+| `BE/server/service/gateway/room_store.py` | Added internal `get_room_state()` so service code can read lifecycle fields not exposed on public snapshot response models |
+| `docs/backend/IMPLEMENTATION_STATE.md` | Documented Mongo conflict root cause, final summary `emptied_at` crash, fetch/generate semantics, lifecycle fallbacks, and deferred testing |
+
+### Testing
+
+- Full test suite not run, per CODE-ONLY instruction.
+- New tests not added.
+- Existing tests not modified.
+
+---
+
 ## Turn Update: 2026-05-06 Meeting Summary Interim + Final Backend
 
 - Time: 2026-05-06T00:00:00+07:00

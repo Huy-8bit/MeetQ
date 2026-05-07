@@ -10,9 +10,11 @@ interface MeetingSummaryPanelProps {
   isLoading?: boolean;
   isGenerating?: boolean;
   error?: string | null;
+  errorSource?: "fetch" | "generate" | null;
   canRefreshInterim?: boolean;
   onRefreshInterim: () => void;
   onCheckInterim: () => void;
+  onCheckFinal: () => void;
   onPrepareFinal: () => void;
   embedded?: boolean;
 }
@@ -24,20 +26,40 @@ export function MeetingSummaryPanel({
   isLoading = false,
   isGenerating = false,
   error = null,
+  errorSource = null,
   canRefreshInterim = true,
   onRefreshInterim,
   onCheckInterim,
+  onCheckFinal,
   onPrepareFinal,
   embedded = false,
 }: MeetingSummaryPanelProps) {
-  const visibleType = roomEnded ? "final" : summary?.summary_type ?? intent;
-  const status = summary?.status ?? null;
+  const visibleSummary =
+    roomEnded && summary?.summary_type && summary.summary_type !== "final" ? null : summary;
+  const visibleType = roomEnded ? "final" : visibleSummary?.summary_type ?? intent;
+  const status = visibleSummary?.status ?? null;
   const isPending = status === "pending";
+  const isFailed = status === "failed";
+  const isSkipped = status === "skipped";
   const hasCompletedContent =
-    status === "completed" && !!summary?.summary_text?.trim();
+    status === "completed" && hasSummaryContent(visibleSummary);
   const canUseInterimAction =
     !roomEnded && canRefreshInterim && !isLoading && !isGenerating && !isPending;
-  const generatedLabel = formatGeneratedTime(summary);
+  const showFinalGenerateAction =
+    roomEnded
+    && (
+      isGenerating
+      || (
+        !isLoading
+        && !hasCompletedContent
+        && !isPending
+        && (!error || errorSource === "generate")
+        && (!visibleSummary || isFailed)
+      )
+    );
+  const showFinalCheckAction = roomEnded && !isGenerating;
+  const generatedLabel = formatGeneratedTime(visibleSummary);
+  const summaryLanguage = formatSummaryLanguage(visibleSummary?.summary_language);
 
   return (
     <section className={embedded ? "meeting-summary-panel panel-section" : "panel meeting-summary-panel"}>
@@ -57,14 +79,32 @@ export function MeetingSummaryPanel({
 
       <div className="summary-action-row">
         {roomEnded ? (
-          <button
-            type="button"
-            className="button-primary summary-primary-action"
-            onClick={onPrepareFinal}
-            disabled={isLoading || isGenerating}
-          >
-            {isGenerating ? "Preparing..." : summary ? "Check final" : "Prepare final"}
-          </button>
+          <>
+            {showFinalGenerateAction ? (
+              <button
+                type="button"
+                className="button-primary summary-primary-action"
+                onClick={onPrepareFinal}
+                disabled={isLoading || isGenerating || isPending || hasCompletedContent}
+              >
+                {isGenerating
+                  ? "Preparing..."
+                  : isFailed || errorSource === "generate"
+                    ? "Retry final"
+                    : "Prepare final"}
+              </button>
+            ) : null}
+            {showFinalCheckAction ? (
+              <button
+                type="button"
+                className="button-secondary summary-secondary-action"
+                onClick={onCheckFinal}
+                disabled={isLoading || isGenerating}
+              >
+                {isLoading ? "Checking..." : "Check latest"}
+              </button>
+            ) : null}
+          </>
         ) : (
           <>
             <button
@@ -75,7 +115,7 @@ export function MeetingSummaryPanel({
             >
               {isGenerating || isPending
                 ? "Generating..."
-                : summary?.summary_type === "interim"
+                : visibleSummary?.summary_type === "interim"
                   ? "Refresh summary"
                   : "Generate summary"}
             </button>
@@ -98,14 +138,14 @@ export function MeetingSummaryPanel({
       ) : null}
 
       <div className="summary-body">
-        {isLoading && !summary ? (
+        {isLoading && !visibleSummary ? (
           <SummaryState
             title="Checking summary"
             text="Looking for the latest saved meeting summary."
           />
         ) : null}
 
-        {isGenerating && !summary ? (
+        {isGenerating && !visibleSummary ? (
           <SummaryState
             title={roomEnded ? "Preparing final summary" : "Generating summary"}
             text={
@@ -116,35 +156,35 @@ export function MeetingSummaryPanel({
           />
         ) : null}
 
-        {!isLoading && !isGenerating && !summary ? (
+        {!isLoading && !isGenerating && !visibleSummary && !error ? (
           <SummaryState
-            title={roomEnded ? "Final summary is being prepared" : "No summary yet"}
+            title={roomEnded ? "Final summary is not available yet" : "No summary yet"}
             text={
               roomEnded
-                ? "Check again shortly to read the final notes for this meeting."
+                ? "Prepare it only if the saved final notes are not available."
                 : "Generate a live checkpoint when you want a quick read of the meeting so far."
             }
           />
         ) : null}
 
-        {summary && status === "pending" ? (
+        {visibleSummary && status === "pending" ? (
           <SummaryState
             title={roomEnded ? "Final summary is being prepared" : "Summary is being prepared"}
             text="This view will update when the backend finishes generating the summary."
           />
         ) : null}
 
-        {summary && status === "skipped" ? (
+        {visibleSummary && status === "skipped" ? (
           <SummaryState
-            title="Not enough content yet"
-            text={summary.error || "The meeting does not have enough transcript or chat content to summarize."}
+            title={roomEnded ? "Final summary is not available" : "Not enough content yet"}
+            text={visibleSummary.error || "The meeting does not have enough transcript or chat content to summarize."}
           />
         ) : null}
 
-        {summary && status === "failed" ? (
+        {visibleSummary && status === "failed" ? (
           <SummaryState
-            title="Summary failed"
-            text={summary.error || "The summary could not be generated. Try again."}
+            title={roomEnded ? "Final summary failed" : "Summary failed"}
+            text={visibleSummary.error || "The summary could not be generated. Try again."}
           />
         ) : null}
 
@@ -152,15 +192,21 @@ export function MeetingSummaryPanel({
           <article className="summary-artifact">
             <div className="summary-artifact-meta">
               <span>{visibleType === "final" ? "Final summary" : "Current summary"}</span>
-              {generatedLabel ? <time>{generatedLabel}</time> : null}
+              <div className="summary-artifact-meta-tail">
+                {summaryLanguage ? <span>{summaryLanguage}</span> : null}
+                {generatedLabel ? <time>{generatedLabel}</time> : null}
+              </div>
             </div>
 
-            <p className="summary-main-text">{summary!.summary_text}</p>
+            {visibleSummary!.summary_text ? (
+              <p className="summary-main-text">{visibleSummary!.summary_text}</p>
+            ) : null}
 
-            <SummaryList title="Highlights" items={summary!.highlights ?? []} />
-            <SummaryList title="Decisions" items={summary!.decisions ?? []} />
-            <ActionItems items={summary!.action_items ?? []} />
-            <ParticipantSummaries items={summary!.participant_summary ?? []} />
+            <SummaryList title="Highlights" items={visibleSummary!.highlights ?? []} />
+            <SummaryList title="Decisions" items={visibleSummary!.decisions ?? []} />
+            <ActionItems items={visibleSummary!.action_items ?? []} />
+            <ParticipantSummaries items={visibleSummary!.participant_summary ?? []} />
+            <SourceStats stats={visibleSummary!.source_stats} />
           </article>
         ) : null}
       </div>
@@ -245,6 +291,40 @@ function ParticipantSummaries({
   );
 }
 
+function SourceStats({
+  stats,
+}: {
+  stats: MeetingSummaryResponse["source_stats"];
+}) {
+  if (!stats) {
+    return null;
+  }
+
+  const statItems = [
+    formatCountStat("Included messages", stats.included_message_count),
+    formatCountStat("Transcripts", stats.transcript_count),
+    formatCountStat("Source lines", stats.source_transcript_count),
+    formatCountStat("Relay lines", stats.relay_count),
+    formatCountStat("Chat messages", stats.chat_count),
+    stats.truncated ? "Source truncated" : null,
+  ].filter((item): item is string => !!item);
+
+  if (statItems.length === 0) {
+    return null;
+  }
+
+  return (
+    <section className="summary-section">
+      <h4>Source</h4>
+      <div className="summary-stat-list">
+        {statItems.map((item) => (
+          <span key={item}>{item}</span>
+        ))}
+      </div>
+    </section>
+  );
+}
+
 function formatGeneratedTime(summary: MeetingSummaryResponse | null): string | null {
   const timestamp = summary?.generated_at || summary?.created_at;
   if (!timestamp) {
@@ -262,4 +342,34 @@ function formatGeneratedTime(summary: MeetingSummaryResponse | null): string | n
     month: "short",
     day: "numeric",
   });
+}
+
+function formatSummaryLanguage(language: string | null | undefined): string | null {
+  if (!language?.trim()) {
+    return null;
+  }
+
+  return language.trim().toUpperCase();
+}
+
+function formatCountStat(label: string, value: number | null | undefined): string | null {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+    return null;
+  }
+
+  return `${label}: ${value}`;
+}
+
+function hasSummaryContent(summary: MeetingSummaryResponse | null): boolean {
+  if (!summary) {
+    return false;
+  }
+
+  return Boolean(
+    summary.summary_text?.trim()
+      || summary.highlights?.length
+      || summary.decisions?.length
+      || summary.action_items?.length
+      || summary.participant_summary?.length,
+  );
 }

@@ -111,6 +111,7 @@ type RoomExpiredSource =
   | "gateway_event"
   | "gateway_error"
   | "gateway_close";
+type SummaryErrorSource = "fetch" | "generate";
 
 export interface RoomExpiredDetails {
   source: RoomExpiredSource;
@@ -198,6 +199,7 @@ export function useMeetingRoom({
   const [isLoadingSummary, setIsLoadingSummary] = useState(false);
   const [isGeneratingSummary, setIsGeneratingSummary] = useState(false);
   const [summaryError, setSummaryError] = useState<string | null>(null);
+  const [summaryErrorSource, setSummaryErrorSource] = useState<SummaryErrorSource | null>(null);
 
   // ─── Host state ─────────────────────────────────────────────────────────────
   const [hostParticipantId, setHostParticipantId] = useState<string | null>(() => {
@@ -248,6 +250,7 @@ export function useMeetingRoom({
   const isMutedByHostRef = useRef(false);
   const pendingChatEventIdsRef = useRef<Set<string>>(new Set());
   const brseEnabledRef = useRef(resolveBrseEnabled(initialRoom?.room ?? session?.room ?? null));
+  const meetingSummaryRef = useRef<MeetingSummaryResponse | null>(null);
   const summaryRequestSeqRef = useRef(0);
   const finalSummaryPollTimerRef = useRef<number | null>(null);
   const finalSummaryPollCountRef = useRef(0);
@@ -301,6 +304,10 @@ export function useMeetingRoom({
   }, [isMutedByHost]);
 
   useEffect(() => {
+    meetingSummaryRef.current = meetingSummary;
+  }, [meetingSummary]);
+
+  useEffect(() => {
     clearFinalSummaryPollTimer();
     summaryRequestSeqRef.current += 1;
     finalSummaryPollCountRef.current = 0;
@@ -309,6 +316,7 @@ export function useMeetingRoom({
     setIsLoadingSummary(false);
     setIsGeneratingSummary(false);
     setSummaryError(null);
+    setSummaryErrorSource(null);
 
     return () => {
       clearFinalSummaryPollTimer();
@@ -1311,7 +1319,9 @@ export function useMeetingRoom({
           }
         : current,
     );
-    void prepareFinalSummary();
+    void fetchMeetingSummary("final", {
+      suppressNotFound: true,
+    });
 
     if (isScreenSharingRef.current || localScreenTrackRef.current) {
       try {
@@ -1797,8 +1807,10 @@ export function useMeetingRoom({
     const requestId = ++summaryRequestSeqRef.current;
     setSummaryIntent(type);
     if (!options.silent) {
+      setMeetingSummary((current) => current?.summary_type === type ? current : null);
       setIsLoadingSummary(true);
       setSummaryError(null);
+      setSummaryErrorSource(null);
     }
 
     try {
@@ -1810,8 +1822,13 @@ export function useMeetingRoom({
       const normalized = normalizeMeetingSummaryResponse(response, type);
       setMeetingSummary(normalized);
       setSummaryError(null);
-      if (type === "final" && normalized.status === "pending") {
-        scheduleFinalSummaryPoll();
+      setSummaryErrorSource(null);
+      if (type === "final") {
+        if (normalized.status === "pending") {
+          scheduleFinalSummaryPoll();
+        } else {
+          clearFinalSummaryPollTimer();
+        }
       }
       return normalized;
     } catch (error) {
@@ -1824,10 +1841,16 @@ export function useMeetingRoom({
         && error.code === "meeting_summary_not_found"
         && options.suppressNotFound
       ) {
+        if (!options.silent) {
+          setMeetingSummary(null);
+          setSummaryError(null);
+          setSummaryErrorSource(null);
+        }
         return null;
       }
 
-      setSummaryError(mapMeetingSummaryError(error, type));
+      setSummaryError(mapMeetingSummaryFetchError(error, type));
+      setSummaryErrorSource("fetch");
       return null;
     } finally {
       if (requestId === summaryRequestSeqRef.current && !options.silent) {
@@ -1843,14 +1866,25 @@ export function useMeetingRoom({
       return null;
     }
 
+    const currentSummary = meetingSummaryRef.current;
+    if (
+      type === "final"
+      && currentSummary?.summary_type === "final"
+      && (currentSummary.status === "completed" || currentSummary.status === "pending")
+    ) {
+      return currentSummary;
+    }
+
     if (type === "final") {
       clearFinalSummaryPollTimer();
     }
 
     const requestId = ++summaryRequestSeqRef.current;
     setSummaryIntent(type);
+    setMeetingSummary((current) => current?.summary_type === type ? current : null);
     setIsGeneratingSummary(true);
     setSummaryError(null);
+    setSummaryErrorSource(null);
 
     try {
       const response = await api.generateRoomSummary(roomId, type);
@@ -1861,8 +1895,13 @@ export function useMeetingRoom({
       const normalized = normalizeMeetingSummaryResponse(response, type);
       setMeetingSummary(normalized);
       setSummaryError(null);
-      if (type === "final" && normalized.status === "pending") {
-        scheduleFinalSummaryPoll();
+      setSummaryErrorSource(null);
+      if (type === "final") {
+        if (normalized.status === "pending") {
+          scheduleFinalSummaryPoll();
+        } else {
+          clearFinalSummaryPollTimer();
+        }
       }
       return normalized;
     } catch (error) {
@@ -1881,11 +1920,13 @@ export function useMeetingRoom({
         const pending = createPendingMeetingSummary(roomId, "final");
         setMeetingSummary(pending);
         setSummaryError(null);
+        setSummaryErrorSource(null);
         scheduleFinalSummaryPoll();
         return pending;
       }
 
-      setSummaryError(mapMeetingSummaryError(error, type));
+      setSummaryError(mapMeetingSummaryGenerateError(error, type));
+      setSummaryErrorSource("generate");
       return null;
     } finally {
       if (requestId === summaryRequestSeqRef.current) {
@@ -2178,6 +2219,7 @@ export function useMeetingRoom({
     isLoadingSummary,
     isGeneratingSummary,
     summaryError,
+    summaryErrorSource,
     canRefreshInterimSummary:
       !!session
       && !!selfState
@@ -2418,7 +2460,7 @@ function createPendingMeetingSummary(
   };
 }
 
-function mapMeetingSummaryError(error: unknown, type: MeetingSummaryType): string {
+function mapMeetingSummaryFetchError(error: unknown, type: MeetingSummaryType): string {
   if (error instanceof ApiError) {
     if (error.code === "meeting_summary_not_found") {
       return type === "final"
@@ -2434,12 +2476,35 @@ function mapMeetingSummaryError(error: unknown, type: MeetingSummaryType): strin
     if (error.code === "invalid_summary_type") {
       return "Summary type is not supported by this backend.";
     }
-    return error.message;
+    return type === "final"
+      ? "Could not load final summary."
+      : "Could not load meeting summary.";
   }
 
   return type === "final"
-    ? "Could not load the final summary."
-    : "Could not refresh the meeting summary.";
+    ? "Could not load final summary."
+    : "Could not load meeting summary.";
+}
+
+function mapMeetingSummaryGenerateError(error: unknown, type: MeetingSummaryType): string {
+  if (error instanceof ApiError) {
+    if (error.code === "meeting_summary_not_ready") {
+      return "Final summary is still being prepared.";
+    }
+    if (error.code === "meeting_summary_unavailable") {
+      return "Meeting summary storage is unavailable right now.";
+    }
+    if (error.code === "invalid_summary_type") {
+      return "Summary type is not supported by this backend.";
+    }
+    return type === "final"
+      ? "Could not generate final summary."
+      : "Could not generate meeting summary.";
+  }
+
+  return type === "final"
+    ? "Could not generate final summary."
+    : "Could not generate meeting summary.";
 }
 
 function normalizeChatMessage(message: ChatMessage): RoomChatMessage | null {

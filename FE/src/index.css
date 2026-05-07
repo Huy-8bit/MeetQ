@@ -4281,6 +4281,14 @@ button {
   font-weight: 700;
 }
 
+.summary-artifact-meta-tail {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px 10px;
+  text-align: right;
+}
+
 .summary-main-text {
   margin: 0;
   color: #172033;
@@ -4354,6 +4362,25 @@ button {
   color: #475569;
   font-size: 0.84rem;
   line-height: 1.45;
+}
+
+.summary-stat-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.summary-stat-list span {
+  min-height: 24px;
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 8px;
+  border-radius: 999px;
+  color: #475569;
+  background: #f1f5f9;
+  border: 1px solid rgba(15, 23, 42, 0.06);
+  font-size: 0.73rem;
+  font-weight: 800;
 }
 
 /* ─── Panel collapse: hide panel completely ─────────────────────────────────── */
@@ -5065,6 +5092,7 @@ html[data-theme="dark"] .summary-main-text,
 html[data-theme="dark"] .summary-list,
 html[data-theme="dark"] .summary-action-list,
 html[data-theme="dark"] .summary-participant-item p,
+html[data-theme="dark"] .summary-stat-list span,
 html[data-theme="dark"] .meeting-summary-panel,
 html[data-theme="dark"] .audio-setting-label {
   color: #e2e8f0;
@@ -5087,6 +5115,11 @@ html[data-theme="dark"] .side-tab-badge {
 
 html[data-theme="dark"] .summary-section {
   border-top-color: rgba(148, 163, 184, 0.14);
+}
+
+html[data-theme="dark"] .summary-stat-list span {
+  background: rgba(30, 41, 59, 0.86);
+  border-color: rgba(148, 163, 184, 0.14);
 }
 
 html[data-theme="dark"] .summary-type-chip {

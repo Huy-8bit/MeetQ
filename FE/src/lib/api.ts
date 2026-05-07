@@ -7,9 +7,10 @@ import type {
   ScreenShareStartRequest,
   ScreenShareStateResponse,
   CreateTranslationTestRequest,
+  FetchMeetingSummaryResponse,
+  GenerateMeetingSummaryResponse,
   JoinRoomRequest,
   JoinRoomResponse,
-  MeetingSummaryResponse,
   MeetingSummaryType,
   MicTestSessionResponse,
   RoomSummary,
@@ -167,14 +168,14 @@ export const api = {
 
   getRoomSummary(roomId: string, type: MeetingSummaryType = "final") {
     const query = new URLSearchParams({ type });
-    return requestJson<MeetingSummaryResponse>(
+    return requestJson<FetchMeetingSummaryResponse>(
       `/api/rooms/${roomId}/summary?${query.toString()}`,
     );
   },
 
   generateRoomSummary(roomId: string, type?: MeetingSummaryType) {
     const query = type ? `?${new URLSearchParams({ type }).toString()}` : "";
-    return requestJson<MeetingSummaryResponse>(`/api/rooms/${roomId}/summary${query}`, {
+    return requestJson<GenerateMeetingSummaryResponse>(`/api/rooms/${roomId}/summary${query}`, {
       method: "POST",
       body: JSON.stringify({}),
     });

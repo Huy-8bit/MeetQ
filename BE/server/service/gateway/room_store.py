@@ -63,6 +63,12 @@ class RoomStore:
         await self._refresh_ttl(room_id)
         return updated
 
+    async def get_room_state(self, room_id: str) -> Optional[RoomState]:
+        meta_json = await self.client.get(self._meta_key(room_id))
+        if not meta_json:
+            return None
+        return RoomState.model_validate_json(meta_json)
+
     async def get_room_snapshot(
         self,
         room_id: str,
