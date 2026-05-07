@@ -4,12 +4,16 @@ interface SettingsDrawerProps {
   open: boolean;
   onClose: () => void;
   children: ReactNode;
+  eyebrow?: string;
+  title?: string;
 }
 
 export function SettingsDrawer({
   open,
   onClose,
   children,
+  eyebrow = "Settings",
+  title = "Devices",
 }: SettingsDrawerProps) {
   if (!open) {
     return null;
@@ -31,8 +35,8 @@ export function SettingsDrawer({
       >
         <header className="settings-drawer-header">
           <div>
-            <span>Settings</span>
-            <h2 id="settings-drawer-title">Devices</h2>
+            <span>{eyebrow}</span>
+            <h2 id="settings-drawer-title">{title}</h2>
           </div>
           <button
             className="settings-drawer-close"

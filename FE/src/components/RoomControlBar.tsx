@@ -11,10 +11,12 @@ interface RoomControlBarProps {
   isScreenSharing: boolean;
   isStartingScreenShare: boolean;
   isStoppingScreenShare: boolean;
+  stageFocusActive: boolean;
   isLeaving: boolean;
   onToggleMic: () => void;
   onToggleCamera: () => void;
   onToggleScreenShare: () => void;
+  onToggleStageFocus: () => void;
   onOpenPanel: (tab: RoomPanelTab) => void;
   onToggleSidePanel: () => void;
   onOpenSettings: () => void;
@@ -32,10 +34,12 @@ export function RoomControlBar({
   isScreenSharing,
   isStartingScreenShare,
   isStoppingScreenShare,
+  stageFocusActive,
   isLeaving,
   onToggleMic,
   onToggleCamera,
   onToggleScreenShare,
+  onToggleStageFocus,
   onOpenPanel,
   onToggleSidePanel,
   onOpenSettings,
@@ -78,20 +82,29 @@ export function RoomControlBar({
       <div className="room-control-right-cluster">
         {/* Center: panel tabs */}
         <div className="room-control-tabs" aria-label="Open room panel">
-          {(["relay", "chat", "people"] as RoomPanelTab[]).map((tab) => (
+          {(["relay", "chat", "summary", "people"] as RoomPanelTab[]).map((tab) => (
             <button
               key={tab}
               className={activePanel === tab && sidePanelOpen ? "panel-shortcut is-active" : "panel-shortcut"}
               type="button"
               onClick={() => onOpenPanel(tab)}
             >
-              {tab === "relay" ? "Relay" : tab === "chat" ? "Chat" : "People"}
+              {formatPanelTabLabel(tab)}
             </button>
           ))}
         </div>
 
         {/* Right: secondary actions */}
         <div className="room-control-secondary">
+          <button
+            className={stageFocusActive ? "control-icon-btn control-text-btn is-active" : "control-icon-btn control-text-btn"}
+            type="button"
+            aria-label={stageFocusActive ? "Exit stage focus" : "Focus stage"}
+            title={stageFocusActive ? "Exit stage focus" : "Focus stage"}
+            onClick={onToggleStageFocus}
+          >
+            {stageFocusActive ? "Exit" : "Focus"}
+          </button>
           <button
             className="control-icon-btn"
             type="button"
@@ -122,6 +135,13 @@ export function RoomControlBar({
       </div>
     </footer>
   );
+}
+
+function formatPanelTabLabel(tab: RoomPanelTab): string {
+  if (tab === "relay") return "Relay";
+  if (tab === "chat") return "Chat";
+  if (tab === "summary") return "Summary";
+  return "People";
 }
 
 function ControlButton({

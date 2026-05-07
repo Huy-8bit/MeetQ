@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 
-export type RoomPanelTab = "relay" | "chat" | "people";
+export type RoomPanelTab = "relay" | "chat" | "summary" | "people";
 
 interface RoomSidePanelProps {
   open: boolean;
@@ -8,16 +8,19 @@ interface RoomSidePanelProps {
   activeTab: RoomPanelTab;
   transcriptCount: number;
   chatCount: number;
+  summaryCount?: number;
   participantCount: number;
   onTabChange: (tab: RoomPanelTab) => void;
   relay: ReactNode;
   chat: ReactNode;
+  summary: ReactNode;
   people: ReactNode;
 }
 
 const TABS: { id: RoomPanelTab; label: string }[] = [
   { id: "relay", label: "Relay" },
   { id: "chat", label: "Chat" },
+  { id: "summary", label: "Summary" },
   { id: "people", label: "People" },
 ];
 
@@ -27,19 +30,22 @@ export function RoomSidePanel({
   activeTab,
   transcriptCount,
   chatCount,
+  summaryCount = 0,
   participantCount,
   onTabChange,
   relay,
   chat,
+  summary,
   people,
 }: RoomSidePanelProps) {
   const counts: Record<RoomPanelTab, number> = {
     relay: transcriptCount,
     chat: chatCount,
+    summary: summaryCount,
     people: participantCount,
   };
 
-  const content: Record<RoomPanelTab, ReactNode> = { relay, chat, people };
+  const content: Record<RoomPanelTab, ReactNode> = { relay, chat, summary, people };
 
   return (
     <aside className={open ? "room-side-panel is-open" : "room-side-panel"} aria-hidden={open ? undefined : true}>

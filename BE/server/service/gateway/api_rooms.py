@@ -4,7 +4,10 @@ from server.service.gateway.room_service import (
     BrseToggleForbiddenError,
     InvalidLanguageError,
     InvalidMeetingLanguagesError,
+    InvalidMeetingSummaryTypeError,
     MeetingSummaryNotFoundError,
+    MeetingSummaryNotReadyError,
+    MeetingSummaryUnavailableError,
     ParticipantNotFoundError,
     RoomExpiredError,
     RoomFullError,
@@ -63,11 +66,37 @@ async def get_room(room_id: str, service: RoomService = Depends(get_room_service
 
 
 @router.get("/api/rooms/{room_id}/summary", response_model=MeetingSummaryResponse)
-async def get_room_summary(room_id: str, service: RoomService = Depends(get_room_service)):
+async def get_room_summary(
+    room_id: str,
+    type: str = "final",
+    service: RoomService = Depends(get_room_service),
+):
     try:
-        return await service.get_meeting_summary(room_id)
+        return await service.get_meeting_summary(room_id, type)
     except MeetingSummaryNotFoundError:
         return _error_response("meeting_summary_not_found", "Meeting summary not found", 404)
+    except InvalidMeetingSummaryTypeError:
+        return _error_response("invalid_summary_type", "summary type must be interim or final", 422)
+
+
+@router.post("/api/rooms/{room_id}/summary", response_model=MeetingSummaryResponse)
+async def generate_room_summary(
+    room_id: str,
+    type: Optional[str] = None,
+    service: RoomService = Depends(get_room_service),
+):
+    try:
+        return await service.generate_meeting_summary(room_id, type)
+    except RoomNotFoundError:
+        return _error_response("room_not_found", "Room not found", 404)
+    except MeetingSummaryUnavailableError:
+        return _error_response("meeting_summary_unavailable", "Meeting summary persistence is unavailable", 503)
+    except MeetingSummaryNotReadyError:
+        return _error_response("meeting_summary_not_ready", "Final summary can only be generated after room end", 409)
+    except MeetingSummaryNotFoundError:
+        return _error_response("meeting_summary_not_found", "Meeting summary not found", 404)
+    except InvalidMeetingSummaryTypeError:
+        return _error_response("invalid_summary_type", "summary type must be interim or final", 422)
 
 @router.post("/api/rooms/{room_id}/join", response_model=JoinRoomResponse)
 async def join_room(room_id: str, req: JoinRoomRequest, service: RoomService = Depends(get_room_service)):

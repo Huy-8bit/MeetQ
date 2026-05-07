@@ -39,6 +39,7 @@ TranscriptKind = Literal["source", "translated", "relay"]
 RelayStyle = Literal["normal", "summary"]
 ScreenShareSource = Literal["screen_share"]
 MeetingSummaryStatus = Literal["pending", "completed", "failed", "skipped"]
+MeetingSummaryType = Literal["interim", "final"]
 
 
 class RoomAudioRouting(BaseModel):
@@ -313,6 +314,8 @@ class MeetingSummaryParticipantItem(BaseModel):
 
 class MeetingSummaryResponse(BaseModel):
     room_id: str
+    summary_id: Optional[str] = None
+    summary_type: MeetingSummaryType = "final"
     status: MeetingSummaryStatus
     created_at: str
     generated_at: Optional[str] = None
@@ -323,6 +326,7 @@ class MeetingSummaryResponse(BaseModel):
     action_items: List[MeetingSummaryActionItem] = Field(default_factory=list)
     participant_summary: List[MeetingSummaryParticipantItem] = Field(default_factory=list)
     duration_seconds: Optional[int] = None
+    source_window: Dict[str, Any] = Field(default_factory=dict)
     source_stats: Dict[str, Any] = Field(default_factory=dict)
     error: Optional[str] = None
 

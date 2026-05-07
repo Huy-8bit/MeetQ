@@ -43,6 +43,7 @@ from server.models import (
     JoinRoomResponseWebsocket,
     Language,
     MeetingSummaryResponse,
+    MeetingSummaryType,
     MeetingLanguage,
     ParticipantState,
     RoomSnapshotResponse,
@@ -55,7 +56,11 @@ from server.service.gateway.chat_translator import (
     resolve_chat_target_language,
     translate_chat_message,
 )
-from server.service.gateway.meeting_summary_service import MeetingSummaryService
+from server.service.gateway.meeting_summary_service import (
+    SUMMARY_TYPE_FINAL,
+    SUMMARY_TYPE_INTERIM,
+    MeetingSummaryService,
+)
 from server.service.persistence.room_history import MongoRoomHistoryRepository
 
 
@@ -98,6 +103,18 @@ class RoomExpiredError(Exception):
 
 
 class MeetingSummaryNotFoundError(Exception):
+    pass
+
+
+class MeetingSummaryUnavailableError(Exception):
+    pass
+
+
+class MeetingSummaryNotReadyError(Exception):
+    pass
+
+
+class InvalidMeetingSummaryTypeError(Exception):
     pass
 
 
@@ -593,13 +610,236 @@ class RoomService:
             raise RoomNotFoundError()
         return snapshot
 
-    async def get_meeting_summary(self, room_id: str) -> MeetingSummaryResponse:
+    async def get_meeting_summary(
+        self,
+        room_id: str,
+        summary_type: MeetingSummaryType = SUMMARY_TYPE_FINAL,
+    ) -> MeetingSummaryResponse:
         if not self.room_history or not self.room_history.enabled:
             raise MeetingSummaryNotFoundError()
-        summary = await self.room_history.get_meeting_summary(room_id)
+        normalized_type = self._normalize_summary_type(summary_type)
+        summary = await self.room_history.get_meeting_summary(room_id, summary_type=normalized_type)
         if not summary:
             raise MeetingSummaryNotFoundError()
         return MeetingSummaryResponse.model_validate(summary)
+
+    async def generate_meeting_summary(
+        self,
+        room_id: str,
+        summary_type: Optional[str] = None,
+    ) -> MeetingSummaryResponse:
+        if not self.room_history or not self.room_history.enabled:
+            raise MeetingSummaryUnavailableError()
+
+        snapshot = await self.store.get_room_snapshot(
+            room_id,
+            include_silent_transcripts=True,
+        )
+        normalized_type = self._resolve_summary_type(summary_type, snapshot)
+        if snapshot is None and not await self.room_history.room_exists(room_id):
+            raise RoomNotFoundError()
+        if normalized_type == SUMMARY_TYPE_INTERIM:
+            if snapshot is None:
+                raise RoomNotFoundError()
+            source = self._build_interim_summary_source(snapshot)
+            summary = await self.meeting_summary_service.generate_interim_from_source(
+                room_id=room_id,
+                source=source,
+                trigger_reason="on_demand_interim_refresh",
+            )
+        else:
+            if snapshot is not None and not self._is_room_expired(snapshot) and snapshot.room.state != "empty":
+                raise MeetingSummaryNotReadyError()
+            if snapshot is not None and snapshot.room.state == "empty":
+                await self.room_history.persist_room_emptied(
+                    snapshot.room,
+                    emptied_at=snapshot.room.emptied_at,
+                    current_human_count=active_human_participant_count(snapshot.participants),
+                    reason="on_demand_final_empty",
+                )
+            if snapshot is not None and self._is_room_expired(snapshot):
+                await self.room_history.persist_room_expired(
+                    snapshot.room,
+                    expired_at=snapshot.room.expires_at,
+                    current_human_count=active_human_participant_count(snapshot.participants),
+                    reason="on_demand_final_expired",
+                )
+            summary = await self.meeting_summary_service.generate_for_room_end(
+                room_id=room_id,
+                trigger_reason="on_demand_final",
+                ended_at=(
+                    snapshot.room.emptied_at
+                    if snapshot is not None and snapshot.room.state == "empty"
+                    else snapshot.room.expires_at if snapshot is not None and self._is_room_expired(snapshot)
+                    else None
+                ),
+            )
+        if not summary:
+            raise MeetingSummaryNotFoundError()
+        return MeetingSummaryResponse.model_validate(summary)
+
+    def _normalize_summary_type(self, summary_type: Optional[str]) -> MeetingSummaryType:
+        if summary_type in (None, "", SUMMARY_TYPE_FINAL):
+            return SUMMARY_TYPE_FINAL
+        if summary_type == SUMMARY_TYPE_INTERIM:
+            return SUMMARY_TYPE_INTERIM
+        raise InvalidMeetingSummaryTypeError()
+
+    def _resolve_summary_type(
+        self,
+        summary_type: Optional[str],
+        snapshot: Optional[RoomSnapshotResponse],
+    ) -> MeetingSummaryType:
+        if summary_type:
+            return self._normalize_summary_type(summary_type)
+        if snapshot is not None and not self._is_room_expired(snapshot) and snapshot.room.state != "empty":
+            return SUMMARY_TYPE_INTERIM
+        return SUMMARY_TYPE_FINAL
+
+    def _build_interim_summary_source(self, snapshot: RoomSnapshotResponse) -> Dict[str, Any]:
+        room = snapshot.room
+        max_messages = max(self.settings.meeting_summary_max_source_items, 1)
+        transcript_messages = [
+            self._summary_source_from_transcript(transcript)
+            for transcript in snapshot.recent_transcripts
+            if transcript.is_final
+        ]
+        chat_messages = [
+            self._summary_source_from_chat(message)
+            for message in snapshot.recent_messages
+        ]
+        messages = [
+            message
+            for message in transcript_messages + chat_messages
+            if message is not None
+        ]
+        messages.sort(key=lambda item: item.get("created_at") or "")
+        total_count = len(messages)
+        messages = messages[-max_messages:]
+        first_at = messages[0].get("created_at") if messages else None
+        last_at = messages[-1].get("created_at") if messages else None
+        duration_seconds = self._duration_seconds(room.created_at, self._now_str())
+        source_count = sum(1 for item in messages if item.get("kind") == "source")
+        translated_count = sum(1 for item in messages if item.get("kind") == "translated")
+        relay_count = sum(1 for item in messages if item.get("kind") == "relay")
+        chat_count = sum(1 for item in messages if item.get("kind") == "chat")
+        source_stats = {
+            "message_count": total_count,
+            "transcript_count": source_count + translated_count + relay_count,
+            "source_transcript_count": source_count,
+            "translated_transcript_count": translated_count,
+            "relay_count": relay_count,
+            "chat_count": chat_count,
+            "included_message_count": len(messages),
+            "max_source_items": max_messages,
+            "truncated": total_count > len(messages),
+        }
+        return {
+            "room": {
+                "room_id": room.room_id,
+                "state": room.state,
+                "created_at": room.created_at,
+                "activated_at": getattr(room, "activated_at", None),
+                "ended_at": None,
+                "expires_at": room.expires_at,
+                "duration_seconds": duration_seconds,
+                "meeting_languages": list(room.meeting_languages),
+                "brse_enabled": room.brse_enabled,
+                "brse_mode": room.brse_mode,
+                "meeting_mode": room.meeting_mode,
+                "interpreter_mode": room.interpreter_mode,
+                "participant_count_total": len([p for p in snapshot.participants if not p.is_virtual]),
+                "status_summary": {
+                    "state": room.state,
+                    "terminal": False,
+                    "reason": "live_checkpoint",
+                },
+            },
+            "participants": [
+                {
+                    "participant_id": participant.participant_id,
+                    "display_name": participant.display_name,
+                    "language": participant.language,
+                    "kind": participant.kind,
+                    "is_virtual": participant.is_virtual,
+                    "first_joined_at": participant.joined_at,
+                    "last_joined_at": participant.joined_at,
+                    "last_left_at": None,
+                    "join_count": 1,
+                }
+                for participant in snapshot.participants
+                if not participant.is_virtual
+            ],
+            "messages": messages,
+            "source_window": {
+                "source": "redis_snapshot",
+                "from": first_at,
+                "to": last_at,
+                "message_count": len(messages),
+                "max_messages": max_messages,
+            },
+            "source_stats": source_stats,
+            "duration_seconds": duration_seconds,
+        }
+
+    def _summary_source_from_transcript(self, transcript: TranscriptEvent) -> Optional[Dict[str, Any]]:
+        text = ""
+        if transcript.kind == "source":
+            text = transcript.source_text or transcript.text or ""
+        elif transcript.kind == "relay":
+            text = transcript.brse_text or transcript.text or transcript.translated_text or ""
+        elif transcript.kind == "translated":
+            text = transcript.translated_text or transcript.text or ""
+        else:
+            return None
+        text = text.strip()
+        source_text = (transcript.source_text or "").strip() or None
+        if not text and not source_text:
+            return None
+        return {
+            "kind": transcript.kind,
+            "conversation_type": "transcript",
+            "created_at": transcript.created_at,
+            "message_id": transcript.transcript_id,
+            "utterance_id": transcript.utterance_id,
+            "participant_id": transcript.speaker_id,
+            "display_name": transcript.speaker_display_name,
+            "language": transcript.speaker_language,
+            "src_lang": transcript.src_lang,
+            "target_lang": transcript.target_lang,
+            "text": text,
+            "source_text": source_text,
+            "translation_mode": None,
+            "translations": [],
+        }
+
+    def _summary_source_from_chat(self, message: ChatMessage) -> Optional[Dict[str, Any]]:
+        text = (message.text or "").strip()
+        if not text:
+            return None
+        return {
+            "kind": "chat",
+            "conversation_type": "chat",
+            "created_at": message.created_at,
+            "message_id": message.message_id,
+            "utterance_id": None,
+            "participant_id": message.participant_id,
+            "display_name": message.display_name,
+            "language": message.language,
+            "src_lang": message.language,
+            "target_lang": None,
+            "text": text,
+            "source_text": None,
+            "translation_mode": message.translation_mode,
+            "translations": [translation.model_dump() for translation in message.translations],
+        }
+
+    def _duration_seconds(self, start: Optional[str], end: Optional[str]) -> Optional[int]:
+        start_dt = self._parse_time(start)
+        end_dt = self._parse_time(end)
+        if start_dt is None or end_dt is None:
+            return None
+        return max(int((end_dt - start_dt).total_seconds()), 0)
 
     def build_snapshot_data_for_participant(
         self,

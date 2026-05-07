@@ -1,4 +1,5 @@
 import {
+  AudioPresets,
   ConnectionState,
   LocalTrackPublication,
   Room,
@@ -9,6 +10,7 @@ import {
   createLocalTracks,
   type LocalTrack,
   type LocalVideoTrack,
+  type AudioCaptureOptions,
   type RemoteAudioTrack,
   type RemoteParticipant,
   type RemoteTrackPublication,
@@ -52,10 +54,23 @@ const SCREEN_SHARE_PUBLISH_OPTIONS: TrackPublishOptions = {
   },
   degradationPreference: "maintain-resolution",
 };
+const MICROPHONE_PUBLISH_OPTIONS: TrackPublishOptions = {
+  source: Track.Source.Microphone,
+  stream: "camera",
+  audioPreset: AudioPresets.speech,
+  dtx: true,
+  red: true,
+  forceStereo: false,
+  stopMicTrackOnMute: false,
+};
 
 type SetSinkIdCapableElement = HTMLMediaElement & {
   setSinkId?: (sinkId: string) => Promise<void>;
 };
+
+interface SwitchMicrophoneTrackOptions {
+  preserveMuted?: boolean;
+}
 
 export function createMeetingRoom(): Room {
   return new Room({
@@ -74,15 +89,69 @@ export async function publishLocalMedia(room: Room): Promise<LocalTrack[]> {
   assertMediaDevicesSupported();
 
   const tracks = await createLocalTracks({
-    audio: true,
+    audio: buildMicrophoneCaptureOptions(),
     video: true,
   });
 
   await Promise.all(
-    tracks.map((track) => room.localParticipant.publishTrack(track)),
+    tracks.map((track) => publishLocalTrackWithRoomDefaults(room, track)),
   );
 
   return tracks;
+}
+
+export function buildMicrophoneCaptureOptions(deviceId?: string): AudioCaptureOptions {
+  return {
+    deviceId: deviceId ? { exact: deviceId } : { ideal: "default" },
+    echoCancellation: { ideal: true },
+    noiseSuppression: { ideal: true },
+    autoGainControl: { ideal: true },
+    voiceIsolation: { ideal: true },
+    channelCount: { ideal: 1 },
+    sampleRate: { ideal: 48000 },
+    sampleSize: { ideal: 16 },
+  };
+}
+
+async function publishLocalTrackWithRoomDefaults(
+  room: Room,
+  track: LocalTrack,
+): Promise<LocalTrackPublication> {
+  if (track.kind === Track.Kind.Audio) {
+    configureMicrophoneTrackForSpeech(track);
+    return room.localParticipant.publishTrack(track, MICROPHONE_PUBLISH_OPTIONS);
+  }
+
+  return room.localParticipant.publishTrack(track);
+}
+
+function configureMicrophoneTrackForSpeech(track: LocalTrack | null): void {
+  const mediaTrack = getMediaStreamTrack(track);
+  if (!mediaTrack || mediaTrack.kind !== "audio") {
+    return;
+  }
+
+  mediaTrack.contentHint = "speech";
+}
+
+async function applyMicrophoneProcessingConstraints(
+  track: LocalTrack,
+  deviceId?: string,
+): Promise<void> {
+  const mediaTrack = getMediaStreamTrack(track);
+  if (!mediaTrack || mediaTrack.kind !== "audio") {
+    return;
+  }
+
+  try {
+    await mediaTrack.applyConstraints(buildMicrophoneCaptureOptions(deviceId));
+  } catch {
+    await mediaTrack.applyConstraints(buildMicrophoneCaptureOptions()).catch(() => undefined);
+  }
+}
+
+function getMediaStreamTrack(track: LocalTrack | null): MediaStreamTrack | null {
+  return (track as { mediaStreamTrack?: MediaStreamTrack } | null)?.mediaStreamTrack ?? null;
 }
 
 export function getLocalMicrophoneTrack(room: Room): LocalTrack | null {
@@ -189,13 +258,35 @@ export async function switchLocalMicrophoneTrack(
   room: Room,
   currentTrack: LocalTrack | null,
   deviceId: string,
+  options: SwitchMicrophoneTrackOptions = {},
 ): Promise<LocalTrack> {
   if (currentTrack) {
+    const restartable = currentTrack as {
+      restartTrack?: (options?: AudioCaptureOptions) => Promise<unknown>;
+    };
+    if (typeof restartable.restartTrack === "function") {
+      try {
+        await restartable.restartTrack(buildMicrophoneCaptureOptions(deviceId));
+        configureMicrophoneTrackForSpeech(currentTrack);
+        if (options.preserveMuted && !isMicrophoneMuted(currentTrack)) {
+          await currentTrack.mute();
+        }
+        return currentTrack;
+      } catch {
+        // Fall through to other switch strategies.
+      }
+    }
+
     const candidate = currentTrack as { setDeviceId?: (id: string) => Promise<unknown> };
     if (typeof candidate.setDeviceId === "function") {
       try {
         const switched = await candidate.setDeviceId(deviceId);
         if (switched !== false) {
+          await applyMicrophoneProcessingConstraints(currentTrack, deviceId);
+          configureMicrophoneTrackForSpeech(currentTrack);
+          if (options.preserveMuted && !isMicrophoneMuted(currentTrack)) {
+            await currentTrack.mute();
+          }
           return currentTrack;
         }
       } catch {
@@ -205,11 +296,7 @@ export async function switchLocalMicrophoneTrack(
   }
 
   const tracks = await createLocalTracks({
-    audio: {
-      deviceId: {
-        exact: deviceId,
-      },
-    },
+    audio: buildMicrophoneCaptureOptions(deviceId),
     video: false,
   });
   const nextTrack = tracks.find((track) => track.kind === Track.Kind.Audio);
@@ -219,7 +306,11 @@ export async function switchLocalMicrophoneTrack(
   }
 
   try {
-    await room.localParticipant.publishTrack(nextTrack);
+    configureMicrophoneTrackForSpeech(nextTrack);
+    if (options.preserveMuted && !isMicrophoneMuted(nextTrack)) {
+      await nextTrack.mute();
+    }
+    await publishLocalTrackWithRoomDefaults(room, nextTrack);
   } catch (error) {
     nextTrack.stop();
     throw error;

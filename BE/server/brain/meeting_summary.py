@@ -20,13 +20,14 @@ async def generate_meeting_summary(
     api_key: str,
     model: str = DEFAULT_MEETING_SUMMARY_MODEL,
     summary_language: str = "en",
+    summary_type: str = "final",
 ) -> Dict[str, Any]:
     """Generate a grounded post-meeting summary from archived room data."""
     import openai
 
     summary_language_name = LANG_NAMES.get(summary_language, summary_language)
-    system_prompt = _build_system_prompt(summary_language_name)
-    user_prompt = _build_user_prompt(source)
+    system_prompt = _build_system_prompt(summary_language_name, summary_type=summary_type)
+    user_prompt = _build_user_prompt(source, summary_type=summary_type)
 
     client = openai.AsyncOpenAI(api_key=api_key)
     response = await client.chat.completions.create(
@@ -45,9 +46,10 @@ async def generate_meeting_summary(
     return _normalize_summary_payload(parsed)
 
 
-def _build_system_prompt(summary_language_name: str) -> str:
+def _build_system_prompt(summary_language_name: str, *, summary_type: str) -> str:
+    summary_label = "live checkpoint" if summary_type == "interim" else "post-meeting final"
     return (
-        "You create post-meeting summaries for admins and meeting participants. "
+        f"You create {summary_label} summaries for admins and meeting participants. "
         f"Write the entire output in {summary_language_name}. "
         "Use only the provided room metadata, participant records, transcript lines, "
         "BRSE relay lines, translated transcript lines, and chat messages. "
@@ -57,6 +59,9 @@ def _build_system_prompt(summary_language_name: str) -> str:
         "Do not infer, guess, or add facts that are not present in the source data. "
         "Do not invent decisions, owners, deadlines, risks, causes, or next steps. "
         "If a decision or action item is only ambiguous or implied, leave it out. "
+        "For a live checkpoint summary, describe only the meeting content available "
+        "so far and do not imply that the meeting has ended. "
+        "For a final summary, summarize the completed meeting content. "
         "If the data is too thin, say that there was not enough meeting content to "
         "summarize and keep structured lists empty. "
         "Return only valid JSON with exactly these keys: "
@@ -68,15 +73,17 @@ def _build_system_prompt(summary_language_name: str) -> str:
     )
 
 
-def _build_user_prompt(source: Dict[str, Any]) -> str:
+def _build_user_prompt(source: Dict[str, Any], *, summary_type: str) -> str:
     compact_source = {
         "room": source.get("room") or {},
         "participants": source.get("participants") or [],
+        "summary_type": summary_type,
+        "source_window": source.get("source_window") or {},
         "source_stats": source.get("source_stats") or {},
         "messages": source.get("messages") or [],
     }
     return (
-        "Create a grounded post-meeting summary from this archived room data.\n"
+        f"Create a grounded {summary_type} meeting summary from this room data.\n"
         "Remember: no source support means no claim.\n\n"
         f"{json.dumps(compact_source, ensure_ascii=False, separators=(',', ':'))}"
     )

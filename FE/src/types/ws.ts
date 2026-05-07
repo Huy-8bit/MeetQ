@@ -37,7 +37,7 @@ export type RoomSnapshotEvent = WsEnvelope<
       expires_at?: string;
       supported_languages: Language[];
       meeting_languages?: MeetingLanguage[];
-      meeting_mode?: "direct_translation" | "brse_relay";
+      meeting_mode?: "direct_translation" | "brse_relay" | "brse_silent_summary";
       interpreter_mode?: "per_listener" | "brse_participant";
       audio_routing?: AudioRouting;
     };

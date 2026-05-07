@@ -278,25 +278,36 @@ MongoDB phải chạy với authentication:
 - Với volume Mongo cũ từng chạy no-auth, cần migrate/create user thủ công hoặc
   recreate volume cho local dev trước khi bật stack auth.
 
-### 4.2 Post-meeting summary
+### 4.2 Meeting summary
 
-Post-meeting summary là feature additive chạy sau khi meeting đã kết thúc.
+Meeting summary là feature additive với 2 semantic tách biệt:
+
+- `interim`: live checkpoint summary được tạo/refresh chủ động khi meeting đang
+  diễn ra.
+- `final`: post-meeting summary được tạo sau khi room kết thúc.
 
 Trigger hiện tại:
 
-- room chuyển sang `empty` khi participant cuối rời room
-- room được archival là `expired` ở scheduled expiry / expired join / expired websocket path
+- `POST /api/rooms/{room_id}/summary` khi room còn active tạo/refresh latest
+  `interim` summary từ Redis hot snapshot.
+- room chuyển sang `empty` khi participant cuối rời room tạo `final` summary.
+- room được archival là `expired` ở scheduled expiry / expired join / expired
+  websocket path tạo `final` summary.
+- `POST /api/rooms/{room_id}/summary?type=final` có thể tạo/trả final summary
+  sau khi room đã terminal.
 
 Flow:
 
-1. Gateway hoàn tất Redis room lifecycle và schedule Mongo side effect.
-2. Mongo archive cập nhật terminal lifecycle trước.
-3. Summary service tạo record `pending` idempotent theo `room_id`.
-4. Summary service đọc `rooms`, `room_participants`, và chronological
-   `room_messages` từ MongoDB.
+1. Gateway nhận trigger explicit hoặc room-end lifecycle hook.
+2. Summary service tạo record `pending` theo `(room_id, summary_type)`.
+3. Với `interim`, source lấy từ Redis snapshot hiện tại: room metadata,
+   participants, recent final transcripts/relay lines, và recent chat messages.
+4. Với `final`, Mongo archive cập nhật terminal lifecycle trước, rồi source lấy
+   từ `rooms`, `room_participants`, và chronological `room_messages`.
 5. `server.brain.meeting_summary` gọi model text-only để tạo grounded summary.
-6. Kết quả được lưu vào `meeting_summaries` và status rút gọn được gắn lại vào
-   `rooms.meeting_summary`.
+6. Kết quả được lưu vào `meeting_summaries`; room archive cập nhật
+   `rooms.meeting_summaries.{interim|final}`. Với final, backend cũng giữ
+   `rooms.meeting_summary` legacy pointer để tương thích contract cũ.
 
 Grounding policy:
 
@@ -308,6 +319,13 @@ Grounding policy:
 - model không được thêm quyết định, owner, deadline, hoặc next step nếu source
   không nói rõ
 - nếu dữ liệu quá ít, summary được mark `skipped` thay vì bịa
+
+Persistence strategy:
+
+- `meeting_summaries` dùng unique key `(room_id, summary_type)`.
+- `interim` giữ latest summary duy nhất, mỗi refresh thay thế record trước.
+- `final` idempotent: khi đã pending/completed/skipped/failed thì không
+  regenerate nếu chưa có explicit regeneration policy.
 
 Language strategy:
 

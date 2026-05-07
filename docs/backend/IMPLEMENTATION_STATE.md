@@ -1,5 +1,165 @@
 # Backend Implementation State
 
+## Turn Update: 2026-05-06 Meeting Summary Interim + Final Backend
+
+- Time: 2026-05-06T00:00:00+07:00
+- Mode: CODE-ONLY
+- Status: implemented
+- Testing deferred: full test suite not run, per instruction
+
+### Objective
+
+Add backend support for two meeting summary semantics without changing room,
+relay, chat, screen share, expiry, Telegram, or existing archive flow:
+
+- `interim`: on-demand live checkpoint summary while a room is still active.
+- `final`: post-meeting summary after last-leave or expiry.
+
+### Read Status
+
+- Read required docs:
+  - `docs/backend/README.md`
+  - `docs/backend/API_CONTRACT.md`
+  - `docs/backend/IMPLEMENTATION_STATE.md`
+  - `docs/backend/GATEWAY_DESIGN.md`
+  - `docs/backend/INTERPRETER_DESIGN.md`
+- Read required gateway/runtime/persistence files:
+  - `BE/server/service/gateway/api_rooms.py`
+  - `BE/server/service/gateway/room_service.py`
+  - `BE/server/service/gateway/room_store.py`
+  - `BE/server/service/gateway/event_consumer.py`
+  - `BE/server/models.py`
+  - `BE/server/service/gateway/meeting_summary_service.py`
+  - `BE/server/service/persistence/room_history.py`
+  - `BE/server/brain/meeting_summary.py`
+  - `BE/server/integrations/mongodb.py`
+  - `BE/server/config.py`
+  - `.env.example`
+  - `docker-compose.yml`
+
+### Current Trace
+
+- Backend already has post-meeting final summary plumbing:
+  - room-end hooks call `MeetingSummaryService.generate_for_room_end`.
+  - `MongoRoomHistoryRepository` archives room metadata, participants,
+    transcript/relay/chat messages, and one `meeting_summaries` document.
+  - `GET /api/rooms/{room_id}/summary` reads the stored summary.
+- Current limitation: `meeting_summaries` has a unique index on `room_id`, so it
+  cannot store both an on-demand interim summary and a final summary.
+- Current source strategy is Mongo-only, which is correct for final archive
+  summaries but not enough for active live checkpoint summaries because Mongo
+  side effects can lag Redis hot room state.
+
+### Implemented Design
+
+- Add `summary_type = "interim" | "final"` to summary records and responses.
+- Persist summaries in `meeting_summaries` with unique key
+  `(room_id, summary_type)`.
+- Keep only the latest interim summary per room. Each live refresh replaces the
+  prior interim record with a new pending/completed result.
+- Keep final summary idempotent: if a final summary already exists, do not
+  regenerate unless a future explicit regeneration policy is added.
+- Add explicit paths:
+  - `POST /api/rooms/{room_id}/summary` generates/refreshes an interim summary
+    when the Redis room is active; after terminal room state it creates/returns
+    final summary.
+  - `GET /api/rooms/{room_id}/summary?type=interim|final` retrieves the latest
+    stored summary of that type. Default remains `final` for compatibility.
+- Source strategy:
+  - interim source comes from Redis snapshot: room metadata, participants,
+    recent final transcripts/relay lines, and recent chat messages.
+  - final source continues to come from Mongo archive.
+- Failure strategy:
+  - summary generation failures update summary status to `failed` and log the
+    failure; room lifecycle continues.
+
+### Contract / Runtime Behavior
+
+- `POST /api/rooms/{room_id}/summary`
+  - omitted `type`: active Redis room generates/refreshes `interim`; terminal
+    or archived room generates/returns `final`.
+  - `type=interim`: refreshes latest interim summary from Redis hot snapshot.
+  - `type=final`: allowed only after room end/expiry; existing final summary is
+    returned idempotently.
+- `GET /api/rooms/{room_id}/summary?type=interim|final`
+  - reads stored summary only.
+  - default type remains `final` for compatibility with the previous endpoint.
+- `MeetingSummaryResponse` now includes:
+  - `summary_id`
+  - `summary_type`
+  - `source_window`
+  - existing structured fields: `status`, `summary_text`, `highlights`,
+    `decisions`, `action_items`, `participant_summary`, `duration_seconds`,
+    `source_stats`, `error`.
+
+### Persistence Strategy
+
+- Mongo `meeting_summaries` now stores one document per `(room_id,
+  summary_type)`.
+- Startup index migration marks legacy summary docs as `summary_type=final`,
+  drops the old `uniq_meeting_summary_room_id` index, and creates
+  `uniq_meeting_summary_room_type`.
+- `interim` refresh uses upsert/replace semantics for the latest checkpoint.
+- `final` uses insert-if-absent semantics so room-end hooks and explicit
+  post-meeting calls do not regenerate an already requested/generated final
+  summary.
+- Room archive stores typed summary pointers under
+  `rooms.meeting_summaries.{interim|final}` and keeps legacy
+  `rooms.meeting_summary` for final summaries.
+
+### Source Data Strategy
+
+- Interim source:
+  - Redis room snapshot.
+  - Human participant snapshots.
+  - recent final transcript/source/relay lines.
+  - recent chat messages.
+  - includes hidden silent-summary source transcripts via an internal snapshot
+    flag; FE snapshot behavior remains unchanged.
+- Final source:
+  - Mongo `rooms`, `room_participants`, and chronological `room_messages`.
+  - room lifecycle is persisted before final generation on expiry/empty hooks.
+- Brain boundary preserved:
+  - prompt/model call remains in `BE/server/brain/meeting_summary.py`.
+  - gateway service only orchestrates source collection, persistence, and status.
+
+### Final Summary Triggers
+
+- Participant last-leave path still schedules participant-left persistence and
+  then final summary generation.
+- Scheduled expiry path still persists room expiry and then final summary
+  generation.
+- Expired join/on-demand final paths persist terminal expiry before generation.
+- On-demand final for an already-empty room persists empty lifecycle before
+  generation as a safety net.
+
+### Files Modified
+
+- `BE/server/models.py`
+- `BE/server/brain/meeting_summary.py`
+- `BE/server/service/gateway/api_rooms.py`
+- `BE/server/service/gateway/meeting_summary_service.py`
+- `BE/server/service/gateway/room_service.py`
+- `BE/server/service/gateway/room_store.py`
+- `BE/server/service/persistence/room_history.py`
+- `docs/backend/API_CONTRACT.md`
+- `docs/backend/README.md`
+- `docs/backend/IMPLEMENTATION_STATE.md`
+
+### Verification
+
+- Full test suite not run, per CODE-ONLY instruction.
+- New tests not added, per instruction.
+- Existing tests not modified.
+- Lightweight checks run:
+  - `PYTHONPATH=BE python -m py_compile BE/server/models.py BE/server/brain/meeting_summary.py BE/server/service/gateway/meeting_summary_service.py BE/server/service/persistence/room_history.py BE/server/service/gateway/room_store.py BE/server/service/gateway/room_service.py BE/server/service/gateway/api_rooms.py`
+  - targeted `MeetingSummaryResponse` validation for `summary_type=interim`.
+  - targeted interim source-builder smoke check with one transcript and one chat
+    message.
+  - `git diff --check -- BE/server/models.py BE/server/brain/meeting_summary.py BE/server/service/gateway/meeting_summary_service.py BE/server/service/persistence/room_history.py BE/server/service/gateway/room_store.py BE/server/service/gateway/room_service.py BE/server/service/gateway/api_rooms.py docs/backend/API_CONTRACT.md docs/backend/README.md docs/backend/IMPLEMENTATION_STATE.md`
+
+---
+
 ## Turn Update: 2026-05-06 BRSE Relay Over-Suppression Calibration
 
 - Time: 2026-05-06T00:00:00+07:00

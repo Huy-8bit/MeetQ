@@ -6,6 +6,8 @@
 >
 > Update note (2026-05-05): create-room also accepts additive `brse_mode="relay" | "silent_summary"`. `brse_enabled=true` with `relay` preserves existing BRSE audio relay behavior. `brse_enabled=true` with `silent_summary` starts BRSE as a silent listener: it subscribes to human audio and archives source transcripts for post-meeting summary, but suppresses relay audio and realtime relay transcript fan-out.
 >
+> Update note (2026-05-06): meeting summaries now support two stored types: `interim` live checkpoint summaries and `final` post-meeting summaries. `POST /api/rooms/{room_id}/summary` generates/refreshes summary; `GET /api/rooms/{room_id}/summary?type=interim|final` reads stored summary. Default GET type remains `final`.
+>
 > Update note (2026-04-30): new rooms now default to BRSE relay semantics. FE should expect `meeting_mode=brse_relay`, `interpreter_mode=brse_participant`, a virtual participant `brse_ai`, room-wide relay transcripts with `kind=relay`, and BRSE audio as virtual participant track metadata. Older per-listener translated-audio sections below are legacy reference and are no longer the authoritative output model for BRSE rooms.
 
 Tài liệu này là contract duy nhất FE cần biết để code độc lập với BE.
@@ -403,10 +405,41 @@ Lấy snapshot room khi FE load room page hoặc reconnect.
 }
 ```
 
+## `POST /api/rooms/{room_id}/summary`
+
+Generate hoặc refresh meeting summary.
+
+Query:
+
+- `type=interim`: tạo/refresh latest live checkpoint summary từ Redis hot
+  snapshot của room, gồm room metadata, participants, recent final transcripts /
+  relay lines, và recent chat messages.
+- `type=final`: tạo final summary sau khi room đã kết thúc/expire. Nếu final
+  summary đã tồn tại, backend trả record hiện có và không regenerate.
+- omitted: nếu room còn active, backend tạo `interim`; nếu room đã terminal hoặc
+  Redis hot state không còn nhưng Mongo archive còn, backend tạo/trả `final`.
+
+Response dùng cùng schema với `GET /summary`.
+
+Error cases:
+
+| Status | Code | Meaning |
+| --- | --- | --- |
+| `404` | `room_not_found` | Room không tồn tại trong Redis hoặc Mongo archive. |
+| `409` | `meeting_summary_not_ready` | Client yêu cầu `type=final` khi room vẫn đang active. |
+| `422` | `invalid_summary_type` | `type` không phải `interim` hoặc `final`. |
+| `503` | `meeting_summary_unavailable` | MongoDB summary persistence không khả dụng. |
+
 ## `GET /api/rooms/{room_id}/summary`
 
-Lấy post-meeting summary đã được backend generate sau khi room kết thúc hoặc
-expire. Endpoint này đọc MongoDB historical archive, không đọc Redis hot state.
+Lấy stored meeting summary. Default `type=final` để giữ tương thích contract cũ.
+
+Query:
+
+- `type=final` hoặc omitted: lấy post-meeting final summary.
+- `type=interim`: lấy latest live checkpoint summary đã được generate gần nhất.
+
+Endpoint này chỉ đọc summary đã persist trong MongoDB; nó không tự generate.
 
 Summary có thể ở một trong các trạng thái:
 
@@ -422,6 +455,8 @@ Nếu chưa có summary record, trả `404 meeting_summary_not_found`.
 ```json
 {
   "room_id": "rm_...",
+  "summary_id": "sum_...",
+  "summary_type": "interim | final",
   "status": "completed",
   "created_at": "ISO-8601 UTC string",
   "generated_at": "ISO-8601 UTC string | null",
@@ -444,6 +479,13 @@ Nếu chưa có summary record, trả `404 meeting_summary_not_found`.
     }
   ],
   "duration_seconds": 900,
+  "source_window": {
+    "source": "redis_snapshot | mongodb_archive",
+    "from": "ISO-8601 UTC string | null",
+    "to": "ISO-8601 UTC string | null",
+    "message_count": 14,
+    "max_messages": 240
+  },
   "source_stats": {
     "transcript_count": 12,
     "source_transcript_count": 6,

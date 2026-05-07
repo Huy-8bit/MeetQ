@@ -122,13 +122,22 @@ class MongoRoomHistoryRepository:
             unique=True,
             name="uniq_room_message_kind",
         )
+        await self.db[self.summaries_collection].update_many(
+            {"summary_type": {"$exists": False}},
+            {"$set": {"summary_type": "final"}},
+        )
+        existing_summary_indexes = await self.db[self.summaries_collection].index_information()
+        if "uniq_meeting_summary_room_id" in existing_summary_indexes:
+            await self.db[self.summaries_collection].drop_index("uniq_meeting_summary_room_id")
+        if "meeting_summaries_by_status" in existing_summary_indexes:
+            await self.db[self.summaries_collection].drop_index("meeting_summaries_by_status")
         await self.db[self.summaries_collection].create_index(
-            [("room_id", ASCENDING)],
+            [("room_id", ASCENDING), ("summary_type", ASCENDING)],
             unique=True,
-            name="uniq_meeting_summary_room_id",
+            name="uniq_meeting_summary_room_type",
         )
         await self.db[self.summaries_collection].create_index(
-            [("status", ASCENDING), ("generated_at", DESCENDING)],
+            [("summary_type", ASCENDING), ("status", ASCENDING), ("generated_at", DESCENDING)],
             name="meeting_summaries_by_status",
         )
 
@@ -351,6 +360,27 @@ class MongoRoomHistoryRepository:
             terminal=True,
         )
 
+    async def persist_room_emptied(
+        self,
+        room: Any,
+        *,
+        emptied_at: Optional[str] = None,
+        current_human_count: int = 0,
+        reason: str = "empty",
+    ) -> None:
+        room_id = self._value(room, "room_id")
+        if not room_id:
+            return
+        timestamp = emptied_at or self._value(room, "emptied_at") or self._now_str()
+        await self._update_room_lifecycle_summary(
+            room_id,
+            state="empty",
+            ended_at=timestamp,
+            reason=reason,
+            current_human_count=current_human_count,
+            terminal=True,
+        )
+
     async def persist_chat_message(self, message: ChatMessage, *, room: Optional[Any] = None) -> None:
         created_at = message.created_at or self._now_str()
         doc = {
@@ -464,14 +494,18 @@ class MongoRoomHistoryRepository:
         self,
         *,
         room_id: str,
+        summary_type: str,
         requested_at: str,
         trigger_reason: str,
         summary_language: str,
-    ) -> bool:
+        source_window: Optional[Dict[str, Any]] = None,
+        refresh: bool = False,
+    ) -> Optional[Dict[str, Any]]:
         summary_id = f"sum_{uuid.uuid4().hex[:12]}"
         doc = {
             "summary_id": summary_id,
             "room_id": room_id,
+            "summary_type": summary_type,
             "status": "pending",
             "created_at": requested_at,
             "created_at_dt": self._parse_dt(requested_at),
@@ -484,19 +518,30 @@ class MongoRoomHistoryRepository:
             "action_items": [],
             "participant_summary": [],
             "duration_seconds": None,
+            "source_window": source_window or {},
             "source_stats": {},
             "trigger_reason": trigger_reason,
             "error": None,
             "updated_at": requested_at,
             "updated_at_dt": self._parse_dt(requested_at),
         }
-        result = await self.db[self.summaries_collection].update_one(
-            {"room_id": room_id},
-            {"$setOnInsert": doc},
-            upsert=True,
-        )
-        if result.upserted_id is None:
-            return False
+        if refresh:
+            result_doc = await self.db[self.summaries_collection].find_one_and_update(
+                {"room_id": room_id, "summary_type": summary_type},
+                {"$set": doc},
+                upsert=True,
+                return_document=ReturnDocument.AFTER,
+                projection={"_id": 0},
+            )
+        else:
+            result = await self.db[self.summaries_collection].update_one(
+                {"room_id": room_id, "summary_type": summary_type},
+                {"$setOnInsert": doc},
+                upsert=True,
+            )
+            if result.upserted_id is None:
+                return None
+            result_doc = dict(doc)
 
         await self.db[self.rooms_collection].update_one(
             {"room_id": room_id},
@@ -506,8 +551,9 @@ class MongoRoomHistoryRepository:
                     "created_by": "gateway",
                 },
                 "$set": {
-                    "meeting_summary": {
+                    f"meeting_summaries.{summary_type}": {
                         "summary_id": summary_id,
+                        "summary_type": summary_type,
                         "status": "pending",
                         "created_at": requested_at,
                         "generated_at": None,
@@ -520,7 +566,24 @@ class MongoRoomHistoryRepository:
             },
             upsert=True,
         )
-        return True
+        if summary_type == "final":
+            await self.db[self.rooms_collection].update_one(
+                {"room_id": room_id},
+                {
+                    "$set": {
+                        "meeting_summary": {
+                            "summary_id": summary_id,
+                            "summary_type": summary_type,
+                            "status": "pending",
+                            "created_at": requested_at,
+                            "generated_at": None,
+                            "summary_language": summary_language,
+                            "trigger_reason": trigger_reason,
+                        }
+                    }
+                },
+            )
+        return result_doc
 
     async def collect_meeting_summary_source(
         self,
@@ -573,6 +636,11 @@ class MongoRoomHistoryRepository:
             for message in message_docs
             if (summary_message := self._summary_source_message(message)) is not None
         ]
+        source_window = self._source_window_from_messages(
+            messages,
+            source="mongodb_archive",
+            max_messages=max_messages,
+        )
         duration_seconds = room_doc.get("duration_seconds")
         if duration_seconds is None:
             duration_seconds = self._duration_seconds(
@@ -595,6 +663,7 @@ class MongoRoomHistoryRepository:
             "room": self._summary_room_doc(room_doc, duration_seconds=duration_seconds),
             "participants": participant_docs,
             "messages": messages,
+            "source_window": source_window,
             "source_stats": source_stats,
             "duration_seconds": duration_seconds,
         }
@@ -603,13 +672,16 @@ class MongoRoomHistoryRepository:
         self,
         *,
         room_id: str,
+        summary_type: str,
         generated_at: str,
         summary: Dict[str, Any],
         source: Dict[str, Any],
     ) -> None:
         source_stats = source.get("source_stats") or {}
         duration_seconds = source.get("duration_seconds")
+        source_window = source.get("source_window") or {}
         update_doc = {
+            "summary_type": summary_type,
             "status": "completed",
             "generated_at": generated_at,
             "generated_at_dt": self._parse_dt(generated_at),
@@ -619,13 +691,14 @@ class MongoRoomHistoryRepository:
             "action_items": summary.get("action_items") or [],
             "participant_summary": summary.get("participant_summary") or [],
             "duration_seconds": duration_seconds,
+            "source_window": source_window,
             "source_stats": source_stats,
             "error": None,
             "updated_at": generated_at,
             "updated_at_dt": self._parse_dt(generated_at),
         }
         result = await self.db[self.summaries_collection].find_one_and_update(
-            {"room_id": room_id},
+            {"room_id": room_id, "summary_type": summary_type},
             {"$set": update_doc},
             return_document=ReturnDocument.AFTER,
         )
@@ -633,6 +706,7 @@ class MongoRoomHistoryRepository:
         await self._update_room_meeting_summary_status(
             room_id,
             summary_id=summary_id,
+            summary_type=summary_type,
             status="completed",
             timestamp=generated_at,
             summary_language=(result or {}).get("summary_language"),
@@ -643,13 +717,16 @@ class MongoRoomHistoryRepository:
         self,
         *,
         room_id: str,
+        summary_type: str,
         generated_at: str,
         source: Dict[str, Any],
         reason: str,
     ) -> None:
         source_stats = source.get("source_stats") or {}
         duration_seconds = source.get("duration_seconds")
+        source_window = source.get("source_window") or {}
         update_doc = {
+            "summary_type": summary_type,
             "status": "skipped",
             "generated_at": generated_at,
             "generated_at_dt": self._parse_dt(generated_at),
@@ -659,13 +736,14 @@ class MongoRoomHistoryRepository:
             "action_items": [],
             "participant_summary": [],
             "duration_seconds": duration_seconds,
+            "source_window": source_window,
             "source_stats": source_stats,
             "error": reason,
             "updated_at": generated_at,
             "updated_at_dt": self._parse_dt(generated_at),
         }
         result = await self.db[self.summaries_collection].find_one_and_update(
-            {"room_id": room_id},
+            {"room_id": room_id, "summary_type": summary_type},
             {"$set": update_doc},
             return_document=ReturnDocument.AFTER,
         )
@@ -673,6 +751,7 @@ class MongoRoomHistoryRepository:
         await self._update_room_meeting_summary_status(
             room_id,
             summary_id=summary_id,
+            summary_type=summary_type,
             status="skipped",
             timestamp=generated_at,
             summary_language=(result or {}).get("summary_language"),
@@ -684,10 +763,12 @@ class MongoRoomHistoryRepository:
         self,
         *,
         room_id: str,
+        summary_type: str,
         failed_at: str,
         error: str,
     ) -> None:
         update_doc = {
+            "summary_type": summary_type,
             "status": "failed",
             "generated_at": failed_at,
             "generated_at_dt": self._parse_dt(failed_at),
@@ -696,7 +777,7 @@ class MongoRoomHistoryRepository:
             "updated_at_dt": self._parse_dt(failed_at),
         }
         result = await self.db[self.summaries_collection].find_one_and_update(
-            {"room_id": room_id},
+            {"room_id": room_id, "summary_type": summary_type},
             {"$set": update_doc},
             return_document=ReturnDocument.AFTER,
         )
@@ -704,6 +785,7 @@ class MongoRoomHistoryRepository:
         await self._update_room_meeting_summary_status(
             room_id,
             summary_id=summary_id,
+            summary_type=summary_type,
             status="failed",
             timestamp=failed_at,
             summary_language=(result or {}).get("summary_language"),
@@ -711,12 +793,26 @@ class MongoRoomHistoryRepository:
             error=error[:1000],
         )
 
-    async def get_meeting_summary(self, room_id: str) -> Optional[Dict[str, Any]]:
+    async def get_meeting_summary(self, room_id: str, *, summary_type: str = "final") -> Optional[Dict[str, Any]]:
         doc = await self.db[self.summaries_collection].find_one(
-            {"room_id": room_id},
+            {"room_id": room_id, "summary_type": summary_type},
             {"_id": 0},
         )
+        if doc is None and summary_type == "final":
+            doc = await self.db[self.summaries_collection].find_one(
+                {"room_id": room_id, "summary_type": {"$exists": False}},
+                {"_id": 0},
+            )
+            if doc is not None:
+                doc["summary_type"] = "final"
         return doc
+
+    async def room_exists(self, room_id: str) -> bool:
+        doc = await self.db[self.rooms_collection].find_one(
+            {"room_id": room_id},
+            {"_id": 1},
+        )
+        return doc is not None
 
     async def _refresh_room_participant_summary(
         self,
@@ -935,11 +1031,32 @@ class MongoRoomHistoryRepository:
             "status_summary": room_doc.get("status_summary") or {},
         }
 
+    def _source_window_from_messages(
+        self,
+        messages: list[Dict[str, Any]],
+        *,
+        source: str,
+        max_messages: int,
+    ) -> Dict[str, Any]:
+        first_at = None
+        last_at = None
+        if messages:
+            first_at = messages[0].get("created_at")
+            last_at = messages[-1].get("created_at")
+        return {
+            "source": source,
+            "from": first_at,
+            "to": last_at,
+            "message_count": len(messages),
+            "max_messages": max_messages,
+        }
+
     async def _update_room_meeting_summary_status(
         self,
         room_id: str,
         *,
         summary_id: Optional[str],
+        summary_type: str,
         status: str,
         timestamp: str,
         summary_language: Optional[str],
@@ -948,6 +1065,7 @@ class MongoRoomHistoryRepository:
     ) -> None:
         meeting_summary = {
             "summary_id": summary_id,
+            "summary_type": summary_type,
             "status": status,
             "generated_at": timestamp,
             "summary_language": summary_language,
@@ -955,6 +1073,13 @@ class MongoRoomHistoryRepository:
         }
         if error:
             meeting_summary["error"] = error
+        set_doc: Dict[str, Any] = {
+            f"meeting_summaries.{summary_type}": meeting_summary,
+            "updated_at": timestamp,
+            "updated_at_dt": self._parse_dt(timestamp),
+        }
+        if summary_type == "final":
+            set_doc["meeting_summary"] = meeting_summary
         await self.db[self.rooms_collection].update_one(
             {"room_id": room_id},
             {
@@ -962,11 +1087,7 @@ class MongoRoomHistoryRepository:
                     "room_id": room_id,
                     "created_by": "gateway",
                 },
-                "$set": {
-                    "meeting_summary": meeting_summary,
-                    "updated_at": timestamp,
-                    "updated_at_dt": self._parse_dt(timestamp),
-                },
+                "$set": set_doc,
             },
             upsert=True,
         )

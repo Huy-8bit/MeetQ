@@ -38,6 +38,11 @@ import type {
   RoomChatMessage,
   Language,
   MeetingLanguage,
+  MeetingSummaryActionItem,
+  MeetingSummaryParticipantItem,
+  MeetingSummaryResponse,
+  MeetingSummaryStatus,
+  MeetingSummaryType,
   ParticipantSnapshot,
   RoomSnapshotResponse,
   ScreenShareTrackInfo,
@@ -80,6 +85,9 @@ import {
   upsertInterpreterStatus,
   type InterpreterStatusEntry,
 } from "./interpreter";
+
+const FINAL_SUMMARY_POLL_INTERVAL_MS = 3000;
+const FINAL_SUMMARY_MAX_POLLS = 8;
 
 interface UseMeetingRoomArgs {
   roomId: string;
@@ -184,6 +192,13 @@ export function useMeetingRoom({
   const [chatError, setChatError] = useState<string | null>(null);
   const [isSendingChat, setIsSendingChat] = useState(false);
 
+  // ─── Meeting summary state ────────────────────────────────────────────────
+  const [meetingSummary, setMeetingSummary] = useState<MeetingSummaryResponse | null>(null);
+  const [summaryIntent, setSummaryIntent] = useState<MeetingSummaryType>("interim");
+  const [isLoadingSummary, setIsLoadingSummary] = useState(false);
+  const [isGeneratingSummary, setIsGeneratingSummary] = useState(false);
+  const [summaryError, setSummaryError] = useState<string | null>(null);
+
   // ─── Host state ─────────────────────────────────────────────────────────────
   const [hostParticipantId, setHostParticipantId] = useState<string | null>(() => {
     const snapshotHost = (initialRoom?.room as { host_participant_id?: string | null })?.host_participant_id ?? null;
@@ -233,6 +248,12 @@ export function useMeetingRoom({
   const isMutedByHostRef = useRef(false);
   const pendingChatEventIdsRef = useRef<Set<string>>(new Set());
   const brseEnabledRef = useRef(resolveBrseEnabled(initialRoom?.room ?? session?.room ?? null));
+  const summaryRequestSeqRef = useRef(0);
+  const finalSummaryPollTimerRef = useRef<number | null>(null);
+  const finalSummaryPollCountRef = useRef(0);
+  const sessionKey = session?.sessionKey ?? null;
+  const livekitUrl = session?.livekit.url ?? null;
+  const livekitToken = session?.livekit.token ?? null;
 
   useEffect(() => {
     sessionInvalidatedRef.current = onSessionInvalidated;
@@ -280,6 +301,32 @@ export function useMeetingRoom({
   }, [isMutedByHost]);
 
   useEffect(() => {
+    clearFinalSummaryPollTimer();
+    summaryRequestSeqRef.current += 1;
+    finalSummaryPollCountRef.current = 0;
+    setMeetingSummary(null);
+    setSummaryIntent("interim");
+    setIsLoadingSummary(false);
+    setIsGeneratingSummary(false);
+    setSummaryError(null);
+
+    return () => {
+      clearFinalSummaryPollTimer();
+    };
+  }, [roomId]);
+
+  useEffect(() => {
+    if (!session || isRoomExpired) {
+      return;
+    }
+
+    void fetchMeetingSummary("interim", {
+      silent: true,
+      suppressNotFound: true,
+    });
+  }, [roomId, sessionKey, isRoomExpired]);
+
+  useEffect(() => {
     if (!initialRoom || session) {
       return;
     }
@@ -297,10 +344,6 @@ export function useMeetingRoom({
       );
     });
   }, [initialRoom, session]);
-
-  const sessionKey = session?.sessionKey ?? null;
-  const livekitUrl = session?.livekit.url ?? null;
-  const livekitToken = session?.livekit.token ?? null;
 
   useEffect(() => {
     if (!session) {
@@ -986,6 +1029,7 @@ export function useMeetingRoom({
         livekitRoom,
         previousTrack,
         deviceId,
+        { preserveMuted: shouldRemainMuted },
       );
       localAudioTrackRef.current = nextTrack;
       if (shouldRemainMuted && !isMicrophoneMuted(nextTrack)) {
@@ -1267,6 +1311,7 @@ export function useMeetingRoom({
           }
         : current,
     );
+    void prepareFinalSummary();
 
     if (isScreenSharingRef.current || localScreenTrackRef.current) {
       try {
@@ -1736,6 +1781,165 @@ export function useMeetingRoom({
     }
   }
 
+  // ─── Meeting summary handlers ────────────────────────────────────────────
+
+  async function fetchMeetingSummary(
+    type: MeetingSummaryType,
+    options: {
+      silent?: boolean;
+      suppressNotFound?: boolean;
+    } = {},
+  ): Promise<MeetingSummaryResponse | null> {
+    if (!roomId) {
+      return null;
+    }
+
+    const requestId = ++summaryRequestSeqRef.current;
+    setSummaryIntent(type);
+    if (!options.silent) {
+      setIsLoadingSummary(true);
+      setSummaryError(null);
+    }
+
+    try {
+      const response = await api.getRoomSummary(roomId, type);
+      if (requestId !== summaryRequestSeqRef.current) {
+        return null;
+      }
+
+      const normalized = normalizeMeetingSummaryResponse(response, type);
+      setMeetingSummary(normalized);
+      setSummaryError(null);
+      if (type === "final" && normalized.status === "pending") {
+        scheduleFinalSummaryPoll();
+      }
+      return normalized;
+    } catch (error) {
+      if (requestId !== summaryRequestSeqRef.current) {
+        return null;
+      }
+
+      if (
+        error instanceof ApiError
+        && error.code === "meeting_summary_not_found"
+        && options.suppressNotFound
+      ) {
+        return null;
+      }
+
+      setSummaryError(mapMeetingSummaryError(error, type));
+      return null;
+    } finally {
+      if (requestId === summaryRequestSeqRef.current && !options.silent) {
+        setIsLoadingSummary(false);
+      }
+    }
+  }
+
+  async function generateMeetingSummary(
+    type: MeetingSummaryType,
+  ): Promise<MeetingSummaryResponse | null> {
+    if (!roomId) {
+      return null;
+    }
+
+    if (type === "final") {
+      clearFinalSummaryPollTimer();
+    }
+
+    const requestId = ++summaryRequestSeqRef.current;
+    setSummaryIntent(type);
+    setIsGeneratingSummary(true);
+    setSummaryError(null);
+
+    try {
+      const response = await api.generateRoomSummary(roomId, type);
+      if (requestId !== summaryRequestSeqRef.current) {
+        return null;
+      }
+
+      const normalized = normalizeMeetingSummaryResponse(response, type);
+      setMeetingSummary(normalized);
+      setSummaryError(null);
+      if (type === "final" && normalized.status === "pending") {
+        scheduleFinalSummaryPoll();
+      }
+      return normalized;
+    } catch (error) {
+      if (requestId !== summaryRequestSeqRef.current) {
+        return null;
+      }
+
+      if (
+        type === "final"
+        && error instanceof ApiError
+        && (
+          error.code === "meeting_summary_not_ready"
+          || error.code === "meeting_summary_not_found"
+        )
+      ) {
+        const pending = createPendingMeetingSummary(roomId, "final");
+        setMeetingSummary(pending);
+        setSummaryError(null);
+        scheduleFinalSummaryPoll();
+        return pending;
+      }
+
+      setSummaryError(mapMeetingSummaryError(error, type));
+      return null;
+    } finally {
+      if (requestId === summaryRequestSeqRef.current) {
+        setIsGeneratingSummary(false);
+      }
+    }
+  }
+
+  async function refreshInterimSummary(): Promise<MeetingSummaryResponse | null> {
+    if (expiredShutdownRef.current || isRoomExpired) {
+      return null;
+    }
+    return generateMeetingSummary("interim");
+  }
+
+  async function prepareFinalSummary(): Promise<MeetingSummaryResponse | null> {
+    finalSummaryPollCountRef.current = 0;
+    return generateMeetingSummary("final");
+  }
+
+  function scheduleFinalSummaryPoll(): void {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    clearFinalSummaryPollTimer();
+    if (finalSummaryPollCountRef.current >= FINAL_SUMMARY_MAX_POLLS) {
+      return;
+    }
+
+    finalSummaryPollTimerRef.current = window.setTimeout(() => {
+      finalSummaryPollTimerRef.current = null;
+      finalSummaryPollCountRef.current += 1;
+      void fetchMeetingSummary("final", {
+        silent: true,
+        suppressNotFound: true,
+      }).then((summary) => {
+        if (!summary || summary.status === "pending") {
+          scheduleFinalSummaryPoll();
+        }
+      });
+    }, FINAL_SUMMARY_POLL_INTERVAL_MS);
+  }
+
+  function clearFinalSummaryPollTimer(): void {
+    if (typeof window === "undefined" || finalSummaryPollTimerRef.current === null) {
+      finalSummaryPollTimerRef.current = null;
+      return;
+    }
+
+    window.clearTimeout(finalSummaryPollTimerRef.current);
+    finalSummaryPollTimerRef.current = null;
+  }
+
   // ─── Host handlers ────────────────────────────────────────────────────────
 
   function applyHostChanged(event: RoomHostChangedEvent): void {
@@ -1968,6 +2172,21 @@ export function useMeetingRoom({
       && !isRoomExpired
       && !expiredShutdownRef.current,
     sendChatMessage,
+    // Meeting summary
+    meetingSummary,
+    summaryIntent,
+    isLoadingSummary,
+    isGeneratingSummary,
+    summaryError,
+    canRefreshInterimSummary:
+      !!session
+      && !!selfState
+      && !isLeaving
+      && !isRoomExpired
+      && !expiredShutdownRef.current,
+    fetchMeetingSummary,
+    refreshInterimSummary,
+    prepareFinalSummary,
     // Host
     hostParticipantId,
     isCurrentUserHost,
@@ -2077,6 +2296,150 @@ function normalizeChatMessages(messages: ChatMessage[]): RoomChatMessage[] {
     .map((message) => normalizeChatMessage(message))
     .filter((message): message is RoomChatMessage => message !== null)
     .sort(sortRoomChatMessages);
+}
+
+function normalizeMeetingSummaryResponse(
+  summary: MeetingSummaryResponse,
+  requestedType: MeetingSummaryType,
+): MeetingSummaryResponse {
+  const summaryType =
+    summary.summary_type === "interim" || summary.summary_type === "final"
+      ? summary.summary_type
+      : requestedType;
+  const status = normalizeMeetingSummaryStatus(summary.status, summary.summary_text);
+
+  return {
+    ...summary,
+    summary_type: summaryType,
+    status,
+    summary_text: typeof summary.summary_text === "string" ? summary.summary_text : null,
+    highlights: safeStringArray(summary.highlights),
+    decisions: safeStringArray(summary.decisions),
+    action_items: normalizeMeetingSummaryActionItems(summary.action_items),
+    participant_summary: normalizeMeetingSummaryParticipants(summary.participant_summary),
+    source_window: isRecord(summary.source_window) ? summary.source_window : {},
+    source_stats: isRecord(summary.source_stats) ? summary.source_stats : {},
+    error: typeof summary.error === "string" ? summary.error : null,
+  };
+}
+
+function normalizeMeetingSummaryStatus(
+  status: MeetingSummaryResponse["status"],
+  summaryText: MeetingSummaryResponse["summary_text"],
+): MeetingSummaryStatus {
+  if (
+    status === "pending"
+    || status === "completed"
+    || status === "skipped"
+    || status === "failed"
+  ) {
+    return status;
+  }
+
+  return typeof summaryText === "string" && summaryText.trim() ? "completed" : "pending";
+}
+
+function normalizeMeetingSummaryActionItems(
+  items: MeetingSummaryResponse["action_items"],
+): MeetingSummaryActionItem[] {
+  if (!Array.isArray(items)) {
+    return [];
+  }
+
+  const normalized: MeetingSummaryActionItem[] = [];
+  for (const item of items) {
+    if (!item || typeof item.text !== "string" || !item.text.trim()) {
+      continue;
+    }
+
+    normalized.push({
+      text: item.text,
+      owner: typeof item.owner === "string" ? item.owner : null,
+      due: typeof item.due === "string" ? item.due : null,
+    });
+  }
+
+  return normalized;
+}
+
+function normalizeMeetingSummaryParticipants(
+  items: MeetingSummaryResponse["participant_summary"],
+): MeetingSummaryParticipantItem[] {
+  if (!Array.isArray(items)) {
+    return [];
+  }
+
+  const normalized: MeetingSummaryParticipantItem[] = [];
+  for (const item of items) {
+    if (!item || typeof item.summary !== "string" || !item.summary.trim()) {
+      continue;
+    }
+
+    normalized.push({
+      participant_id: typeof item.participant_id === "string" ? item.participant_id : null,
+      display_name: typeof item.display_name === "string" ? item.display_name : null,
+      summary: item.summary,
+    });
+  }
+
+  return normalized;
+}
+
+function safeStringArray(items: string[] | null | undefined): string[] {
+  if (!Array.isArray(items)) {
+    return [];
+  }
+
+  return items.filter((item): item is string => typeof item === "string" && !!item.trim());
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function createPendingMeetingSummary(
+  roomId: string,
+  type: MeetingSummaryType,
+): MeetingSummaryResponse {
+  return {
+    room_id: roomId,
+    summary_type: type,
+    status: "pending",
+    created_at: new Date().toISOString(),
+    generated_at: null,
+    summary_text: null,
+    highlights: [],
+    decisions: [],
+    action_items: [],
+    participant_summary: [],
+    source_window: {},
+    source_stats: {},
+    error: null,
+  };
+}
+
+function mapMeetingSummaryError(error: unknown, type: MeetingSummaryType): string {
+  if (error instanceof ApiError) {
+    if (error.code === "meeting_summary_not_found") {
+      return type === "final"
+        ? "Final summary is not available yet."
+        : "No live summary has been generated yet.";
+    }
+    if (error.code === "meeting_summary_not_ready") {
+      return "Final summary is still being prepared.";
+    }
+    if (error.code === "meeting_summary_unavailable") {
+      return "Meeting summary storage is unavailable right now.";
+    }
+    if (error.code === "invalid_summary_type") {
+      return "Summary type is not supported by this backend.";
+    }
+    return error.message;
+  }
+
+  return type === "final"
+    ? "Could not load the final summary."
+    : "Could not refresh the meeting summary.";
 }
 
 function normalizeChatMessage(message: ChatMessage): RoomChatMessage | null {
@@ -2238,7 +2601,7 @@ function resolveBrseEnabled(
     return room.brse_enabled;
   }
 
-  return room?.meeting_mode === "brse_relay";
+  return room?.meeting_mode === "brse_relay" || room?.meeting_mode === "brse_silent_summary";
 }
 
 function parseExpiresAtMs(expiresAt: string | null | undefined): number | null {

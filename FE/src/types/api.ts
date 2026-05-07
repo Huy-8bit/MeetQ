@@ -12,10 +12,13 @@ export type MeetingLanguage = SelectableLanguage;
 
 export type RoomState = "created" | "active" | "empty";
 export type SameLanguagePolicy = "human_passthrough" | "muted";
-export type MeetingMode = "direct_translation" | "brse_relay";
+export type BrseMode = "relay" | "silent_summary";
+export type MeetingMode = "direct_translation" | "brse_relay" | "brse_silent_summary";
 export type InterpreterMode = "per_listener" | "brse_participant";
 export type ParticipantKind = "human" | "virtual_brse";
 export type ScreenShareSource = "screen_share";
+export type MeetingSummaryType = "interim" | "final";
+export type MeetingSummaryStatus = "pending" | "completed" | "skipped" | "failed";
 export type MeetingAudioModel =
   | "translated_audio_first"
   | "brse_participant_audio";
@@ -122,6 +125,7 @@ export interface RoomSummary {
 export interface CreateRoomRequest {
   meeting_languages: [MeetingLanguage, MeetingLanguage];
   brse_enabled?: boolean;
+  brse_mode?: BrseMode;
 }
 
 export interface CreateRoomResponse {
@@ -285,6 +289,59 @@ export interface ScreenShareStateResponse {
   timestamp: string;
   track_sid?: string | null;
   track_name?: string | null;
+}
+
+// ─── Meeting summary types ──────────────────────────────────────────────────
+
+export interface MeetingSummaryActionItem {
+  text: string;
+  owner?: string | null;
+  due?: string | null;
+}
+
+export interface MeetingSummaryParticipantItem {
+  participant_id?: string | null;
+  display_name?: string | null;
+  summary: string;
+}
+
+export interface MeetingSummarySourceWindow {
+  source?: "redis_snapshot" | "mongodb_archive" | string;
+  from?: string | null;
+  to?: string | null;
+  message_count?: number;
+  max_messages?: number;
+  [key: string]: unknown;
+}
+
+export interface MeetingSummarySourceStats {
+  transcript_count?: number;
+  source_transcript_count?: number;
+  relay_count?: number;
+  translated_transcript_count?: number;
+  chat_count?: number;
+  included_message_count?: number;
+  truncated?: boolean;
+  [key: string]: unknown;
+}
+
+export interface MeetingSummaryResponse {
+  room_id: string;
+  summary_id?: string | null;
+  summary_type?: MeetingSummaryType | null;
+  status?: MeetingSummaryStatus | null;
+  created_at?: string | null;
+  generated_at?: string | null;
+  summary_language?: string | null;
+  summary_text?: string | null;
+  highlights?: string[] | null;
+  decisions?: string[] | null;
+  action_items?: MeetingSummaryActionItem[] | null;
+  participant_summary?: MeetingSummaryParticipantItem[] | null;
+  duration_seconds?: number | null;
+  source_window?: MeetingSummarySourceWindow | null;
+  source_stats?: MeetingSummarySourceStats | null;
+  error?: string | null;
 }
 
 // ─── Chat types ───────────────────────────────────────────────────────────────

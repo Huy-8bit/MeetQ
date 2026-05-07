@@ -1,5 +1,267 @@
 # Frontend Implementation State
 
+## Turn Update: 2026-05-07 Meeting Theme, Layout, and Stage Focus UX
+
+- Time: 2026-05-07T00:00:00+07:00
+- Mode: CODE-ONLY
+- Status: implemented
+- Testing deferred: yes, per instruction
+
+### Objective
+
+Add additive room UX controls for:
+
+- light/dark theme selection.
+- meeting layout mode selection.
+- stage focus mode for shared screen or active meeting content.
+
+### Theme Strategy
+
+- Add document-level theme mode: `light` and `dark`.
+- Restore saved theme before React mount to avoid flashing the wrong room theme.
+- Use CSS variables for app/room surfaces, borders, text, stage background,
+  tile media background, panel surfaces, and controls.
+- Keep the existing dark meeting feel as the default for production continuity.
+- Add light-mode overrides for:
+  - room shell and top bar.
+  - meeting stage and shared-screen frame.
+  - participant tiles and active/speech badges.
+  - side panel, chat, relay, people, summary, controls, and empty states.
+- Add dark-mode overrides for previously light panel surfaces so dark mode is
+  coherent across the side panel and settings drawer.
+
+### Layout Strategy
+
+- Add three room layout modes:
+  - `stage-focus`: larger stage, narrower side panel, wider share frame.
+  - `balanced`: default room balance.
+  - `compact`: tighter side panel and slightly denser controls.
+- Layout modes are CSS-only around the existing `room-shell`, `meeting-stage`,
+  and `room-side-panel` structure.
+- No LiveKit, websocket, relay, chat, people, screen-share, or summary runtime
+  paths were changed for layout behavior.
+
+### Focus Strategy
+
+- Add a direct `Focus` / `Exit` action in the room control bar.
+- Stage focus mode hides the side panel, keeps top bar and meeting controls
+  available, and expands the stage/shared-screen frame.
+- Opening a panel or settings exits focus mode to avoid conflicting layout state.
+- The implementation uses stage focus rather than browser fullscreen so the room
+  controls remain predictable and no browser permission/fullscreen edge case can
+  block the meeting UI.
+
+### Persistence Strategy
+
+- Store theme in `localStorage` key `brseai_theme_mode`.
+- Store room layout in `localStorage` key `brseai_room_layout_mode`.
+- Storage read/write failures are ignored so private-mode or blocked storage
+  does not break join/room runtime.
+
+### Mobile Behavior
+
+- Theme applies globally on mobile.
+- Desktop layout widths collapse to the existing single-column/bottom-sheet
+  mobile room pattern.
+- Stage focus hides the mobile bottom-sheet side panel and removes alert stack
+  clutter so the stage gets the available viewport.
+- Settings drawer remains full-height and scrollable with compact view controls.
+
+### Files Changed
+
+| File | Change |
+|------|--------|
+| `FE/src/lib/uiPreferences.ts` | Added theme/layout preference loading, saving, and DOM theme application |
+| `FE/src/main.tsx` | Restores saved theme before React renders |
+| `FE/src/pages/RoomPage.tsx` | Wires theme, layout, stage focus state, persistence, and view settings |
+| `FE/src/components/MeetingViewPanel.tsx` | New compact settings section for theme, layout, and stage focus |
+| `FE/src/components/SettingsDrawer.tsx` | Generalized drawer title/eyebrow for room settings |
+| `FE/src/components/RoomControlBar.tsx` | Added direct stage focus toggle |
+| `FE/src/index.css` | Added theme tokens, light/dark room styling, layout modes, focus mode, and mobile rules |
+| `docs/frontend/IMPLEMENTATION_STATE.md` | Documented implementation and deferred testing |
+
+### Testing
+
+- Full test suite not run, per CODE-ONLY instruction.
+- Verification/build commands not run, per CODE-ONLY instruction.
+- No new tests added.
+- No existing tests modified.
+
+---
+
+## Turn Update: 2026-05-07 Microphone Capture Cleanup
+
+- Time: 2026-05-07T00:00:00+07:00
+- Mode: CODE-ONLY
+- Status: implemented
+- Testing deferred: yes, per instruction
+
+### Objective
+
+Improve frontend microphone capture quality before publishing local audio to
+LiveKit/backend, without changing room flow or redesigning the audio system.
+
+### Mic Constraints Strategy
+
+- Centralize room microphone capture constraints in `FE/src/lib/livekit.ts`.
+- Apply browser/device-level processing on the real room capture path:
+  - `echoCancellation`
+  - `noiseSuppression`
+  - `autoGainControl`
+  - `voiceIsolation` as an optional preference where supported
+  - mono/speech-oriented capture hints (`channelCount`, `sampleRate`,
+    `sampleSize`, `contentHint="speech"`)
+- Reuse the same constraints for initial mic publish and input-device switching.
+- Publish microphone tracks with speech-oriented LiveKit audio settings:
+  `AudioPresets.speech`, `dtx=true`, `red=true`, `forceStereo=false`.
+- Keep playback route unchanged: local video preview remains muted, audio sinks
+  are remote-only, and screen-share capture still excludes system audio.
+- Keep mute/unmute and selected input/output device behavior intact.
+
+### Compatibility Strategy
+
+- Use standard optional media constraints that unsupported browsers can ignore.
+- Keep device selection exact when the user chooses an input device.
+- Prefer in-place mic restart with full constraints on device switch; fall back
+  to LiveKit `setDeviceId`; then fall back to creating and publishing a
+  replacement mic track.
+- Avoid aggressive custom WebAudio processing that could distort speech or break
+  mobile/browser behavior.
+- If processing-constraint reapply fails after `setDeviceId`, FE falls back to
+  non-device-specific processing hints and keeps the room running.
+- If the current mic was muted during input-device switch, the replacement track
+  is published muted to avoid a short unmuted leak.
+
+### Files Changed
+
+| File | Change |
+|------|--------|
+| `FE/src/lib/livekit.ts` | Added shared microphone capture constraints, speech publish options, speech content hint, and device-switch fallback path |
+| `FE/src/features/room/useMeetingRoom.ts` | Passes muted-state preservation into microphone device switching |
+| `docs/frontend/IMPLEMENTATION_STATE.md` | Documented microphone capture cleanup |
+
+### Testing
+
+- Full test suite not run, per CODE-ONLY instruction.
+- New tests not added.
+- Existing tests not modified.
+- Build check run: `cd FE && npm run build`.
+  - Result: pass.
+  - Vite still emits the existing large chunk warning.
+
+---
+
+## Turn Update: 2026-05-06 Meeting Summary UI
+
+- Time: 2026-05-06T00:00:00+07:00
+- Mode: CODE-ONLY
+- Status: implemented
+- Testing deferred: yes, per instruction
+
+### Objective
+
+Add additive frontend UI/runtime support for meeting summaries:
+
+- live `interim` checkpoint summary while a meeting is active.
+- post-meeting `final` summary after expiry or last participant leave.
+
+### Placement Strategy
+
+- Add `Summary` as a fourth room side-panel tab next to `Relay`, `Chat`, and
+  `People`.
+- Reuse the existing side-panel/bottom-sheet pattern so desktop and mobile keep
+  the current meeting stage/control flow.
+- Keep summary out of the primary stage unless the room has ended.
+- Add `Summary` to the bottom control tab cluster so users can open it the same
+  way they open Relay/Chat/People.
+- Badge the tab when a summary record exists.
+
+### Runtime Strategy
+
+- Add FE types for `MeetingSummaryResponse`, status, type, source window, source
+  stats, highlights, decisions, action items, and participant summaries.
+- Add API methods for:
+  - `GET /api/rooms/{room_id}/summary?type=interim|final`
+  - `POST /api/rooms/{room_id}/summary?type=interim|final`
+- Keep parsing backward-safe: missing `summary_type`, optional arrays, and
+  optional structured fields must not crash render.
+- `useMeetingRoom` owns summary runtime state:
+  - `meetingSummary`
+  - `summaryIntent`
+  - `isLoadingSummary`
+  - `isGeneratingSummary`
+  - `summaryError`
+  - `fetchMeetingSummary(type)`
+  - `refreshInterimSummary()`
+  - `prepareFinalSummary()`
+- On active room mount, FE silently checks for an existing `interim` record.
+- User action in the Summary tab calls `POST .../summary?type=interim` to
+  generate or refresh the live checkpoint.
+- Final summary generation uses `POST .../summary?type=final`, then bounded
+  background polling via `GET .../summary?type=final` while status is pending or
+  the record is not visible yet.
+
+### UX States
+
+- No summary yet.
+- Checking/loading saved summary.
+- Generating/refreshing.
+- Completed/skipped/pending/failed summary record.
+- Final-summary pending state after room end with retry/check-again affordance.
+- Interim UI labels the artifact as `Current summary`.
+- Final UI labels the artifact as `Final summary`.
+- Completed summaries render:
+  - `summary_text`
+  - `highlights`
+  - `decisions`
+  - `action_items`
+  - `participant_summary`
+  - generated timestamp when available
+- Failed/skipped states surface backend `error` when provided and keep retry
+  controls visible.
+
+### Room-End Handling
+
+- Expiry while joined no longer redirects directly home. The session is still
+  cleared and media/socket teardown remains in `useMeetingRoom`, but RoomPage
+  stays on `/rooms/:roomId` and shows a final-summary screen.
+- Direct visit to an expired room also shows the final-summary screen and asks
+  the backend to prepare/fetch the final summary.
+- Manual leave preserves the previous home redirect for non-last participants.
+  If the current user appears to be the last human participant, FE stays on the
+  room route and shows the final-summary screen.
+
+### Mobile Behavior
+
+- Summary is included in the existing mobile bottom-sheet side panel.
+- The bottom control tab row now supports the fourth tab with horizontal
+  overflow safety on small screens.
+- The final-summary screen stacks copy and summary artifact vertically on
+  mobile.
+
+### Files Changed
+
+| File | Change |
+|------|--------|
+| `FE/src/types/api.ts` | Added meeting summary contract types; added `brse_mode`/silent-summary-safe meeting mode typing |
+| `FE/src/types/ws.ts` | Added `brse_silent_summary` to room snapshot meeting mode union |
+| `FE/src/lib/api.ts` | Added `getRoomSummary` and `generateRoomSummary` |
+| `FE/src/features/room/useMeetingRoom.ts` | Added summary state/actions, interim fetch, interim refresh, final generation/polling, backward-safe normalizers |
+| `FE/src/components/MeetingSummaryPanel.tsx` | New artifact UI for interim/final summaries and all summary states |
+| `FE/src/components/RoomSidePanel.tsx` | Added `Summary` tab and summary content slot |
+| `FE/src/components/RoomControlBar.tsx` | Added `Summary` shortcut to room control tabs |
+| `FE/src/pages/RoomPage.tsx` | Wired Summary panel, active interim actions, final room-ended screen, last-leave final-summary path |
+| `FE/src/index.css` | Added summary panel, final-summary screen, desktop/mobile responsive styling |
+| `docs/frontend/IMPLEMENTATION_STATE.md` | Documented summary UI implementation |
+
+### Testing
+
+- Full test suite not run, per CODE-ONLY instruction.
+- No new tests added.
+- No existing tests modified.
+
+---
+
 ## Turn Update: 2026-05-03 Chat Translation UI
 
 - Time: 2026-05-03T00:00:00+07:00

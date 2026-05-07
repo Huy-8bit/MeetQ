@@ -8,6 +8,7 @@ import { useSessionStore } from "../state/session";
 import { useRoomExpiry } from "../features/room/useRoomExpiry";
 import type {
   MeetingLanguage,
+  ParticipantSnapshot,
   RoomSnapshotResponse,
 } from "../types/api";
 import { AudioTrackSink } from "../components/MediaElements";
@@ -16,12 +17,23 @@ import { JoinRoomCard } from "../components/JoinRoomCard";
 import { AudioDevicePanel } from "../components/AudioDevicePanel";
 import { ParticipantList } from "../components/ParticipantList";
 import { BrseRelayPanel } from "../components/BrseRelayPanel";
+import { MeetingSummaryPanel } from "../components/MeetingSummaryPanel";
 import { MeetingStage } from "../components/MeetingStage";
+import { MeetingViewPanel } from "../components/MeetingViewPanel";
 import { RoomControlBar } from "../components/RoomControlBar";
 import { RoomSidePanel, type RoomPanelTab } from "../components/RoomSidePanel";
 import { RoomTopBar } from "../components/RoomTopBar";
 import { SettingsDrawer } from "../components/SettingsDrawer";
 import { useMeetingRoom } from "../features/room/useMeetingRoom";
+import {
+  applyThemePreference,
+  loadRoomLayoutPreference,
+  loadThemePreference,
+  saveRoomLayoutPreference,
+  saveThemePreference,
+  type AppThemeMode,
+  type RoomLayoutMode,
+} from "../lib/uiPreferences";
 
 const APP_VERSION = "0.1.0";
 
@@ -39,17 +51,19 @@ export function RoomPage() {
   const [activePanel, setActivePanel] = useState<RoomPanelTab>("relay");
   const [sidePanelOpen, setSidePanelOpen] = useState(true);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [showEndedSummary, setShowEndedSummary] = useState(false);
+  const [themeMode, setThemeMode] = useState<AppThemeMode>(() => loadThemePreference());
+  const [layoutMode, setLayoutMode] = useState<RoomLayoutMode>(() => loadRoomLayoutPreference());
+  const [stageFocusActive, setStageFocusActive] = useState(false);
   const session = getSession(roomId);
   const handleSessionInvalidated = useCallback(() => {
     clearSession(roomId);
   }, [clearSession, roomId]);
   const handleRoomExpired = useCallback(() => {
     clearSession(roomId);
-    navigate("/", {
-      replace: true,
-      state: { notice: "This meeting has ended." },
-    });
-  }, [clearSession, navigate, roomId]);
+    setSnapshotExpired(true);
+    setShowEndedSummary(true);
+  }, [clearSession, roomId]);
 
   useEffect(() => {
     if (!roomId) {
@@ -62,6 +76,7 @@ export function RoomPage() {
     setLoadingSnapshot(true);
     setSnapshotError(null);
     setSnapshotExpired(false);
+    setShowEndedSummary(false);
 
     void (async () => {
       try {
@@ -73,6 +88,7 @@ export function RoomPage() {
             const expired = new Date(response.room.expires_at).getTime() <= Date.now();
             if (expired) {
               setSnapshotExpired(true);
+              setShowEndedSummary(true);
             }
           }
         }
@@ -83,6 +99,7 @@ export function RoomPage() {
 
         if (error instanceof ApiError && error.code === "room_expired") {
           setSnapshotExpired(true);
+          setShowEndedSummary(true);
         } else {
           setSnapshotError(
             error instanceof ApiError
@@ -117,6 +134,23 @@ export function RoomPage() {
   // Room is expired if: backend told us (snapshotExpired), timer ran out, or meeting hook says so
   const isRoomExpired = snapshotExpired || isTimerExpired || meeting.isRoomExpired;
 
+  useEffect(() => {
+    applyThemePreference(themeMode);
+    saveThemePreference(themeMode);
+  }, [themeMode]);
+
+  useEffect(() => {
+    saveRoomLayoutPreference(layoutMode);
+  }, [layoutMode]);
+
+  useEffect(() => {
+    if (!roomId || session || (!snapshotExpired && !showEndedSummary)) {
+      return;
+    }
+
+    void meeting.prepareFinalSummary();
+  }, [roomId, session, snapshotExpired, showEndedSummary]);
+
   const activeScreenShareParticipants = meeting.participants.filter(
     (participant) => participant.is_screen_sharing,
   );
@@ -133,6 +167,59 @@ export function RoomPage() {
   const relayStatusLabel = meeting.brseEnabled
     ? formatRelayStatus(meeting.interpreterStatuses[0]?.status)
     : "Off";
+  const renderSummaryPanel = (roomEnded: boolean) => (
+    <MeetingSummaryPanel
+      summary={meeting.meetingSummary}
+      intent={meeting.summaryIntent}
+      roomEnded={roomEnded}
+      isLoading={meeting.isLoadingSummary}
+      isGenerating={meeting.isGeneratingSummary}
+      error={meeting.summaryError}
+      canRefreshInterim={meeting.canRefreshInterimSummary && !isRoomExpired}
+      onRefreshInterim={() => {
+        void meeting.refreshInterimSummary();
+      }}
+      onCheckInterim={() => {
+        void meeting.fetchMeetingSummary("interim", {
+          suppressNotFound: true,
+        });
+      }}
+      onPrepareFinal={() => {
+        void meeting.prepareFinalSummary();
+      }}
+      embedded
+    />
+  );
+
+  const handleThemeChange = useCallback((nextTheme: AppThemeMode) => {
+    setThemeMode(nextTheme);
+  }, []);
+
+  const handleLayoutChange = useCallback((nextLayout: RoomLayoutMode) => {
+    setLayoutMode(nextLayout);
+  }, []);
+
+  const handleToggleStageFocus = useCallback(() => {
+    if (stageFocusActive) {
+      setStageFocusActive(false);
+      return;
+    }
+
+    setSidePanelOpen(false);
+    setSettingsOpen(false);
+    setStageFocusActive(true);
+  }, [stageFocusActive]);
+
+  const handleToggleSidePanel = useCallback(() => {
+    setStageFocusActive(false);
+    setSidePanelOpen((prev) => !prev);
+  }, []);
+
+  const handleOpenPanel = useCallback((tab: RoomPanelTab) => {
+    setStageFocusActive(false);
+    setActivePanel(tab);
+    setSidePanelOpen(true);
+  }, []);
 
   async function handleJoin(payload: {
     displayName: string;
@@ -207,16 +294,24 @@ export function RoomPage() {
   }
 
   // Expired room with no session: show dedicated expired page (not generic error)
-  if (snapshotExpired && !session) {
+  if ((snapshotExpired || showEndedSummary) && !session) {
     return (
       <main className="room-boot">
-        <div className="empty-state room-expired-page">
-          <span className="room-expired-icon" aria-hidden="true">⏱</span>
-          <strong>Meeting ended</strong>
-          <p>This room has expired. Meetings last 30 minutes.</p>
-          <button type="button" className="button-secondary" onClick={() => navigate("/")}>
-            Back Home
-          </button>
+        <div className="room-ended-summary-page">
+          <div className="room-ended-copy">
+            <span className="room-ended-kicker">Meeting ended</span>
+            <h1>Final summary</h1>
+            <p>
+              This room is closed. The final summary stays available here when the backend
+              finishes preparing it.
+            </p>
+            <button type="button" className="button-secondary" onClick={() => navigate("/")}>
+              Back Home
+            </button>
+          </div>
+          <div className="room-ended-summary-card">
+            {renderSummaryPanel(true)}
+          </div>
         </div>
       </main>
     );
@@ -259,8 +354,11 @@ export function RoomPage() {
   return (
     <main className={[
       "room-page",
+      `theme-${themeMode}`,
+      `layout-${layoutMode}`,
       meeting.brseEnabled ? "brse-on" : "brse-off",
       sidePanelOpen ? "panel-open" : "panel-closed",
+      stageFocusActive ? "stage-focus-active" : "",
     ].join(" ")}>
       <RoomTopBar
         roomId={roomId}
@@ -334,6 +432,7 @@ export function RoomPage() {
             isScreenSharing={meeting.isScreenSharing}
             isStartingScreenShare={meeting.isStartingScreenShare}
             isStoppingScreenShare={meeting.isStoppingScreenShare}
+            stageFocusActive={stageFocusActive}
             isLeaving={meeting.isLeaving}
             onToggleMic={() => {
               void meeting.toggleMicrophoneMuted();
@@ -349,15 +448,26 @@ export function RoomPage() {
               }
               void meeting.startScreenShare();
             }}
+            onToggleStageFocus={handleToggleStageFocus}
             sidePanelOpen={sidePanelOpen}
-            onToggleSidePanel={() => setSidePanelOpen((prev) => !prev)}
-            onOpenPanel={(tab) => {
-              setActivePanel(tab);
-              if (!sidePanelOpen) setSidePanelOpen(true);
+            onToggleSidePanel={handleToggleSidePanel}
+            onOpenPanel={handleOpenPanel}
+            onOpenSettings={() => {
+              setStageFocusActive(false);
+              setSettingsOpen(true);
             }}
-            onOpenSettings={() => setSettingsOpen(true)}
             onLeave={() => {
-              void meeting.leaveRoom().then(() => navigate("/"));
+              const shouldShowFinalSummary =
+                meeting.participants.filter(isHumanParticipant).length <= 1;
+              void meeting.leaveRoom().then(() => {
+                if (shouldShowFinalSummary) {
+                  setShowEndedSummary(true);
+                  void meeting.prepareFinalSummary();
+                  return;
+                }
+
+                navigate("/");
+              });
             }}
           />
         </section>
@@ -368,6 +478,7 @@ export function RoomPage() {
           activeTab={activePanel}
           transcriptCount={meeting.transcripts.length}
           chatCount={meeting.chatMessages.length}
+          summaryCount={meeting.meetingSummary ? 1 : 0}
           participantCount={meeting.participants.length}
           onTabChange={setActivePanel}
           relay={
@@ -390,6 +501,7 @@ export function RoomPage() {
               embedded
             />
           }
+          summary={renderSummaryPanel(isRoomExpired)}
           people={
             <ParticipantList
               participants={meeting.participants}
@@ -409,7 +521,16 @@ export function RoomPage() {
       <SettingsDrawer
         open={settingsOpen}
         onClose={() => setSettingsOpen(false)}
+        title="Room settings"
       >
+        <MeetingViewPanel
+          themeMode={themeMode}
+          layoutMode={layoutMode}
+          stageFocusActive={stageFocusActive}
+          onThemeChange={handleThemeChange}
+          onLayoutChange={handleLayoutChange}
+          onToggleStageFocus={handleToggleStageFocus}
+        />
         <AudioDevicePanel
           isMicMuted={meeting.isMicMuted}
           isTogglingMic={meeting.isTogglingMic}
@@ -501,4 +622,8 @@ function mapJoinError(error: ApiError, meetingLanguages: MeetingLanguage[]): str
       : "Your language must match one of the room meeting languages.";
   }
   return error.message;
+}
+
+function isHumanParticipant(participant: ParticipantSnapshot): boolean {
+  return participant.kind !== "virtual_brse" && !participant.is_virtual;
 }

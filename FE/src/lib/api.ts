@@ -9,6 +9,8 @@ import type {
   CreateTranslationTestRequest,
   JoinRoomRequest,
   JoinRoomResponse,
+  MeetingSummaryResponse,
+  MeetingSummaryType,
   MicTestSessionResponse,
   RoomSummary,
   RoomSnapshotResponse,
@@ -159,6 +161,21 @@ export const api = {
     return requestJson<RoomSummary>(`/api/rooms/${roomId}/brse/disable`, {
       method: "POST",
       headers: buildAuthHeaders(token),
+      body: JSON.stringify({}),
+    });
+  },
+
+  getRoomSummary(roomId: string, type: MeetingSummaryType = "final") {
+    const query = new URLSearchParams({ type });
+    return requestJson<MeetingSummaryResponse>(
+      `/api/rooms/${roomId}/summary?${query.toString()}`,
+    );
+  },
+
+  generateRoomSummary(roomId: string, type?: MeetingSummaryType) {
+    const query = type ? `?${new URLSearchParams({ type }).toString()}` : "";
+    return requestJson<MeetingSummaryResponse>(`/api/rooms/${roomId}/summary${query}`, {
+      method: "POST",
       body: JSON.stringify({}),
     });
   },

@@ -63,7 +63,12 @@ class RoomStore:
         await self._refresh_ttl(room_id)
         return updated
 
-    async def get_room_snapshot(self, room_id: str) -> Optional[RoomSnapshotResponse]:
+    async def get_room_snapshot(
+        self,
+        room_id: str,
+        *,
+        include_silent_transcripts: bool = False,
+    ) -> Optional[RoomSnapshotResponse]:
         meta_json = await self.client.get(self._meta_key(room_id))
         if not meta_json:
             return None
@@ -88,7 +93,13 @@ class RoomStore:
 
         trans_data = await self.client.lrange(self._trans_key(room_id), 0, -1)
         transcripts = [TranscriptEvent.model_validate_json(t) for t in trans_data]
-        if not room_state.brse_enabled or room_state.brse_mode == BRSE_MODE_SILENT_SUMMARY:
+        if (
+            not include_silent_transcripts
+            and (
+                not room_state.brse_enabled
+                or room_state.brse_mode == BRSE_MODE_SILENT_SUMMARY
+            )
+        ):
             transcripts = []
         chat_data = await self.client.lrange(self._chat_key(room_id), 0, -1)
         messages = [ChatMessage.model_validate_json(t) for t in chat_data]
