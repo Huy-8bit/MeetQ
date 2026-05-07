@@ -4,6 +4,7 @@ import { formatMeetingLanguageBridge, getLanguageLabel } from "../lib/languages"
 import { useRoomExpiry } from "../features/room/useRoomExpiry";
 import { BrseToggleControl } from "./BrseToggleControl";
 import { ConnectionBadge } from "./ConnectionBadge";
+import { CustomSelect, type CustomSelectOption } from "./CustomSelect";
 
 interface RoomTopBarProps {
   roomId: string;
@@ -38,6 +39,10 @@ export function RoomTopBar({
 }: RoomTopBarProps) {
   const languageOptions =
     meetingLanguages.length === 2 ? meetingLanguages : [currentLanguage];
+  const selectOptions: Array<CustomSelectOption<Language>> = languageOptions.map((item) => ({
+    value: item,
+    label: getLanguageLabel(item),
+  }));
 
   const { remainingLabel, isExpired } = useRoomExpiry(expiresAt);
 
@@ -68,19 +73,15 @@ export function RoomTopBar({
 
       {/* Right: controls */}
       <div className="room-topbar-controls">
-        <select
+        <CustomSelect
           className="topbar-lang-select"
           value={currentLanguage}
+          options={selectOptions}
           disabled={meetingLanguages.length !== 2}
-          onChange={(e) => onChangeLanguage(e.target.value as Language)}
-          aria-label="Your language"
-        >
-          {languageOptions.map((item) => (
-            <option key={item} value={item}>
-              {getLanguageLabel(item)}
-            </option>
-          ))}
-        </select>
+          onChange={onChangeLanguage}
+          ariaLabel="Your language"
+          size="compact"
+        />
 
         <ConnectionBadge state={connectionState} />
 

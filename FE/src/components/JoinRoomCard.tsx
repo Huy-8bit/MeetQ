@@ -6,6 +6,7 @@ import {
 import { formatExpiresAtHuman, useRoomExpiry } from "../features/room/useRoomExpiry";
 import { loadUserPrefs, saveUserPrefs } from "../lib/userPrefs";
 import type { MeetingLanguage, ParticipantSnapshot, RoomSnapshotResponse } from "../types/api";
+import { CustomSelect, type CustomSelectOption } from "./CustomSelect";
 
 interface JoinRoomCardProps {
   room: RoomSnapshotResponse["room"];
@@ -48,6 +49,22 @@ export function JoinRoomCard({
     (participant) => !isHumanParticipant(participant),
   );
   const brseEnabled = room.brse_enabled !== false;
+  const languageOptions: Array<CustomSelectOption<MeetingLanguage | "">> =
+    languagePairUnavailable
+      ? [
+          {
+            value: language,
+            label: "Meeting language pair unavailable",
+            disabled: true,
+          },
+        ]
+      : [
+          { value: "", label: "Select language" },
+          ...meetingLanguages.map((item) => ({
+            value: item,
+            label: getLanguageLabel(item),
+          })),
+        ];
 
   const expiresLabel = formatExpiresAtHuman(room.expires_at);
   const { remainingLabel } = useRoomExpiry(room.expires_at);
@@ -147,27 +164,22 @@ export function JoinRoomCard({
 
                 <label className="join-input-field">
                   <span>Your language</span>
-                  <select
+                  <CustomSelect
+                    className="join-language-select"
                     value={language}
-                    onChange={(event) => {
-                      setLanguage(event.target.value as MeetingLanguage | "");
+                    options={languageOptions}
+                    onChange={(nextLanguage) => {
+                      setLanguage(nextLanguage);
                       setValidationError(null);
                     }}
                     disabled={languagePairUnavailable}
-                  >
-                    {languagePairUnavailable ? (
-                      <option value={language}>Meeting language pair unavailable</option>
-                    ) : (
-                      <>
-                        <option value="">Select language</option>
-                        {meetingLanguages.map((item) => (
-                          <option key={item} value={item}>
-                            {getLanguageLabel(item)}
-                          </option>
-                        ))}
-                      </>
-                    )}
-                  </select>
+                    placeholder={
+                      languagePairUnavailable
+                        ? "Meeting language pair unavailable"
+                        : "Select language"
+                    }
+                    ariaLabel="Your language"
+                  />
                 </label>
 
                 <button

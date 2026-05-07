@@ -1,5 +1,6 @@
 import { useRef } from "react";
 import { Link } from "react-router-dom";
+import { CustomSelect, type CustomSelectOption } from "../components/CustomSelect";
 import { MicLevelMeter } from "../components/MicLevelMeter";
 import { useMicTest } from "../features/test/useMicTest";
 import { useTranslationTest } from "../features/test/useTranslationTest";
@@ -120,6 +121,12 @@ function TranslationTestSection() {
     state.status === "connecting";
 
   const canChangeLang = state.status === "idle" || state.status === "stopped";
+  const languageOptions: Array<CustomSelectOption<Language>> = SUPPORTED_MEETING_LANGUAGES.map(
+    (language) => ({
+      value: language,
+      label: getLanguageLabel(language),
+    }),
+  );
 
   function handleStart() {
     void start(state.srcLang, state.tgtLang);
@@ -161,34 +168,26 @@ function TranslationTestSection() {
       <div className="translation-lang-row">
         <label className="compact-field">
           <span>Ngôn ngữ nguồn</span>
-          <select
+          <CustomSelect
             value={state.srcLang}
+            options={languageOptions}
             disabled={!canChangeLang}
-            onChange={(e) => setSrcLang(e.target.value as Language)}
-          >
-            {SUPPORTED_MEETING_LANGUAGES.map((language) => (
-              <option key={language} value={language}>
-                {getLanguageLabel(language)}
-              </option>
-            ))}
-          </select>
+            onChange={setSrcLang}
+            ariaLabel="Ngôn ngữ nguồn"
+          />
         </label>
 
         <span className="lang-arrow">→</span>
 
         <label className="compact-field">
           <span>Ngôn ngữ đích</span>
-          <select
+          <CustomSelect
             value={state.tgtLang}
+            options={languageOptions}
             disabled={!canChangeLang}
-            onChange={(e) => setTgtLang(e.target.value as Language)}
-          >
-            {SUPPORTED_MEETING_LANGUAGES.map((language) => (
-              <option key={language} value={language}>
-                {getLanguageLabel(language)}
-              </option>
-            ))}
-          </select>
+            onChange={setTgtLang}
+            ariaLabel="Ngôn ngữ đích"
+          />
         </label>
       </div>
 

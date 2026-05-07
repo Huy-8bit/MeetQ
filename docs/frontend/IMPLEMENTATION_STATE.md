@@ -1,5 +1,93 @@
 # Frontend Implementation State
 
+## Turn Update: 2026-05-07 Frontend Theme, Custom Select, and Landing Polish
+
+- Time: 2026-05-07T00:00:00+07:00
+- Mode: CODE-ONLY
+- Status: implemented
+- Testing deferred: yes, per instruction
+
+### Objective
+
+Polish frontend UI consistency without changing room/runtime data contracts:
+
+- normalize light/dark surfaces and controls.
+- replace important native selects with reusable web UI selects.
+- redesign the landing/create-room experience in a refined Apple-like direction.
+- update product-facing room duration wording from 30 minutes to 60 minutes.
+
+### Root Cause
+
+- The frontend had a newer theme token layer, but many user-facing surfaces still
+  used older hardcoded light colors (`white`, slate text, light panel fills).
+- Native `<select>` controls were visually hidden or directly rendered in core
+  flows, so language and audio device menus still used OS/browser chrome.
+- The landing page had a compact utility-card feel and still showed the old
+  30-minute duration promise.
+
+### Theme Consistency Strategy
+
+- Added a final token-based CSS override layer for app, landing, join, side
+  panel, settings drawer, summary, relay, chat, device, and test-page surfaces.
+- Centralized field/select colors through field/menu CSS variables for light
+  and dark mode.
+- Kept runtime structure and data flow unchanged; the changes are presentation
+  and control implementation only.
+- Removed the old in-room expired copy that mentioned 30 minutes and replaced it
+  with duration-neutral wording.
+
+### Custom Select Strategy
+
+- Added reusable `CustomSelect` with web-rendered trigger/listbox, click outside
+  close, disabled state, compact/standard sizes, selected/hover/active states,
+  long-label truncation, and keyboard handling for arrows, Home/End, Enter,
+  Space, and Escape.
+- The component accepts a typed option list and preserves existing state/update
+  semantics by calling the same language/audio handlers with the selected value.
+- Mobile behavior uses bounded menu height and clipped labels instead of native
+  OS dropdown UI.
+
+### Native Selects Replaced
+
+- Landing/create room meeting language A/B.
+- Join-room user language.
+- In-room topbar user language.
+- Settings microphone input device.
+- Settings speaker/output device.
+- Dev translation test source and target language controls.
+
+### Landing Redesign Strategy
+
+- Reworked the home page into a spacious hero plus a focused create/open action
+  stack.
+- Used restrained typography, broad spacing, subtle glass-like surfaces, calm
+  depth, and neutral Apple-like color balance.
+- Updated duration wording to `60-minute rooms` and `60 min` on the landing
+  surface.
+
+### Files Changed
+
+| File | Change |
+|------|--------|
+| `FE/src/components/CustomSelect.tsx` | Added reusable web UI select/listbox component |
+| `FE/src/pages/HomePage.tsx` | Redesigned landing hero/action layout; switched create language controls to custom select; updated duration to 60 minutes |
+| `FE/src/components/JoinRoomCard.tsx` | Replaced join language native select with custom select |
+| `FE/src/components/RoomTopBar.tsx` | Replaced in-room language native select with compact custom select |
+| `FE/src/components/AudioDevicePanel.tsx` | Replaced microphone and speaker native selects with custom select |
+| `FE/src/pages/TestPage.tsx` | Replaced translation test language native selects with custom select |
+| `FE/src/pages/RoomPage.tsx` | Removed old 30-minute expired-room wording from runtime banner |
+| `FE/src/index.css` | Added custom select styling, landing polish, theme token overrides, and dark/light surface consistency fixes |
+| `docs/frontend/IMPLEMENTATION_STATE.md` | Documented root cause, select strategy, landing strategy, 60-minute wording, files changed, and deferred testing |
+
+### Testing
+
+- Full test suite not run, per CODE-ONLY instruction.
+- Verification/build commands not run, per CODE-ONLY instruction.
+- New tests not added.
+- Existing tests not modified.
+
+---
+
 ## Turn Update: 2026-05-07 Final Summary Fetch-First Flow
 
 - Time: 2026-05-07T00:00:00+07:00

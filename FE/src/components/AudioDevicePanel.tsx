@@ -1,4 +1,5 @@
 import type { AudioDeviceOption } from "../types/livekit";
+import { CustomSelect, type CustomSelectOption } from "./CustomSelect";
 
 interface AudioDevicePanelProps {
   isMicMuted: boolean;
@@ -39,6 +40,14 @@ export function AudioDevicePanel({
   onSelectAudioOutput,
   embedded = false,
 }: AudioDevicePanelProps) {
+  const inputDeviceOptions = buildDeviceOptions(
+    audioInputDevices,
+    "No microphone devices found",
+  );
+  const outputDeviceOptions: CustomSelectOption[] = !audioOutputSupported
+    ? [{ value: "", label: "Browser does not support output selection", disabled: true }]
+    : buildDeviceOptions(audioOutputDevices, "No speaker devices found");
+
   return (
     <section className={embedded ? "audio-settings-panel panel-section" : "panel audio-settings-panel"}>
       <div className="panel-header">
@@ -72,20 +81,17 @@ export function AudioDevicePanel({
 
         <label className="field audio-setting-field">
           <span>Input Device</span>
-          <select
+          <CustomSelect
+            className="audio-device-select"
             value={selectedAudioInputDeviceId}
+            options={inputDeviceOptions}
             disabled={isSwitchingAudioInput || audioInputDevices.length === 0}
-            onChange={(event) => onSelectAudioInput(event.target.value)}
-          >
-            {audioInputDevices.length === 0 ? (
-              <option value="">No microphone devices found</option>
-            ) : null}
-            {audioInputDevices.map((device) => (
-              <option key={device.deviceId} value={device.deviceId}>
-                {device.label}
-              </option>
-            ))}
-          </select>
+            onChange={onSelectAudioInput}
+            placeholder={
+              audioInputDevices.length === 0 ? "No microphone devices found" : "Select microphone"
+            }
+            ariaLabel="Input device"
+          />
         </label>
 
         {audioInputError ? (
@@ -94,27 +100,25 @@ export function AudioDevicePanel({
 
         <label className="field audio-setting-field">
           <span>Output Device</span>
-          <select
+          <CustomSelect
+            className="audio-device-select"
             value={selectedAudioOutputDeviceId}
+            options={outputDeviceOptions}
             disabled={
               !audioOutputSupported
               || isSwitchingAudioOutput
               || audioOutputDevices.length === 0
             }
-            onChange={(event) => onSelectAudioOutput(event.target.value)}
-          >
-            {!audioOutputSupported ? (
-              <option value="">Browser does not support output selection</option>
-            ) : null}
-            {audioOutputSupported && audioOutputDevices.length === 0 ? (
-              <option value="">No speaker devices found</option>
-            ) : null}
-            {audioOutputDevices.map((device) => (
-              <option key={device.deviceId} value={device.deviceId}>
-                {device.label}
-              </option>
-            ))}
-          </select>
+            onChange={onSelectAudioOutput}
+            placeholder={
+              !audioOutputSupported
+                ? "Browser does not support output selection"
+                : audioOutputDevices.length === 0
+                  ? "No speaker devices found"
+                  : "Select speaker"
+            }
+            ariaLabel="Output device"
+          />
         </label>
 
         {!audioOutputSupported ? (
@@ -129,4 +133,18 @@ export function AudioDevicePanel({
       </div>
     </section>
   );
+}
+
+function buildDeviceOptions(
+  devices: AudioDeviceOption[],
+  emptyLabel: string,
+): CustomSelectOption[] {
+  if (devices.length === 0) {
+    return [{ value: "", label: emptyLabel, disabled: true }];
+  }
+
+  return devices.map((device) => ({
+    value: device.deviceId,
+    label: device.label,
+  }));
 }

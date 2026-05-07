@@ -389,7 +389,7 @@ export function RoomPage() {
       <div className="room-alert-stack">
         {isRoomExpired ? (
           <div className="banner banner-danger banner-room-expired">
-            This meeting has ended. The room expired after 30 minutes.
+            This meeting has ended. The room time limit has been reached.
           </div>
         ) : null}
         {meeting.connectionError ? (

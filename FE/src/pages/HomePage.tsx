@@ -8,6 +8,7 @@ import {
 } from "../lib/languages";
 import { extractRoomId } from "../lib/rooms";
 import type { MeetingLanguage } from "../types/api";
+import { CustomSelect, type CustomSelectOption } from "../components/CustomSelect";
 
 export function HomePage() {
   const navigate = useNavigate();
@@ -107,29 +108,45 @@ export function HomePage() {
           </div>
         ) : null}
 
-        <div className="create-room-layout">
-          <CreateRoomPanel
-            firstMeetingLanguage={firstMeetingLanguage}
-            secondMeetingLanguage={secondMeetingLanguage}
-            creating={creating}
-            createValidationError={createValidationError}
-            createError={createError}
-            onFirstLanguageChange={handleFirstMeetingLanguageChange}
-            onSecondLanguageChange={handleSecondMeetingLanguageChange}
-            onCreateRoom={() => {
-              void handleCreateRoom();
-            }}
-          />
+        <div className="landing-hero">
+          <section className="landing-hero-copy" aria-labelledby="landing-title">
+            <span className="product-kicker">MeetQ</span>
+            <h1 id="landing-title">Real-time bilingual meetings, refined.</h1>
+            <p>
+              Create a private room for two meeting languages, with live relay and a calm
+              meeting surface that stays out of the way.
+            </p>
+            <div className="landing-proof-row" aria-label="Room defaults">
+              <span>60-minute rooms</span>
+              <span>BRSE relay</span>
+              <span>No account setup</span>
+            </div>
+          </section>
 
-          <JoinExistingRoomPanel
-            roomInput={roomInput}
-            joinLookupError={joinLookupError}
-            onRoomInputChange={(value) => {
-              setRoomInput(value);
-              setJoinLookupError(null);
-            }}
-            onOpenRoom={handleJoinExisting}
-          />
+          <div className="landing-action-stack">
+            <CreateRoomPanel
+              firstMeetingLanguage={firstMeetingLanguage}
+              secondMeetingLanguage={secondMeetingLanguage}
+              creating={creating}
+              createValidationError={createValidationError}
+              createError={createError}
+              onFirstLanguageChange={handleFirstMeetingLanguageChange}
+              onSecondLanguageChange={handleSecondMeetingLanguageChange}
+              onCreateRoom={() => {
+                void handleCreateRoom();
+              }}
+            />
+
+            <JoinExistingRoomPanel
+              roomInput={roomInput}
+              joinLookupError={joinLookupError}
+              onRoomInputChange={(value) => {
+                setRoomInput(value);
+                setJoinLookupError(null);
+              }}
+              onOpenRoom={handleJoinExisting}
+            />
+          </div>
         </div>
       </section>
 
@@ -199,7 +216,7 @@ function CreateRoomPanel({
           <h1>Create room</h1>
         </div>
         <div className="create-room-badges" aria-label="Room defaults">
-          <span>30 min</span>
+          <span>60 min</span>
           <span>BRSE relay</span>
         </div>
       </div>
@@ -272,22 +289,26 @@ function LanguageSelectCard({
   value: MeetingLanguage | "";
   onChange: (language: MeetingLanguage | "") => void;
 }) {
+  const options: Array<CustomSelectOption<MeetingLanguage | "">> = [
+    { value: "", label: "Select a language" },
+    ...SUPPORTED_MEETING_LANGUAGES.map((language) => ({
+      value: language,
+      label: getLanguageLabel(language),
+    })),
+  ];
+
   return (
-    <label className={value ? "language-select-card has-value" : "language-select-card"}>
-      <span>{label}</span>
-      <strong>{value ? getLanguageLabel(value) : "Choose language"}</strong>
-      <select
+    <div className={value ? "language-select-card has-value" : "language-select-card"}>
+      <span className="language-select-label">{label}</span>
+      <CustomSelect
+        className="language-select-control"
         value={value}
-        onChange={(event) => onChange(event.target.value as MeetingLanguage | "")}
-      >
-        <option value="">Select a language</option>
-        {SUPPORTED_MEETING_LANGUAGES.map((language) => (
-          <option key={`${label}-${language}`} value={language}>
-            {getLanguageLabel(language)}
-          </option>
-        ))}
-      </select>
-    </label>
+        options={options}
+        onChange={onChange}
+        placeholder="Choose language"
+        ariaLabel={label}
+      />
+    </div>
   );
 }
 
