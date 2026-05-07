@@ -31,6 +31,8 @@ Polish frontend UI consistency without changing room/runtime data contracts:
   panel, settings drawer, summary, relay, chat, device, and test-page surfaces.
 - Centralized field/select colors through field/menu CSS variables for light
   and dark mode.
+- Removed obsolete CSS selectors that previously styled hidden/native select
+  controls in the landing, join, and topbar paths.
 - Kept runtime structure and data flow unchanged; the changes are presentation
   and control implementation only.
 - Removed the old in-room expired copy that mentioned 30 minutes and replaced it
@@ -64,6 +66,19 @@ Polish frontend UI consistency without changing room/runtime data contracts:
   depth, and neutral Apple-like color balance.
 - Updated duration wording to `60-minute rooms` and `60 min` on the landing
   surface.
+- Follow-up balance pass widened the desktop landing shell, enlarged the
+  create-room action column, increased language-card/control sizing, and fixed
+  a legacy selector that made custom select labels inherit uppercase/truncated
+  landing-card text styling.
+- Follow-up dropdown layering pass makes the create-room panel rise above the
+  open-room panel while a custom select is focused, keeps landing badges from
+  wrapping, and gives the landing language menu a dedicated high stacking layer.
+- Follow-up alignment pass changes the landing create-room language dropdowns
+  to expand inside the create panel instead of floating over the open-room
+  panel, keeping the action stack balanced on desktop and mobile.
+- The same in-panel expansion behavior is applied to join-language and
+  audio-device selects so their menus do not float across CTAs or get clipped
+  inside the settings drawer.
 
 ### Files Changed
 
