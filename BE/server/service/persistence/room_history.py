@@ -509,9 +509,12 @@ class MongoRoomHistoryRepository:
             "generated_at_dt": None,
             "summary_language": summary_language,
             "summary_text": None,
+            "key_points": [],
             "highlights": [],
             "decisions": [],
             "action_items": [],
+            "action_item_details": [],
+            "participant_highlights": [],
             "participant_summary": [],
             "duration_seconds": None,
             "source_window": source_window or {},
@@ -676,16 +679,20 @@ class MongoRoomHistoryRepository:
         source_stats = source.get("source_stats") or {}
         duration_seconds = source.get("duration_seconds")
         source_window = source.get("source_window") or {}
+        recap = self._normalize_recap_summary_payload(summary)
         update_doc = {
             "summary_type": summary_type,
             "status": "completed",
             "generated_at": generated_at,
             "generated_at_dt": self._parse_dt(generated_at),
-            "summary_text": summary.get("summary_text") or "",
-            "highlights": summary.get("highlights") or [],
-            "decisions": summary.get("decisions") or [],
-            "action_items": summary.get("action_items") or [],
-            "participant_summary": summary.get("participant_summary") or [],
+            "summary_text": recap.get("summary_text") or "",
+            "key_points": recap.get("key_points") or [],
+            "highlights": recap.get("highlights") or [],
+            "decisions": recap.get("decisions") or [],
+            "action_items": recap.get("action_items") or [],
+            "action_item_details": recap.get("action_item_details") or [],
+            "participant_highlights": recap.get("participant_highlights") or [],
+            "participant_summary": recap.get("participant_summary") or [],
             "duration_seconds": duration_seconds,
             "source_window": source_window,
             "source_stats": source_stats,
@@ -727,9 +734,12 @@ class MongoRoomHistoryRepository:
             "generated_at": generated_at,
             "generated_at_dt": self._parse_dt(generated_at),
             "summary_text": "Not enough meeting content was available to generate a grounded summary.",
+            "key_points": [],
             "highlights": [],
             "decisions": [],
             "action_items": [],
+            "action_item_details": [],
+            "participant_highlights": [],
             "participant_summary": [],
             "duration_seconds": duration_seconds,
             "source_window": source_window,
@@ -801,7 +811,9 @@ class MongoRoomHistoryRepository:
             )
             if doc is not None:
                 doc["summary_type"] = "final"
-        return doc
+        if doc is None:
+            return None
+        return self._normalize_meeting_recap_doc(doc)
 
     async def room_exists(self, room_id: str) -> bool:
         doc = await self.db[self.rooms_collection].find_one(
@@ -949,6 +961,7 @@ class MongoRoomHistoryRepository:
             "meeting_languages": list(self._value(room, "meeting_languages", []) or []),
             "brse_enabled": bool(self._value(room, "brse_enabled", False)),
             "brse_mode": self._value(room, "brse_mode"),
+            "brse_output_mode": self._value(room, "brse_output_mode"),
             "meeting_mode": self._value(room, "meeting_mode"),
             "interpreter_mode": self._value(room, "interpreter_mode"),
             "audio_routing": self._model_dump(self._value(room, "audio_routing", {})),
@@ -970,6 +983,115 @@ class MongoRoomHistoryRepository:
             "joined_at": self._value(participant, "joined_at"),
             "left_at": self._value(participant, "left_at"),
         }
+
+    def _normalize_meeting_recap_doc(self, doc: Dict[str, Any]) -> Dict[str, Any]:
+        normalized = dict(doc)
+        normalized.update(self._normalize_recap_summary_payload(normalized))
+        return normalized
+
+    def _normalize_recap_summary_payload(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        key_points = self._string_list(payload.get("key_points"))
+        if not key_points:
+            key_points = self._string_list(payload.get("highlights"))
+
+        action_items = self._action_item_texts(payload.get("action_items"))
+        action_item_details = self._action_item_details(
+            payload.get("action_item_details") or payload.get("action_items")
+        )
+        if not action_items:
+            action_items = [
+                item["text"]
+                for item in action_item_details
+                if item.get("text")
+            ]
+
+        participant_highlights = self._participant_highlights(
+            payload.get("participant_highlights")
+        )
+        if not participant_highlights:
+            participant_highlights = self._participant_highlights(
+                payload.get("participant_summary")
+            )
+
+        return {
+            "summary_text": payload.get("summary_text"),
+            "key_points": key_points,
+            "highlights": list(key_points),
+            "decisions": self._string_list(payload.get("decisions")),
+            "action_items": action_items,
+            "action_item_details": action_item_details,
+            "participant_highlights": participant_highlights,
+            "participant_summary": list(participant_highlights),
+        }
+
+    def _string_list(self, value: Any) -> list[str]:
+        if not isinstance(value, list):
+            return []
+        result: list[str] = []
+        for item in value:
+            text = item.strip() if isinstance(item, str) else ""
+            if text:
+                result.append(text)
+        return result
+
+    def _action_item_texts(self, value: Any) -> list[str]:
+        if not isinstance(value, list):
+            return []
+        result: list[str] = []
+        for item in value:
+            if isinstance(item, str):
+                text = item.strip()
+            elif isinstance(item, dict):
+                text = self._optional_string(item.get("text")) or ""
+            else:
+                text = ""
+            if text:
+                result.append(text)
+        return result
+
+    def _action_item_details(self, value: Any) -> list[Dict[str, Optional[str]]]:
+        if not isinstance(value, list):
+            return []
+        result: list[Dict[str, Optional[str]]] = []
+        for item in value:
+            if isinstance(item, str):
+                text = item.strip()
+                owner = None
+                due = None
+            elif isinstance(item, dict):
+                text = self._optional_string(item.get("text")) or ""
+                owner = self._optional_string(item.get("owner"))
+                due = self._optional_string(item.get("due"))
+            else:
+                continue
+            if text:
+                result.append({"text": text, "owner": owner, "due": due})
+        return result
+
+    def _participant_highlights(self, value: Any) -> list[Dict[str, Optional[str]]]:
+        if not isinstance(value, list):
+            return []
+        result: list[Dict[str, Optional[str]]] = []
+        for item in value:
+            if not isinstance(item, dict):
+                continue
+            summary = self._optional_string(item.get("summary"))
+            if not summary:
+                continue
+            result.append(
+                {
+                    "participant_id": self._optional_string(item.get("participant_id")),
+                    "display_name": self._optional_string(item.get("display_name")),
+                    "summary": summary,
+                }
+            )
+        return result
+
+    def _optional_string(self, value: Any) -> Optional[str]:
+        if not isinstance(value, str):
+            return None
+        normalized = value.strip()
+        return normalized or None
 
     def _summary_source_message(self, message: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         kind = message.get("kind")
@@ -1019,6 +1141,7 @@ class MongoRoomHistoryRepository:
             "meeting_languages": room_doc.get("meeting_languages") or [],
             "brse_enabled": room_doc.get("brse_enabled"),
             "brse_mode": room_doc.get("brse_mode"),
+            "brse_output_mode": room_doc.get("brse_output_mode"),
             "meeting_mode": room_doc.get("meeting_mode"),
             "interpreter_mode": room_doc.get("interpreter_mode"),
             "participant_count_total": room_doc.get("participant_count_total"),

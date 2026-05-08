@@ -4,6 +4,7 @@ import { api, ApiError } from "../lib/api";
 import {
   formatMeetingLanguagePair,
 } from "../lib/languages";
+import { getBrseModeDescription } from "../lib/brseModes";
 import { useSessionStore } from "../state/session";
 import { useRoomExpiry } from "../features/room/useRoomExpiry";
 import type {
@@ -166,8 +167,11 @@ export function RoomPage() {
       ) || null
     : null;
   const roomMeetingLanguages = meeting.meetingLanguages;
+  const brseModeDescription = getBrseModeDescription(meeting.brseRoomMode);
   const relayStatusLabel = meeting.brseEnabled
-    ? formatRelayStatus(meeting.interpreterStatuses[0]?.status)
+    ? meeting.interpreterStatuses[0]?.status
+      ? formatRelayStatus(meeting.interpreterStatuses[0].status)
+      : brseModeDescription
     : "Off";
   const renderSummaryPanel = (roomEnded: boolean) => (
     <MeetingSummaryPanel
@@ -377,6 +381,7 @@ export function RoomPage() {
         expiresAt={expiresAt}
         connectionState={meeting.connectionState}
         brseEnabled={meeting.brseEnabled}
+        brseRoomMode={meeting.brseRoomMode}
         isTogglingBrse={meeting.isTogglingBrse}
         brseToggleError={meeting.brseToggleError}
         canToggleBrse={meeting.canToggleBrse && !isRoomExpired}
@@ -427,6 +432,8 @@ export function RoomPage() {
             selectedScreenFeed={selectedScreenFeed}
             activeScreenShareCount={activeScreenShareParticipants.length}
             brseEnabled={meeting.brseEnabled}
+            brseRoomMode={meeting.brseRoomMode}
+            brseAudioExpected={meeting.brseAudioExpected}
             relayStatusLabel={relayStatusLabel}
           />
 
@@ -494,6 +501,8 @@ export function RoomPage() {
           relay={
             <BrseRelayPanel
               brseEnabled={meeting.brseEnabled}
+              brseRoomMode={meeting.brseRoomMode}
+              brseAudioExpected={meeting.brseAudioExpected}
               statuses={meeting.interpreterStatuses}
               transcripts={meeting.transcripts}
               meetingLanguages={roomMeetingLanguages}
@@ -522,6 +531,8 @@ export function RoomPage() {
               }}
               isMutingParticipant={meeting.isMutingParticipant}
               brseEnabled={meeting.brseEnabled}
+              brseRoomMode={meeting.brseRoomMode}
+              brseAudioExpected={meeting.brseAudioExpected}
               embedded
             />
           }

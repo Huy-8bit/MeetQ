@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_MEETING_SUMMARY_MODEL = "gpt-4o-mini"
 MEETING_SUMMARY_TEMPERATURE = 0.1
-MEETING_SUMMARY_MAX_TOKENS = 1800
+MEETING_SUMMARY_MAX_TOKENS = 2200
 
 
 async def generate_meeting_summary(
@@ -22,7 +22,7 @@ async def generate_meeting_summary(
     summary_language: str = "en",
     summary_type: str = "final",
 ) -> Dict[str, Any]:
-    """Generate a grounded post-meeting summary from archived room data."""
+    """Generate a grounded meeting recap package from archived or live room data."""
     import openai
 
     summary_language_name = LANG_NAMES.get(summary_language, summary_language)
@@ -49,7 +49,7 @@ async def generate_meeting_summary(
 def _build_system_prompt(summary_language_name: str, *, summary_type: str) -> str:
     summary_label = "live checkpoint" if summary_type == "interim" else "post-meeting final"
     return (
-        f"You create {summary_label} summaries for admins and meeting participants. "
+        f"You create {summary_label} meeting recap packages for admins and participants. "
         f"Write the entire output in {summary_language_name}. "
         "Use only the provided room metadata, participant records, transcript lines, "
         "BRSE relay lines, translated transcript lines, and chat messages. "
@@ -57,19 +57,25 @@ def _build_system_prompt(summary_language_name: str, *, summary_type: str) -> st
         "may help understand multilingual content but must not be double-counted as "
         "separate facts when they represent the same utterance. "
         "Do not infer, guess, or add facts that are not present in the source data. "
-        "Do not invent decisions, owners, deadlines, risks, causes, or next steps. "
-        "If a decision or action item is only ambiguous or implied, leave it out. "
+        "Be conservative. Do not invent decisions, owners, deadlines, risks, causes, "
+        "or next steps. If a decision or action item is only ambiguous, implied, "
+        "or unsupported by explicit source text, leave it out. "
+        "Do not attribute a point to a participant unless the provided participant "
+        "records and messages support that attribution. "
         "For a live checkpoint summary, describe only the meeting content available "
-        "so far and do not imply that the meeting has ended. "
+        "so far and do not imply that the meeting has ended; action_items and "
+        "decisions may be empty. "
         "For a final summary, summarize the completed meeting content. "
         "If the data is too thin, say that there was not enough meeting content to "
         "summarize and keep structured lists empty. "
         "Return only valid JSON with exactly these keys: "
-        "summary_text, highlights, decisions, action_items, participant_summary. "
-        "summary_text is a concise paragraph. highlights and decisions are arrays "
-        "of strings. action_items is an array of objects with keys text, owner, due. "
-        "participant_summary is an array of objects with keys participant_id, "
-        "display_name, summary. Use null for unknown owner, due, or participant_id."
+        "summary_text, key_points, action_items, decisions, participant_highlights. "
+        "summary_text is one concise whole-meeting paragraph. "
+        "key_points is an array of main discussion points, not tasks. "
+        "action_items is an array of strings for explicit follow-up tasks only. "
+        "decisions is an array of strings for clearly agreed decisions only. "
+        "participant_highlights is an array of objects with keys participant_id, "
+        "display_name, summary. Use null for unknown participant_id or display_name."
     )
 
 
@@ -83,8 +89,8 @@ def _build_user_prompt(source: Dict[str, Any], *, summary_type: str) -> str:
         "messages": source.get("messages") or [],
     }
     return (
-        f"Create a grounded {summary_type} meeting summary from this room data.\n"
-        "Remember: no source support means no claim.\n\n"
+        f"Create a grounded {summary_type} meeting recap package from this room data.\n"
+        "Remember: no source support means no claim; unsupported actions and decisions must be omitted.\n\n"
         f"{json.dumps(compact_source, ensure_ascii=False, separators=(',', ':'))}"
     )
 
@@ -100,12 +106,34 @@ def _parse_summary_json(content: str) -> Dict[str, Any]:
 
 
 def _normalize_summary_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
+    key_points = _clean_string_list(payload.get("key_points"))
+    if not key_points:
+        key_points = _clean_string_list(payload.get("highlights"))
+
+    participant_highlights = _clean_participant_highlights(
+        payload.get("participant_highlights")
+    )
+    if not participant_highlights:
+        participant_highlights = _clean_participant_highlights(
+            payload.get("participant_summary")
+        )
+
+    action_item_details = _clean_action_item_details(
+        payload.get("action_item_details") or payload.get("action_items")
+    )
+    action_items = _clean_action_item_texts(payload.get("action_items"))
+    if not action_items:
+        action_items = [item["text"] for item in action_item_details if item.get("text")]
+
     return {
         "summary_text": _clean_string(payload.get("summary_text")),
-        "highlights": _clean_string_list(payload.get("highlights")),
+        "key_points": key_points,
+        "highlights": list(key_points),
         "decisions": _clean_string_list(payload.get("decisions")),
-        "action_items": _clean_action_items(payload.get("action_items")),
-        "participant_summary": _clean_participant_summary(payload.get("participant_summary")),
+        "action_items": action_items,
+        "action_item_details": action_item_details,
+        "participant_highlights": participant_highlights,
+        "participant_summary": list(participant_highlights),
     }
 
 
@@ -135,7 +163,23 @@ def _clean_string_list(value: Any) -> List[str]:
     return result
 
 
-def _clean_action_items(value: Any) -> List[Dict[str, Optional[str]]]:
+def _clean_action_item_texts(value: Any) -> List[str]:
+    if not isinstance(value, list):
+        return []
+    result: List[str] = []
+    for item in value:
+        if isinstance(item, str):
+            text = item.strip()
+        elif isinstance(item, dict):
+            text = _clean_string(item.get("text"))
+        else:
+            text = ""
+        if text:
+            result.append(text)
+    return result
+
+
+def _clean_action_item_details(value: Any) -> List[Dict[str, Optional[str]]]:
     if not isinstance(value, list):
         return []
     result: List[Dict[str, Optional[str]]] = []
@@ -155,7 +199,7 @@ def _clean_action_items(value: Any) -> List[Dict[str, Optional[str]]]:
     return result
 
 
-def _clean_participant_summary(value: Any) -> List[Dict[str, Optional[str]]]:
+def _clean_participant_highlights(value: Any) -> List[Dict[str, Optional[str]]]:
     if not isinstance(value, list):
         return []
     result: List[Dict[str, Optional[str]]] = []

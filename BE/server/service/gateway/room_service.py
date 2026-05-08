@@ -18,6 +18,7 @@ from server.integrations.telegram import TelegramNotifier
 from server.meeting_modes import (
     BRSE_PARTICIPANT_ID,
     DEFAULT_BRSE_MODE,
+    DEFAULT_BRSE_OUTPUT_MODE,
     DEFAULT_BRSE_ENABLED,
     DEFAULT_ROOM_MEETING_LANGUAGES,
     INTERPRETER_MODE_BRSE_PARTICIPANT,
@@ -27,6 +28,7 @@ from server.meeting_modes import (
     build_brse_virtual_participant,
     meeting_mode_for_brse_mode,
     normalize_brse_mode,
+    normalize_brse_output_mode,
 )
 from server.models import (
     ChatMessage,
@@ -442,20 +444,31 @@ class RoomService:
         timestamp: str,
         meeting_languages: List[MeetingLanguage],
         brse_mode: str,
+        brse_output_mode: str,
     ) -> List[Dict[str, Any]]:
-        return [build_brse_virtual_participant(room_id, timestamp, meeting_languages, brse_mode)]
+        return [
+            build_brse_virtual_participant(
+                room_id,
+                timestamp,
+                meeting_languages,
+                brse_mode,
+                brse_output_mode,
+            )
+        ]
 
     async def create_room(
         self,
         meeting_languages: List[str],
         brse_enabled: bool = DEFAULT_BRSE_ENABLED,
         brse_mode: str = DEFAULT_BRSE_MODE,
+        brse_output_mode: str = DEFAULT_BRSE_OUTPUT_MODE,
     ) -> CreateRoomResponse:
         room_id = self._generate_id("rm")
         now = self._now_str()
         exp = self._exp_str()
         normalized_meeting_languages = self._normalize_meeting_languages(meeting_languages)
         normalized_brse_mode = normalize_brse_mode(brse_mode)
+        normalized_brse_output_mode = normalize_brse_output_mode(brse_output_mode)
 
         room = RoomState(
             room_id=room_id,
@@ -464,18 +477,24 @@ class RoomService:
             expires_at=exp,
             brse_enabled=brse_enabled,
             brse_mode=normalized_brse_mode,
+            brse_output_mode=normalized_brse_output_mode,
             participant_limit=None,  # No backend participant cap
             supported_languages=list(SUPPORTED_MEETING_LANGUAGES),
             meeting_languages=normalized_meeting_languages,
             meeting_mode=meeting_mode_for_brse_mode(normalized_brse_mode),
             interpreter_mode=INTERPRETER_MODE_BRSE_PARTICIPANT,
-            audio_routing=build_brse_audio_routing(normalized_meeting_languages, normalized_brse_mode),
+            audio_routing=build_brse_audio_routing(
+                normalized_meeting_languages,
+                normalized_brse_mode,
+                normalized_brse_output_mode,
+            ),
             virtual_participants=(
                 self._build_brse_virtual_participants(
                     room_id,
                     now,
                     normalized_meeting_languages,
                     normalized_brse_mode,
+                    normalized_brse_output_mode,
                 )
                 if brse_enabled
                 else []
@@ -539,14 +558,24 @@ class RoomService:
         now = self._now_str()
         meeting_languages = list(snapshot.room.meeting_languages)
         brse_mode = normalize_brse_mode(getattr(snapshot.room, "brse_mode", DEFAULT_BRSE_MODE))
+        brse_output_mode = normalize_brse_output_mode(
+            getattr(snapshot.room, "brse_output_mode", DEFAULT_BRSE_OUTPUT_MODE)
+        )
         patch: Dict[str, Any] = {
             "brse_enabled": brse_enabled,
             "brse_mode": brse_mode,
+            "brse_output_mode": brse_output_mode,
             "meeting_mode": meeting_mode_for_brse_mode(brse_mode),
             "interpreter_mode": INTERPRETER_MODE_BRSE_PARTICIPANT,
-            "audio_routing": build_brse_audio_routing(meeting_languages, brse_mode),
+            "audio_routing": build_brse_audio_routing(meeting_languages, brse_mode, brse_output_mode),
             "virtual_participants": (
-                self._build_brse_virtual_participants(room_id, now, meeting_languages, brse_mode)
+                self._build_brse_virtual_participants(
+                    room_id,
+                    now,
+                    meeting_languages,
+                    brse_mode,
+                    brse_output_mode,
+                )
                 if brse_enabled
                 else []
             ),
@@ -571,6 +600,7 @@ class RoomService:
                 "room_id": room_id,
                 "brse_enabled": brse_enabled,
                 "brse_mode": brse_mode,
+                "brse_output_mode": brse_output_mode,
                 "timestamp": now,
                 "changed_by": actor_participant_id,
                 "reason": reason,
@@ -797,6 +827,7 @@ class RoomService:
                 "meeting_languages": list(room.meeting_languages),
                 "brse_enabled": room.brse_enabled,
                 "brse_mode": room.brse_mode,
+                "brse_output_mode": room.brse_output_mode,
                 "meeting_mode": room.meeting_mode,
                 "interpreter_mode": room.interpreter_mode,
                 "participant_count_total": len([p for p in snapshot.participants if not p.is_virtual]),
@@ -1470,6 +1501,7 @@ class RoomService:
             expires_at=payload["expires_at"],
             brse_enabled=payload.get("brse_enabled", DEFAULT_BRSE_ENABLED),
             brse_mode=payload.get("brse_mode", DEFAULT_BRSE_MODE),
+            brse_output_mode=payload.get("brse_output_mode", DEFAULT_BRSE_OUTPUT_MODE),
             participant_limit=payload.get("participant_limit"),  # None = no cap
             supported_languages=payload["supported_languages"],
             meeting_languages=payload.get("meeting_languages", list(DEFAULT_ROOM_MEETING_LANGUAGES)),

@@ -1,5 +1,272 @@
 # Backend Implementation State
 
+## Turn Update: 2026-05-08 Meeting Recap Package Backend
+
+- Time: 2026-05-08T00:00:00+07:00
+- Mode: CODE-ONLY
+- Status: implemented
+- Testing deferred: yes, per instruction
+
+### Objective
+
+Evolve the existing interim/final meeting summary flow into a structured
+meeting recap package without changing room, relay, chat, screen share, expiry,
+Telegram, or archive architecture.
+
+### Initial Schema Decision
+
+Canonical recap fields:
+
+- `summary_text`: short whole-meeting paragraph.
+- `key_points`: main discussion points, not follow-up tasks.
+- `action_items`: string list of explicit next tasks only.
+- `decisions`: explicit decisions only.
+- `participant_highlights`: per-participant grounded contribution summaries
+  with `participant_id`, `display_name`, and `summary`.
+
+Backward-compatible fields kept during transition:
+
+- `highlights` remains in responses and mirrors `key_points`.
+- `participant_summary` remains in responses and mirrors
+  `participant_highlights`.
+- legacy object-shaped `action_items` records are normalized to string text on
+  read/write so old Mongo docs do not break retrieval.
+
+### Read Status
+
+- Read required docs:
+  - `docs/backend/README.md`
+  - `docs/backend/API_CONTRACT.md`
+  - `docs/backend/IMPLEMENTATION_STATE.md`
+- Read required backend files:
+  - `BE/server/service/gateway/api_rooms.py`
+  - `BE/server/service/gateway/room_service.py`
+  - `BE/server/service/gateway/meeting_summary_service.py`
+  - `BE/server/service/gateway/room_store.py`
+  - `BE/server/service/gateway/event_consumer.py`
+  - `BE/server/service/persistence/room_history.py`
+  - `BE/server/integrations/mongodb.py`
+  - `BE/server/models.py`
+  - `BE/server/brain/meeting_summary.py`
+  - `BE/server/brain/prompts/language.py`
+  - `BE/server/brain/realtime/session_config.py`
+
+### Implemented Scope
+
+- API models expose canonical recap fields while preserving aliases.
+- Summary prompt/model normalization now generates grounded recap packages.
+- Mongo `meeting_summaries` pending/completed/skipped records store full
+  structured recap fields.
+- Retrieval normalizes legacy summary documents before response validation.
+- Backend docs/state updated only; no FE changes and no new tests.
+
+### Final Schema / Contract
+
+Canonical response fields for both `interim` and `final`:
+
+- `summary_text`
+- `key_points`
+- `action_items`
+- `decisions`
+- `participant_highlights`
+
+Compatibility fields:
+
+- `highlights` mirrors `key_points`.
+- `participant_summary` mirrors `participant_highlights`.
+- `action_item_details` is additive detail/compatibility output for legacy
+  object-shaped action item records with `text`, `owner`, and `due`.
+- Legacy Mongo docs with only `highlights`, `participant_summary`, or
+  object-shaped `action_items` are normalized on read.
+
+### Grounding Strategy
+
+- Prompt now asks for a meeting recap package, not only a summary paragraph.
+- Source transcript remains primary evidence; relay/translated lines are
+  context only and must not be double-counted.
+- Prompt explicitly forbids invented decisions, action items, owners,
+  deadlines, causes, risks, and unsupported participant attribution.
+- Ambiguous or implied action items/decisions must be omitted, leaving arrays
+  empty.
+- Interim recap uses the same shape as final recap but may have empty
+  `action_items` and `decisions`.
+
+### Persistence / Retrieval Changes
+
+- `create_meeting_summary_pending()` initializes `key_points`,
+  `action_item_details`, and `participant_highlights`.
+- `persist_meeting_summary_completed()` persists canonical fields and alias
+  fields together.
+- `persist_meeting_summary_skipped()` writes the same empty structured recap
+  shape.
+- `get_meeting_summary()` normalizes old and new Mongo documents before
+  `MeetingSummaryResponse` validation.
+- `MeetingSummaryResponse` has a defensive pre-validator so API responses remain
+  usable even if persistence returns legacy-shaped documents.
+
+### Observability
+
+- Source collection log now names recap source collection and keeps source
+  counts for transcripts, relay, chat, and included messages.
+- Generation completion log includes counts for `key_points`, `action_items`,
+  `decisions`, and `participant_highlights`.
+
+### Files Modified
+
+- `BE/server/models.py`
+- `BE/server/brain/meeting_summary.py`
+- `BE/server/service/gateway/meeting_summary_service.py`
+- `BE/server/service/persistence/room_history.py`
+- `docs/backend/API_CONTRACT.md`
+- `docs/backend/README.md`
+- `docs/backend/IMPLEMENTATION_STATE.md`
+
+### Verification
+
+- Full test suite not run, per CODE-ONLY instruction.
+- New tests not added.
+- Existing tests not modified.
+- Lightweight backend checks only:
+  - `PYTHONPATH=BE python -m py_compile BE/server/models.py BE/server/brain/meeting_summary.py BE/server/service/gateway/meeting_summary_service.py BE/server/service/persistence/room_history.py`
+  - targeted `MeetingSummaryResponse` legacy-shape normalization smoke check.
+  - `git diff --check -- BE/server/models.py BE/server/brain/meeting_summary.py BE/server/service/gateway/meeting_summary_service.py BE/server/service/persistence/room_history.py docs/backend/API_CONTRACT.md docs/backend/README.md docs/backend/IMPLEMENTATION_STATE.md`
+
+---
+
+## Turn Update: 2026-05-08 BRSE Text-Only Relay Backend
+
+- Time: 2026-05-08T00:00:00+07:00
+- Mode: CODE-ONLY
+- Status: implemented
+- Testing deferred: yes, per instruction
+
+### Objective
+
+Add an additive room-level BRSE text-only relay mode:
+
+- `brse_enabled=false`: no BRSE runtime.
+- `brse_enabled=true`, `brse_mode="relay"`, `brse_output_mode="voice_text"`:
+  existing BRSE text + voice relay behavior.
+- `brse_enabled=true`, `brse_mode="relay"`, `brse_output_mode="text_only"`:
+  BRSE still joins/listens, still processes transcript and relay text, but
+  does not publish BRSE audio tracks or audio frames back into LiveKit.
+- `brse_enabled=true`, `brse_mode="silent_summary"` remains distinct: BRSE
+  listens for source transcript/summary evidence and does not public relay text
+  or audio.
+
+### Initial Strategy
+
+- Add `brse_output_mode: "voice_text" | "text_only"` to room state and outward
+  create/join/snapshot room payloads.
+- Keep `brse_mode` as the high-level runtime behavior switch
+  (`relay | silent_summary`); use `brse_output_mode` only inside relay mode to
+  decide whether voice/audio is enabled.
+- Split runtime gating into:
+  - relay text enabled: `brse_mode="relay"`.
+  - relay audio enabled: `brse_mode="relay"` and
+    `brse_output_mode="voice_text"`.
+- Keep text relay/transcript publication on the relay text path for text-only
+  rooms.
+- Suppress audio at the output path by:
+  - connecting the BRSE LiveKit participant with `can_publish=false`,
+  - constructing `OutputRouter` with audio output disabled,
+  - requesting text-only model response modalities,
+  - returning audio metadata that clearly marks output suppressed by text-only
+    mode.
+
+### Read Status
+
+- Read required docs:
+  - `docs/backend/README.md`
+  - `docs/backend/IMPLEMENTATION_STATE.md`
+  - `docs/backend/GATEWAY_DESIGN.md`
+  - `docs/backend/INTERPRETER_DESIGN.md`
+  - `docs/backend/API_CONTRACT.md`
+- Read required backend/runtime files:
+  - `BE/server/meeting_modes.py`
+  - `BE/server/models.py`
+  - `BE/server/service/gateway/api_rooms.py`
+  - `BE/server/service/gateway/room_service.py`
+  - `BE/server/service/gateway/room_store.py`
+  - `BE/server/service/brain_runtime/daemon.py`
+  - `BE/server/service/brain_runtime/room_manager.py`
+  - `BE/server/service/media/livekit_runtime.py`
+  - `BE/server/service/media/output_router.py`
+  - `BE/server/brain/realtime/interpreter_client.py`
+  - `BE/server/service/brain_runtime/events.py`
+  - `BE/server/service/gateway/event_consumer.py`
+  - `BE/server/service/persistence/room_history.py`
+
+### Final Sync
+
+- Room-level config:
+  - Added `brse_output_mode: "voice_text" | "text_only"` with default
+    `voice_text`.
+  - `brse_enabled=false` still means no BRSE runtime.
+  - `brse_mode="silent_summary"` still means source capture for summary without
+    public relay text/audio.
+  - `brse_mode="relay"` + `brse_output_mode="text_only"` means public source
+    transcript and relay text remain enabled while BRSE audio output is
+    suppressed.
+- Gateway/state contract:
+  - Create-room accepts additive `brse_output_mode`.
+  - Create/join/snapshot room responses expose `brse_output_mode`.
+  - Room audio routing now exposes `relay_text_output_enabled`,
+    `ai_audio_output_enabled`, `ai_audio_suppressed_reason`, and
+    `brse_output_mode`.
+  - `room.brse_updated` carries `brse_output_mode` when BRSE is toggled so
+    later clients can identify the preserved output mode.
+  - Mongo room archive and summary source room metadata carry
+    `brse_output_mode`.
+- Runtime gating:
+  - `RoomInterpreterManager` now separates relay text enablement from relay
+    audio enablement.
+  - Text relay is enabled for `brse_mode=relay`, including text-only rooms.
+  - Audio relay is enabled only for `brse_mode=relay` and
+    `brse_output_mode=voice_text`.
+  - Text-only runtime still joins LiveKit, subscribes to human microphone audio,
+    streams audio into the realtime client, and requests model text responses.
+  - Text-only runtime sets LiveKit BRSE `can_publish=false`, disables
+    `OutputRouter` track publication/capture/flush, and requests text-only
+    model response modalities.
+- Transcript/relay behavior:
+  - Source transcript partial/final path is unchanged.
+  - Relay transcript partial/final path remains active in text-only rooms.
+  - Relay payload audio metadata can mark `output_suppressed=true` and
+    `suppressed_reason="brse_text_only_output_mode"`.
+  - Silent summary mode still suppresses public relay text/audio and only keeps
+    source transcript evidence for summary.
+- Observability:
+  - Manager startup logs `brse_mode`, `brse_output_mode`,
+    `relay_text_enabled`, and `relay_audio_enabled`.
+  - Text-only startup logs that relay text remains enabled while relay audio is
+    suppressed.
+  - `OutputRouter` logs the suppression reason when track publication/audio
+    capture is skipped.
+  - Relay final logs include whether relay audio was enabled.
+- Files modified:
+  - `BE/server/meeting_modes.py`
+  - `BE/server/models.py`
+  - `BE/server/service/gateway/api_rooms.py`
+  - `BE/server/service/gateway/room_service.py`
+  - `BE/server/service/gateway/room_store.py`
+  - `BE/server/service/brain_runtime/daemon.py`
+  - `BE/server/service/brain_runtime/room_manager.py`
+  - `BE/server/service/brain_runtime/events.py`
+  - `BE/server/service/media/output_router.py`
+  - `BE/server/service/persistence/room_history.py`
+  - `docs/backend/API_CONTRACT.md`
+  - `docs/backend/README.md`
+  - `docs/backend/IMPLEMENTATION_STATE.md`
+- Verification:
+  - Full test suite not run, per CODE-ONLY instruction.
+  - New tests not added.
+  - Existing tests not modified.
+  - Lightweight compile check only:
+    `PYTHONPATH=BE python -m py_compile BE/server/meeting_modes.py BE/server/models.py BE/server/service/gateway/api_rooms.py BE/server/service/gateway/room_service.py BE/server/service/gateway/room_store.py BE/server/service/gateway/event_consumer.py BE/server/service/brain_runtime/daemon.py BE/server/service/brain_runtime/room_manager.py BE/server/service/brain_runtime/events.py BE/server/service/media/livekit_runtime.py BE/server/service/media/output_router.py BE/server/brain/realtime/interpreter_client.py BE/server/service/persistence/room_history.py`
+
+---
+
 ## Turn Update: 2026-05-07 Mongo Persistence + Final Summary Runtime Fix
 
 - Time: 2026-05-07T00:00:00+07:00

@@ -53,6 +53,7 @@ async def create_room(
             payload.meeting_languages,
             payload.brse_enabled,
             payload.brse_mode,
+            payload.brse_output_mode,
         )
     except InvalidMeetingLanguagesError as exc:
         return _error_response("invalid_meeting_languages", str(exc), 422, exc.details)

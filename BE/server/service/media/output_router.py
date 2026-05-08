@@ -43,6 +43,8 @@ class OutputRouter:
         output_sample_rate: int = 24000,
         on_track_failure: Optional[Callable[[str, str], None]] = None,
         output_enabled: bool = True,
+        output_mode: str = "voice_text",
+        suppressed_reason: str = "brse_audio_output_disabled",
     ) -> None:
         self.room = room
         self.brse_participant_id = brse_participant_id
@@ -52,6 +54,8 @@ class OutputRouter:
         self.target_lang = target_lang
         self.output_sample_rate = output_sample_rate
         self.output_enabled = output_enabled
+        self.output_mode = output_mode
+        self.suppressed_reason = suppressed_reason
         self._frame_bytes = int(output_sample_rate * _FRAME_MS / 1000) * _BYTES_PER_SAMPLE
         self._closed = False
         self._on_track_failure = on_track_failure
@@ -86,7 +90,7 @@ class OutputRouter:
         state = self._state
         if not self.output_enabled:
             return {
-                "model": "brse_silent_listener",
+                "model": "brse_text_only_relay" if self.output_mode == "text_only" else "brse_silent_listener",
                 "mode": "disabled",
                 "canonical": False,
                 "track_available": False,
@@ -99,7 +103,9 @@ class OutputRouter:
                 "source_language": self.src_lang,
                 "target_language": self.target_lang,
                 "output_suppressed": True,
-                "suppressed_reason": "brse_silent_summary_mode",
+                "suppressed_reason": self.suppressed_reason,
+                "relay_audio_enabled": False,
+                "brse_output_mode": self.output_mode,
                 "stats": self.stats_snapshot(),
             }
         return {
@@ -115,6 +121,10 @@ class OutputRouter:
             "speaker_id": self.speaker_id,
             "source_language": self.src_lang,
             "target_language": self.target_lang,
+            "output_suppressed": False,
+            "suppressed_reason": None,
+            "relay_audio_enabled": True,
+            "brse_output_mode": self.output_mode,
             "stats": self.stats_snapshot(),
         }
 
@@ -132,6 +142,8 @@ class OutputRouter:
             "decode_errors": self._decode_errors,
             "output_enabled": self.output_enabled,
             "output_suppressed": not self.output_enabled,
+            "suppressed_reason": None if self.output_enabled else self.suppressed_reason,
+            "brse_output_mode": self.output_mode,
             "public_audio_enabled": self._public_audio_enabled,
             "public_audio_rejected": self._public_audio_rejected,
             "public_audio_gate_reason": self._public_audio_gate_reason,
@@ -530,9 +542,10 @@ class OutputRouter:
             return
         self._suppression_logged = True
         logger.info(
-            "BRSE relay output suppressed by silent summary mode speaker=%s route=%s->%s operation=%s",
+            "BRSE relay audio output suppressed speaker=%s route=%s->%s operation=%s reason=%s",
             self.speaker_id,
             self.src_lang,
             self.target_lang,
             operation,
+            self.suppressed_reason,
         )

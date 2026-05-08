@@ -166,7 +166,7 @@ class MeetingSummaryService:
 
         source_stats = source.get("source_stats", {})
         logger.info(
-            "meeting %s summary source collected: room_id=%s transcripts=%s relay=%s chat=%s included=%s",
+            "meeting %s recap source collected: room_id=%s transcripts=%s relay=%s chat=%s included=%s",
             summary_type,
             room_id,
             source_stats.get("transcript_count", 0),
@@ -206,7 +206,15 @@ class MeetingSummaryService:
             summary=summary,
             source=source,
         )
-        logger.info("meeting %s summary generated: room_id=%s", summary_type, room_id)
+        logger.info(
+            "meeting %s recap generated: room_id=%s key_points=%s action_items=%s decisions=%s participant_highlights=%s",
+            summary_type,
+            room_id,
+            len(summary.get("key_points") or []),
+            len(summary.get("action_items") or []),
+            len(summary.get("decisions") or []),
+            len(summary.get("participant_highlights") or []),
+        )
         return await self.room_history.get_meeting_summary(room_id, summary_type=summary_type)
 
     async def _persist_failure(

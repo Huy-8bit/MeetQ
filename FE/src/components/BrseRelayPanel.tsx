@@ -1,11 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import type { InterpreterStatusEntry } from "../features/room/interpreter";
 import type { TranscriptEntry } from "../features/room/transcripts";
+import type { BrseRoomMode } from "../lib/brseModes";
 import { formatLanguageFlow, getLanguageLabel } from "../lib/languages";
 import type { MeetingLanguage } from "../types/api";
 
 interface BrseRelayPanelProps {
   brseEnabled: boolean;
+  brseRoomMode: BrseRoomMode;
+  brseAudioExpected: boolean;
   statuses: InterpreterStatusEntry[];
   transcripts: TranscriptEntry[];
   meetingLanguages: MeetingLanguage[];
@@ -16,6 +19,8 @@ const AUTO_SCROLL_THRESHOLD = 120;
 
 export function BrseRelayPanel({
   brseEnabled,
+  brseRoomMode,
+  brseAudioExpected,
   transcripts,
 }: BrseRelayPanelProps) {
   const listRef = useRef<HTMLDivElement | null>(null);
@@ -44,9 +49,16 @@ export function BrseRelayPanel({
   }, [visibleEntries]);
 
   if (visibleEntries.length === 0) {
+    const emptyCopy = getRelayEmptyCopy({
+      brseEnabled,
+      brseRoomMode,
+      brseAudioExpected,
+    });
+
     return (
       <div className="relay-history-empty">
-        <span>{brseEnabled ? "Waiting for speech" : "Relay is off"}</span>
+        <span>{emptyCopy.title}</span>
+        <p>{emptyCopy.detail}</p>
       </div>
     );
   }
@@ -62,6 +74,42 @@ export function BrseRelayPanel({
       ))}
     </div>
   );
+}
+
+function getRelayEmptyCopy({
+  brseEnabled,
+  brseRoomMode,
+  brseAudioExpected,
+}: {
+  brseEnabled: boolean;
+  brseRoomMode: BrseRoomMode;
+  brseAudioExpected: boolean;
+}) {
+  if (!brseEnabled) {
+    return {
+      title: "Relay is off",
+      detail: "BRSE text relay is not running for this room.",
+    };
+  }
+
+  if (brseRoomMode === "text_only" || !brseAudioExpected) {
+    return {
+      title: "Waiting for speech",
+      detail: "Text relay will appear here. AI voice is off.",
+    };
+  }
+
+  if (brseRoomMode === "silent_summary") {
+    return {
+      title: "Summary capture",
+      detail: "BRSE is listening for summary context without public relay.",
+    };
+  }
+
+  return {
+    title: "Waiting for speech",
+    detail: "Text and AI voice relay will appear here.",
+  };
 }
 
 function RelayEntry({

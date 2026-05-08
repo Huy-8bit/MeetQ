@@ -3,6 +3,12 @@ import {
   formatMeetingLanguageBridge,
   getLanguageLabel,
 } from "../lib/languages";
+import {
+  getBrseModeLabel,
+  isBrseAudioExpected,
+  resolveBrseRoomMode,
+  type BrseRoomMode,
+} from "../lib/brseModes";
 import { formatExpiresAtHuman, useRoomExpiry } from "../features/room/useRoomExpiry";
 import { loadUserPrefs, saveUserPrefs } from "../lib/userPrefs";
 import type { MeetingLanguage, ParticipantSnapshot, RoomSnapshotResponse } from "../types/api";
@@ -48,7 +54,8 @@ export function JoinRoomCard({
   const virtualParticipants = participants.filter(
     (participant) => !isHumanParticipant(participant),
   );
-  const brseEnabled = room.brse_enabled !== false;
+  const brseRoomMode = resolveBrseRoomMode(room);
+  const brseAudioExpected = isBrseAudioExpected(room);
   const languageOptions: Array<CustomSelectOption<MeetingLanguage | "">> =
     languagePairUnavailable
       ? [
@@ -130,7 +137,7 @@ export function JoinRoomCard({
 
         <div className="join-room-context-strip">
           <CompactMeta label="Languages" value={formatLanguageBridge(meetingLanguages)} />
-          <RoomModeBadge brseEnabled={brseEnabled} />
+          <RoomModeBadge mode={brseRoomMode} />
           {expirySummary ? <CompactMeta label="Time" value={expirySummary} danger={isExpired} /> : null}
         </div>
 
@@ -204,6 +211,8 @@ export function JoinRoomCard({
             <ParticipantPreviewList
               humanParticipants={humanParticipants}
               virtualParticipants={virtualParticipants}
+              brseRoomMode={brseRoomMode}
+              brseAudioExpected={brseAudioExpected}
             />
           </>
         )}
@@ -229,11 +238,20 @@ function CompactMeta({
   );
 }
 
-function RoomModeBadge({ brseEnabled }: { brseEnabled: boolean }) {
+function RoomModeBadge({ mode }: { mode: BrseRoomMode }) {
+  const isBrse = mode !== "off";
+  const isTextOnly = mode === "text_only";
+
   return (
-    <div className={brseEnabled ? "join-mode-badge is-brse" : "join-mode-badge"}>
+    <div
+      className={[
+        "join-mode-badge",
+        isBrse ? "is-brse" : "",
+        isTextOnly ? "is-text-only" : "",
+      ].filter(Boolean).join(" ")}
+    >
       <span>Mode</span>
-      <strong>{brseEnabled ? "BRSE relay" : "Normal"}</strong>
+      <strong>{getBrseModeLabel(mode)}</strong>
     </div>
   );
 }
@@ -241,9 +259,13 @@ function RoomModeBadge({ brseEnabled }: { brseEnabled: boolean }) {
 function ParticipantPreviewList({
   humanParticipants,
   virtualParticipants,
+  brseRoomMode,
+  brseAudioExpected,
 }: {
   humanParticipants: ParticipantSnapshot[];
   virtualParticipants: ParticipantSnapshot[];
+  brseRoomMode: BrseRoomMode;
+  brseAudioExpected: boolean;
 }) {
   const visibleHumans = humanParticipants.slice(0, 5);
   const hiddenHumanCount = Math.max(0, humanParticipants.length - visibleHumans.length);
@@ -262,7 +284,9 @@ function ParticipantPreviewList({
         <div className="participant-empty-compact">
           <strong>No one yet</strong>
           {brseParticipant ? (
-            <span className="virtual-participant-chip">AI relay virtual</span>
+            <span className="virtual-participant-chip">
+              {getVirtualParticipantBadge(brseRoomMode, brseAudioExpected)}
+            </span>
           ) : null}
         </div>
       ) : (
@@ -292,9 +316,11 @@ function ParticipantPreviewList({
             <div className="participant-preview virtual-participant-preview">
               <div>
                 <strong>{brseParticipant.display_name || "AI Relay"}</strong>
-                <p>Virtual relay participant</p>
+                <p>{getVirtualParticipantCopy(brseRoomMode, brseAudioExpected)}</p>
               </div>
-              <span className="badge kind">AI relay</span>
+              <span className="badge kind">
+                {getVirtualParticipantBadge(brseRoomMode, brseAudioExpected)}
+              </span>
             </div>
           ) : null}
         </div>
@@ -318,6 +344,44 @@ function formatParticipantStatus(status: ParticipantSnapshot["status"]): string 
     .split("_")
     .map((part) => part[0].toUpperCase() + part.slice(1))
     .join(" ");
+}
+
+function getVirtualParticipantCopy(
+  mode: BrseRoomMode,
+  brseAudioExpected: boolean,
+): string {
+  if (mode === "off") {
+    return "BRSE relay is off";
+  }
+
+  if (mode === "text_only" || !brseAudioExpected) {
+    return "Text relay virtual participant";
+  }
+
+  if (mode === "silent_summary") {
+    return "Summary capture virtual participant";
+  }
+
+  return "Voice + text relay participant";
+}
+
+function getVirtualParticipantBadge(
+  mode: BrseRoomMode,
+  brseAudioExpected: boolean,
+): string {
+  if (mode === "off") {
+    return "BRSE off";
+  }
+
+  if (mode === "text_only" || !brseAudioExpected) {
+    return "BRSE text";
+  }
+
+  if (mode === "silent_summary") {
+    return "BRSE summary";
+  }
+
+  return "AI relay";
 }
 
 function getExpirySummary({

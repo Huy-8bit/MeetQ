@@ -1,6 +1,7 @@
 import type { GatewayConnectionState } from "../types/livekit";
 import type { Language, MeetingLanguage } from "../types/api";
 import { formatMeetingLanguageBridge, getLanguageLabel } from "../lib/languages";
+import type { BrseRoomMode } from "../lib/brseModes";
 import { useRoomExpiry } from "../features/room/useRoomExpiry";
 import { BrseToggleControl } from "./BrseToggleControl";
 import { ConnectionBadge } from "./ConnectionBadge";
@@ -15,6 +16,7 @@ interface RoomTopBarProps {
   expiresAt: string | null | undefined;
   connectionState: GatewayConnectionState;
   brseEnabled: boolean;
+  brseRoomMode: BrseRoomMode;
   isTogglingBrse: boolean;
   brseToggleError: string | null;
   canToggleBrse: boolean;
@@ -31,6 +33,7 @@ export function RoomTopBar({
   expiresAt,
   connectionState,
   brseEnabled,
+  brseRoomMode,
   isTogglingBrse,
   brseToggleError,
   canToggleBrse,
@@ -87,6 +90,7 @@ export function RoomTopBar({
 
         <BrseToggleControl
           enabled={brseEnabled}
+          mode={brseRoomMode}
           pending={isTogglingBrse}
           disabled={!canToggleBrse}
           onToggle={onToggleBrse}

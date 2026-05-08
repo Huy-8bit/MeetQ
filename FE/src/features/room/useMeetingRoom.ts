@@ -26,6 +26,12 @@ import {
   unpublishScreenShareTrack,
 } from "../../lib/livekit";
 import {
+  isBrseAudioExpected,
+  resolveBrseEnabled,
+  resolveBrseOutputMode,
+  resolveBrseRoomMode,
+} from "../../lib/brseModes";
+import {
   GatewaySocket,
   GatewaySocketCancelledError,
   releaseGatewaySocket,
@@ -347,7 +353,7 @@ export function useMeetingRoom({
     startTransition(() => {
       setTranscripts(
         hydrateTranscriptEntries(initialRoom.recent_transcripts, null).filter(
-          (entry) => initialRoom.room.brse_enabled !== false || entry.kind !== "relay",
+          (entry) => resolveBrseEnabled(initialRoom.room) || entry.kind !== "relay",
         ),
       );
     });
@@ -439,6 +445,9 @@ export function useMeetingRoom({
       created_at: current?.created_at || session.room.created_at,
       expires_at: current?.expires_at || session.room.expires_at,
       brse_enabled: session.room.brse_enabled ?? current?.brse_enabled,
+      brse_mode: session.room.brse_mode ?? current?.brse_mode,
+      brse_output_mode:
+        session.room.brse_output_mode ?? current?.brse_output_mode,
       participant_limit: session.room.participant_limit,
       supported_languages: session.room.supported_languages,
       meeting_languages:
@@ -463,7 +472,7 @@ export function useMeetingRoom({
         hydrateTranscriptEntries(
           session.snapshot.recent_transcripts,
           session.participant.language,
-        ).filter((entry) => session.room.brse_enabled !== false || entry.kind !== "relay"),
+        ).filter((entry) => resolveBrseEnabled(session.room) || entry.kind !== "relay"),
       );
     });
 
@@ -489,7 +498,11 @@ export function useMeetingRoom({
 
       setVideos(media.videos);
       setHumanAudioFeeds(media.humanAudio);
-      setBrseAudioFeeds(media.brseAudio);
+      setBrseAudioFeeds(
+        isBrseAudioExpected(roomMetaRef.current ?? session.room)
+          ? media.brseAudio
+          : [],
+      );
       setScreenShares(media.screenShares);
       const currentMicTrack = getLocalMicrophoneTrack(livekitRoom);
       const currentCameraTrack = getLocalCameraTrack(livekitRoom);
@@ -704,9 +717,14 @@ export function useMeetingRoom({
     selfState?.participant_id,
     selfState?.language,
     roomMeta?.brse_enabled,
+    roomMeta?.brse_mode,
+    roomMeta?.brse_output_mode,
     roomMeta?.meeting_mode,
     roomMeta?.interpreter_mode,
     roomMeta?.audio_routing?.model,
+    roomMeta?.audio_routing?.brse_mode,
+    roomMeta?.audio_routing?.brse_output_mode,
+    roomMeta?.audio_routing?.ai_audio_output_enabled,
     roomMeta?.audio_routing?.same_language_policy,
   ]);
 
@@ -1097,20 +1115,35 @@ export function useMeetingRoom({
       const nextRoom = nextEnabled
         ? await api.enableBrse(roomId, session.roomToken)
         : await api.disableBrse(roomId, session.roomToken);
-
-      setRoomMeta((current) => ({
-        ...(current ?? {}),
+      const currentRoom = roomMetaRef.current;
+      const mergedRoom = {
+        ...(currentRoom ?? {}),
         ...nextRoom,
-        room_id: nextRoom.room_id || current?.room_id || roomId,
-        created_at: nextRoom.created_at || current?.created_at || session.room.created_at,
-        expires_at: nextRoom.expires_at || current?.expires_at || session.room.expires_at,
+        room_id: nextRoom.room_id || currentRoom?.room_id || roomId,
+        created_at:
+          nextRoom.created_at || currentRoom?.created_at || session.room.created_at,
+        expires_at:
+          nextRoom.expires_at || currentRoom?.expires_at || session.room.expires_at,
+        brse_enabled: nextRoom.brse_enabled ?? nextEnabled,
+        brse_mode:
+          nextRoom.brse_mode ?? currentRoom?.brse_mode ?? session.room.brse_mode,
+        brse_output_mode:
+          nextRoom.brse_output_mode ??
+          currentRoom?.brse_output_mode ??
+          session.room.brse_output_mode,
+        audio_routing:
+          nextRoom.audio_routing ?? currentRoom?.audio_routing ?? session.room.audio_routing,
         participant_count:
-          current?.participant_count ?? countHumanParticipants(session.snapshot.participants),
-      }));
-      brseEnabledRef.current = nextRoom.brse_enabled ?? nextEnabled;
+          currentRoom?.participant_count ?? countHumanParticipants(session.snapshot.participants),
+      };
+
+      setRoomMeta(mergedRoom);
+      brseEnabledRef.current = resolveBrseEnabled(mergedRoom);
 
       if (!brseEnabledRef.current) {
         clearBrseRuntimeSurfaces();
+      } else if (!isBrseAudioExpected(mergedRoom)) {
+        setBrseAudioFeeds([]);
       }
     } catch (error) {
       setBrseToggleError(
@@ -1406,6 +1439,14 @@ export function useMeetingRoom({
       return;
     }
 
+    const snapshotRoomForMode = {
+      ...(roomMetaRef.current ?? {}),
+      ...event.payload.room,
+    };
+    const snapshotBrseEnabled = resolveBrseEnabled(snapshotRoomForMode);
+    const snapshotBrseAudioExpected = isBrseAudioExpected(snapshotRoomForMode);
+    brseEnabledRef.current = snapshotBrseEnabled;
+
     setSelfState(event.payload.self);
     setParticipantsById(mapParticipants(event.payload.participants));
     syncLocalScreenShareState(event.payload.participants, event.payload.self.participant_id);
@@ -1415,6 +1456,9 @@ export function useMeetingRoom({
       created_at: current?.created_at || new Date().toISOString(),
       expires_at: event.payload.room.expires_at ?? current?.expires_at ?? new Date().toISOString(),
       brse_enabled: event.payload.room.brse_enabled ?? current?.brse_enabled,
+      brse_mode: event.payload.room.brse_mode ?? current?.brse_mode,
+      brse_output_mode:
+        event.payload.room.brse_output_mode ?? current?.brse_output_mode,
       participant_limit: event.payload.room.participant_limit,
       supported_languages: event.payload.room.supported_languages,
       meeting_languages: resolveMeetingLanguages(
@@ -1429,8 +1473,10 @@ export function useMeetingRoom({
       participant_count: countHumanParticipants(event.payload.participants),
     }));
 
-    if (event.payload.room.brse_enabled === false) {
+    if (!snapshotBrseEnabled) {
       clearBrseRuntimeSurfaces();
+    } else if (!snapshotBrseAudioExpected) {
+      setBrseAudioFeeds([]);
     }
 
     startTransition(() => {
@@ -1440,7 +1486,7 @@ export function useMeetingRoom({
           hydrateTranscriptEntries(
             event.payload.recent_transcripts,
             event.payload.self.language,
-          ).filter((entry) => event.payload.room.brse_enabled !== false || entry.kind !== "relay"),
+          ).filter((entry) => snapshotBrseEnabled || entry.kind !== "relay"),
         ),
       );
     });
@@ -1633,12 +1679,34 @@ export function useMeetingRoom({
 
   function applyBrseUpdated(event: RoomBrseUpdatedEvent): void {
     const nextEnabled = event.payload.brse_enabled;
+    const currentRoom = roomMetaRef.current;
+    const nextBrseMode = event.payload.brse_mode ?? currentRoom?.brse_mode;
+    const nextMeetingMode: RoomSnapshotResponse["room"]["meeting_mode"] =
+      nextEnabled
+        ? nextBrseMode === "silent_summary"
+          ? "brse_silent_summary"
+          : "brse_relay"
+        : "direct_translation";
+    const nextRoomForMode = {
+      ...(currentRoom ?? {}),
+      brse_enabled: nextEnabled,
+      brse_mode: nextBrseMode,
+      brse_output_mode:
+        event.payload.brse_output_mode ?? currentRoom?.brse_output_mode,
+      audio_routing: event.payload.audio_routing ?? currentRoom?.audio_routing,
+      meeting_mode: nextMeetingMode,
+    };
+
     setRoomMeta((current) =>
       current
         ? {
             ...current,
             brse_enabled: nextEnabled,
-            meeting_mode: nextEnabled ? "brse_relay" : "direct_translation",
+            brse_mode: nextBrseMode ?? current.brse_mode,
+            brse_output_mode:
+              event.payload.brse_output_mode ?? current.brse_output_mode,
+            audio_routing: event.payload.audio_routing ?? current.audio_routing,
+            meeting_mode: nextMeetingMode,
             interpreter_mode: nextEnabled
               ? "brse_participant"
               : current.interpreter_mode,
@@ -1651,6 +1719,8 @@ export function useMeetingRoom({
 
     if (!nextEnabled) {
       clearBrseRuntimeSurfaces();
+    } else if (!isBrseAudioExpected(nextRoomForMode)) {
+      setBrseAudioFeeds([]);
     }
   }
 
@@ -2107,7 +2177,11 @@ export function useMeetingRoom({
   }
 
   const connectionState = deriveConnectionState(gatewayState, livekitState);
-  const brseEnabled = resolveBrseEnabled(roomMeta ?? session?.room ?? null);
+  const roomForBrseMode = roomMeta ?? session?.room ?? null;
+  const brseEnabled = resolveBrseEnabled(roomForBrseMode);
+  const brseOutputMode = resolveBrseOutputMode(roomForBrseMode);
+  const brseRoomMode = resolveBrseRoomMode(roomForBrseMode);
+  const brseAudioExpected = isBrseAudioExpected(roomForBrseMode);
   const activeParticipants = Object.values(participantsById)
     .filter((participant) =>
       brseEnabled || (participant.kind !== "virtual_brse" && !participant.is_virtual),
@@ -2138,11 +2212,14 @@ export function useMeetingRoom({
     ? transcripts
     : transcripts.filter((entry) => entry.kind !== "relay");
   const visibleInterpreterStatuses = brseEnabled ? relayStatuses : [];
-  const visibleBrseAudioFeeds = brseEnabled ? brseAudioFeeds : [];
+  const visibleBrseAudioFeeds = brseEnabled && brseAudioExpected ? brseAudioFeeds : [];
 
   return {
     roomMeta,
     brseEnabled,
+    brseOutputMode,
+    brseRoomMode,
+    brseAudioExpected,
     meetingMode:
       roomMeta?.meeting_mode ?? session?.room.meeting_mode ?? null,
     interpreterMode:
@@ -2349,16 +2426,32 @@ function normalizeMeetingSummaryResponse(
       ? summary.summary_type
       : requestedType;
   const status = normalizeMeetingSummaryStatus(summary.status, summary.summary_text);
+  const keyPoints = preferredStringArray(summary.key_points, summary.highlights);
 
   return {
     ...summary,
     summary_type: summaryType,
     status,
     summary_text: typeof summary.summary_text === "string" ? summary.summary_text : null,
-    highlights: safeStringArray(summary.highlights),
+    key_points: keyPoints,
+    highlights: keyPoints,
     decisions: safeStringArray(summary.decisions),
-    action_items: normalizeMeetingSummaryActionItems(summary.action_items),
-    participant_summary: normalizeMeetingSummaryParticipants(summary.participant_summary),
+    action_items: normalizeMeetingSummaryActionItems(
+      summary.action_items,
+      summary.action_item_details,
+    ),
+    action_item_details: normalizeMeetingSummaryActionItems(
+      summary.action_item_details,
+      summary.action_items,
+    ),
+    participant_highlights: normalizeMeetingSummaryParticipants(
+      summary.participant_highlights,
+      summary.participant_summary,
+    ),
+    participant_summary: normalizeMeetingSummaryParticipants(
+      summary.participant_summary,
+      summary.participant_highlights,
+    ),
     source_window: isRecord(summary.source_window) ? summary.source_window : {},
     source_stats: isRecord(summary.source_stats) ? summary.source_stats : {},
     error: typeof summary.error === "string" ? summary.error : null,
@@ -2383,19 +2476,29 @@ function normalizeMeetingSummaryStatus(
 
 function normalizeMeetingSummaryActionItems(
   items: MeetingSummaryResponse["action_items"],
+  fallbackItems?: MeetingSummaryResponse["action_items"],
 ): MeetingSummaryActionItem[] {
-  if (!Array.isArray(items)) {
+  const sourceItems = Array.isArray(items) && items.length > 0 ? items : fallbackItems;
+  if (!Array.isArray(sourceItems)) {
     return [];
   }
 
   const normalized: MeetingSummaryActionItem[] = [];
-  for (const item of items) {
+  for (const item of sourceItems) {
+    if (typeof item === "string") {
+      const text = item.trim();
+      if (text) {
+        normalized.push({ text, owner: null, due: null });
+      }
+      continue;
+    }
+
     if (!item || typeof item.text !== "string" || !item.text.trim()) {
       continue;
     }
 
     normalized.push({
-      text: item.text,
+      text: item.text.trim(),
       owner: typeof item.owner === "string" ? item.owner : null,
       due: typeof item.due === "string" ? item.due : null,
     });
@@ -2406,13 +2509,15 @@ function normalizeMeetingSummaryActionItems(
 
 function normalizeMeetingSummaryParticipants(
   items: MeetingSummaryResponse["participant_summary"],
+  fallbackItems?: MeetingSummaryResponse["participant_summary"],
 ): MeetingSummaryParticipantItem[] {
-  if (!Array.isArray(items)) {
+  const sourceItems = Array.isArray(items) && items.length > 0 ? items : fallbackItems;
+  if (!Array.isArray(sourceItems)) {
     return [];
   }
 
   const normalized: MeetingSummaryParticipantItem[] = [];
-  for (const item of items) {
+  for (const item of sourceItems) {
     if (!item || typeof item.summary !== "string" || !item.summary.trim()) {
       continue;
     }
@@ -2435,6 +2540,17 @@ function safeStringArray(items: string[] | null | undefined): string[] {
   return items.filter((item): item is string => typeof item === "string" && !!item.trim());
 }
 
+function preferredStringArray(
+  preferred: string[] | null | undefined,
+  fallback: string[] | null | undefined,
+): string[] {
+  const preferredItems = safeStringArray(preferred);
+  if (preferredItems.length > 0) {
+    return preferredItems;
+  }
+  return safeStringArray(fallback);
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
 }
@@ -2450,9 +2566,12 @@ function createPendingMeetingSummary(
     created_at: new Date().toISOString(),
     generated_at: null,
     summary_text: null,
+    key_points: [],
     highlights: [],
     decisions: [],
     action_items: [],
+    action_item_details: [],
+    participant_highlights: [],
     participant_summary: [],
     source_window: {},
     source_stats: {},
@@ -2657,16 +2776,6 @@ function compareParticipants(
 
 function countHumanParticipants(participants: ParticipantSnapshot[]): number {
   return participants.filter((participant) => participant.kind !== "virtual_brse" && !participant.is_virtual).length;
-}
-
-function resolveBrseEnabled(
-  room: Pick<RoomSnapshotResponse["room"], "brse_enabled" | "meeting_mode"> | null,
-): boolean {
-  if (typeof room?.brse_enabled === "boolean") {
-    return room.brse_enabled;
-  }
-
-  return room?.meeting_mode === "brse_relay" || room?.meeting_mode === "brse_silent_summary";
 }
 
 function parseExpiresAtMs(expiresAt: string | null | undefined): number | null {

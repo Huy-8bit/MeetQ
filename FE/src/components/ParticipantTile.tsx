@@ -1,4 +1,5 @@
 import type { VideoFeed } from "../types/livekit";
+import type { BrseRoomMode } from "../lib/brseModes";
 import { getLanguageLabel } from "../lib/languages";
 import { VideoTrackView } from "./MediaElements";
 
@@ -9,6 +10,8 @@ interface ParticipantTileProps {
   isHost?: boolean;
   isMutedByHost?: boolean;
   isBrseEnabled?: boolean;
+  brseRoomMode?: BrseRoomMode;
+  brseAudioExpected?: boolean;
   relayStatusLabel?: string;
 }
 
@@ -19,9 +22,27 @@ export function ParticipantTile({
   isHost = false,
   isMutedByHost = false,
   isBrseEnabled = true,
+  brseRoomMode = "voice_text",
+  brseAudioExpected = true,
   relayStatusLabel = "Relay idle",
 }: ParticipantTileProps) {
   const isBrse = feed.kind === "virtual_brse" || feed.isVirtual;
+  const brseCaption =
+    !isBrseEnabled
+      ? "Normal meeting mode"
+      : brseRoomMode === "text_only" || !brseAudioExpected
+        ? "Text relay only"
+        : brseRoomMode === "silent_summary"
+          ? "Summary capture"
+          : "AI voice + text relay";
+  const brseBadge =
+    !isBrseEnabled
+      ? "BRSE off"
+      : brseRoomMode === "text_only" || !brseAudioExpected
+      ? "Text-only"
+      : brseRoomMode === "silent_summary"
+        ? "Summary"
+        : "AI relay";
   const initials = feed.displayName
     .split(" ")
     .map((part) => part[0]?.toUpperCase())
@@ -30,7 +51,16 @@ export function ParticipantTile({
     .join("");
 
   return (
-    <article className={`participant-tile ${isBrse ? "participant-tile-brse" : ""} ${feed.isSpeaking ? "is-speaking" : ""}`.trim()}>
+    <article
+      className={[
+        "participant-tile",
+        isBrse ? "participant-tile-brse" : "",
+        isBrse && isBrseEnabled && (brseRoomMode === "text_only" || !brseAudioExpected)
+          ? "participant-tile-brse-text-only"
+          : "",
+        feed.isSpeaking ? "is-speaking" : "",
+      ].filter(Boolean).join(" ")}
+    >
       <div className="participant-media-frame">
         {feed.track && !feed.isCameraOff ? (
           <VideoTrackView track={feed.track} mirrored={feed.isLocal} />
@@ -38,7 +68,7 @@ export function ParticipantTile({
           <div className="participant-fallback participant-fallback-brse">
             <img src="/cat.jpg" alt="AI relay avatar" className="brse-avatar-img" />
             <strong>{isBrseEnabled ? relayStatusLabel : "Relay off"}</strong>
-            <p>{isBrseEnabled ? "AI relay participant" : "Normal meeting mode"}</p>
+            <p>{brseCaption}</p>
           </div>
         ) : (
           <div className="participant-fallback participant-fallback-human">
@@ -61,7 +91,7 @@ export function ParticipantTile({
         </div>
         <div className="participant-tile-tags">
           {isHost ? <span className="badge badge-host">Host</span> : null}
-          {isBrse ? <span className="badge kind">AI relay</span> : null}
+          {isBrse ? <span className="badge kind">{brseBadge}</span> : null}
           {isScreenSharing ? <span className="badge live">Sharing screen</span> : null}
           {isMutedByHost ? <span className="badge badge-muted-by-host">Muted</span> : null}
           {feed.language ? (

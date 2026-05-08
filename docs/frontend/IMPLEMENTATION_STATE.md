@@ -1,5 +1,192 @@
 # Frontend Implementation State
 
+## Turn Update: 2026-05-08 BRSE Text-Only Mode UI Follow-Up
+
+- Time: 2026-05-08T00:00:00+07:00
+- Mode: CODE-ONLY
+- Status: implemented
+- Testing deferred: yes, per instruction
+
+### Objective
+
+Review and finish additive frontend wiring for backend `brse_output_mode`:
+
+- create-room selection for `Voice + Text`, `Text Only`, and `Off`
+- clear room status/header semantics
+- relay panel remains text-driven in text-only mode
+- no UI/runtime assumption that BRSE audio exists in text-only mode
+- backward-compatible parsing when old backend responses omit
+  `brse_output_mode`
+
+### Read Status
+
+- Read required docs:
+  - `docs/frontend/IMPLEMENTATION_STATE.md`
+  - `docs/backend/API_CONTRACT.md`
+  - `docs/backend/IMPLEMENTATION_STATE.md`
+- Read required FE files:
+  - `FE/src/pages/RoomPage.tsx`
+  - `FE/src/features/room/useMeetingRoom.ts`
+  - `FE/src/lib/api.ts`
+  - `FE/src/lib/ws.ts`
+  - `FE/src/lib/livekit.ts`
+  - `FE/src/lib/brseModes.ts`
+  - `FE/src/types/api.ts`
+  - `FE/src/types/ws.ts`
+  - `FE/src/pages/HomePage.tsx`
+  - `FE/src/components/RoomTopBar.tsx`
+  - `FE/src/components/BrseToggleControl.tsx`
+  - `FE/src/components/BrseRelayPanel.tsx`
+  - `FE/src/components/MeetingStage.tsx`
+  - `FE/src/components/ParticipantTile.tsx`
+  - `FE/src/components/ParticipantList.tsx`
+  - `FE/src/components/JoinRoomCard.tsx`
+  - `FE/src/components/MeetingSummaryPanel.tsx`
+
+### Implemented Follow-Up
+
+- Keep existing BRSE text-only UI strategy and runtime wiring.
+- Tighten create-room option copy so `Text Only` explicitly means text relay
+  with no AI voice.
+- Keep in-room control scoped to enable/disable because backend contract exposes
+  create-time output selection and enable/disable, not live output-mode switch.
+- Update summary response typing/normalization defensively for the current
+  backend recap payload so the existing summary panel is preserved.
+
+### Final UI / Runtime Strategy
+
+- Create-room remains the place where the user chooses `Voice + Text`,
+  `Text Only`, or `Off`.
+- Top bar shows the resolved current room mode through the compact BRSE control:
+  `BRSE Voice`, `BRSE Text Only`, `BRSE Summary`, or `BRSE Off`.
+- In-room control remains enable/disable only because no backend contract exists
+  for live `brse_output_mode` switching.
+- `Text Only` keeps relay transcript rendering active and suppresses BRSE audio
+  sinks through `isBrseAudioExpected(...)`.
+- Missing `brse_output_mode` still defaults to `voice_text` via shared
+  `brseModes` helpers.
+
+### Files Changed
+
+- `FE/src/lib/brseModes.ts`
+- `FE/src/types/api.ts`
+- `FE/src/features/room/useMeetingRoom.ts`
+- `FE/src/components/MeetingSummaryPanel.tsx`
+- `docs/frontend/IMPLEMENTATION_STATE.md`
+
+### Testing
+
+- Full test suite not run, per CODE-ONLY instruction.
+- Build/typecheck not run, per CODE-ONLY instruction.
+- New tests not added.
+- Existing tests not modified.
+
+---
+
+## Turn Update: 2026-05-08 BRSE Text-Only Mode UI
+
+- Time: 2026-05-08T00:00:00+07:00
+- Mode: CODE-ONLY
+- Status: implemented
+- Testing deferred: yes, per instruction
+
+### Objective
+
+Add additive FE support for backend room-level BRSE output mode:
+
+- `Voice + Text`: BRSE relay text plus BRSE voice/audio.
+- `Text Only`: BRSE relay text without BRSE voice/audio.
+- `Off`: no BRSE runtime/relay.
+
+### Initial Strategy
+
+- Add create-room selection for `Off`, `Voice + Text`, and `Text Only` because
+  the current backend contract exposes `brse_output_mode` on create-room and
+  does not expose a live voice/text switching endpoint.
+- Treat room snapshot/backend state as source of truth after room creation.
+- Parse missing `brse_output_mode` as `voice_text` for backward compatibility.
+- Keep existing BRSE enable/disable toggle behavior in-room, preserving stored
+  room output mode when BRSE is re-enabled.
+- Update top bar, stage tile, people/join labels, and relay empty state so
+  text-only does not imply audible AI voice.
+- Keep relay transcript rendering unchanged for text-only; only suppress BRSE
+  audio sinks when room state says audio output is disabled.
+
+### Read Status
+
+- Read required docs:
+  - `docs/frontend/IMPLEMENTATION_STATE.md`
+  - `docs/backend/API_CONTRACT.md`
+  - `docs/backend/IMPLEMENTATION_STATE.md`
+- Read required FE runtime/files:
+  - `FE/src/pages/RoomPage.tsx`
+  - `FE/src/features/room/useMeetingRoom.ts`
+  - `FE/src/lib/api.ts`
+  - `FE/src/lib/ws.ts`
+  - `FE/src/lib/livekit.ts`
+  - `FE/src/types/api.ts`
+  - `FE/src/types/ws.ts`
+  - `FE/src/pages/HomePage.tsx`
+  - `FE/src/components/RoomTopBar.tsx`
+  - `FE/src/components/BrseToggleControl.tsx`
+  - `FE/src/components/BrseRelayPanel.tsx`
+  - `FE/src/components/MeetingStage.tsx`
+  - `FE/src/components/ParticipantTile.tsx`
+  - `FE/src/components/ParticipantList.tsx`
+  - `FE/src/components/JoinRoomCard.tsx`
+  - `FE/src/components/InterpreterStatusPanel.tsx`
+  - `FE/src/components/TranscriptPanel.tsx`
+
+### Implemented Strategy
+
+- Added shared BRSE mode helpers so UI consistently resolves:
+  - `off`: no BRSE relay/runtime expected.
+  - `voice_text`: relay text plus BRSE AI audio.
+  - `text_only`: relay text without BRSE AI audio.
+  - `silent_summary`: summary/listen-only semantics kept separate from relay text.
+- Added create-room mode selection for `Voice + Text`, `Text Only`, and `Off`.
+  The selection sends additive `brse_enabled`, `brse_mode`, and
+  `brse_output_mode` fields to the backend and remembers the local preference.
+- Extended room REST/WS types with additive `brse_output_mode`,
+  BRSE-aware audio routing fields, and suppressed-output metadata.
+- Updated room runtime derivation to default missing `brse_output_mode` to
+  `voice_text`, keep relay transcripts visible in text-only mode, and expose
+  BRSE audio sinks only when room state says AI audio is expected.
+- Kept in-room BRSE toggle scoped to existing enable/disable behavior; it does
+  not invent a live output-mode switching contract.
+- Updated top bar, stage BRSE tile, participant list, join preview, and relay
+  empty state copy so text-only mode does not imply audible AI voice.
+- Relay panel rendering remains transcript-driven; text-only does not hide
+  source/relay text.
+
+### Files Changed
+
+| File | Change |
+|------|--------|
+| `FE/src/lib/brseModes.ts` | Added shared BRSE output-mode normalization, labels, create payload, and audio-expectation helpers |
+| `FE/src/types/api.ts` | Added `BrseOutputMode`, room snapshot fields, create-room field, and text-only/suppressed audio routing metadata |
+| `FE/src/types/ws.ts` | Added BRSE mode/output-mode fields to room snapshot and BRSE update events |
+| `FE/src/features/room/useMeetingRoom.ts` | Wired mode-aware room state, WS updates, transcript filtering, and BRSE audio sink suppression |
+| `FE/src/pages/HomePage.tsx` | Added create-room BRSE output mode selector and local preference |
+| `FE/src/pages/RoomPage.tsx` | Passed mode/audio expectation into room header, stage, relay panel, and people panel |
+| `FE/src/components/RoomTopBar.tsx` | Passed current BRSE room mode into the top-bar control |
+| `FE/src/components/BrseToggleControl.tsx` | Updated compact status labels for voice/text, text-only, summary, and off |
+| `FE/src/components/BrseRelayPanel.tsx` | Added text-only-aware empty state while keeping transcript list unchanged |
+| `FE/src/components/MeetingStage.tsx` | Passed BRSE mode semantics into virtual participant tiles |
+| `FE/src/components/ParticipantTile.tsx` | Updated BRSE tile copy/badge so text-only does not imply AI voice |
+| `FE/src/components/ParticipantList.tsx` | Updated people panel copy/badges for text-only and summary semantics |
+| `FE/src/components/JoinRoomCard.tsx` | Updated join-room mode badge and BRSE virtual participant preview |
+| `FE/src/index.css` | Added compact selector styling and text-only visual states with mobile fallback |
+
+### Testing
+
+- Full test suite not run, per CODE-ONLY instruction.
+- Build/typecheck not run, per CODE-ONLY instruction.
+- New tests not added.
+- Existing tests not modified.
+
+---
+
 ## Turn Update: 2026-05-07 Frontend Theme, Custom Select, and Landing Polish
 
 - Time: 2026-05-07T00:00:00+07:00

@@ -6,6 +6,10 @@
 >
 > Update note (2026-05-05): create-room also accepts additive `brse_mode="relay" | "silent_summary"`. `brse_enabled=true` with `relay` preserves existing BRSE audio relay behavior. `brse_enabled=true` with `silent_summary` starts BRSE as a silent listener: it subscribes to human audio and archives source transcripts for post-meeting summary, but suppresses relay audio and realtime relay transcript fan-out.
 >
+> Update note (2026-05-08): relay rooms now expose additive `brse_output_mode="voice_text" | "text_only"`. `voice_text` preserves existing BRSE relay voice + text behavior. `text_only` keeps BRSE runtime, source transcript, and relay text active, but suppresses BRSE audio track publication and relay audio frames. This is distinct from `brse_enabled=false` and from `brse_mode="silent_summary"`.
+>
+> Update note (2026-05-08): meeting summaries now return a structured meeting recap package. Canonical recap fields are `summary_text`, `key_points`, `action_items`, `decisions`, and `participant_highlights`. Backward-compatible aliases `highlights` and `participant_summary` remain in the response and mirror the canonical fields.
+>
 > Update note (2026-05-06): meeting summaries now support two stored types: `interim` live checkpoint summaries and `final` post-meeting summaries. `POST /api/rooms/{room_id}/summary` generates/refreshes summary; `GET /api/rooms/{room_id}/summary?type=interim|final` reads stored summary. Default GET type remains `final`.
 >
 > Update note (2026-04-30): new rooms now default to BRSE relay semantics. FE should expect `meeting_mode=brse_relay`, `interpreter_mode=brse_participant`, a virtual participant `brse_ai`, room-wide relay transcripts with `kind=relay`, and BRSE audio as virtual participant track metadata. Older per-listener translated-audio sections below are legacy reference and are no longer the authoritative output model for BRSE rooms.
@@ -233,7 +237,8 @@ Tạo room trống.
 {
   "meeting_languages": ["vi", "ja"],
   "brse_enabled": true,
-  "brse_mode": "relay"
+  "brse_mode": "relay",
+  "brse_output_mode": "voice_text"
 }
 ```
 
@@ -245,6 +250,8 @@ Rules:
 4. Nếu omitted, backend mặc định `meeting_languages=["vi", "ja"]` để giữ tương thích flow cũ.
 5. `brse_enabled` optional; nếu omitted, backend mặc định `true`.
 6. `brse_mode` optional; nếu omitted, backend mặc định `relay`. Chỉ có hiệu lực khi `brse_enabled=true`.
+7. `brse_output_mode` optional; nếu omitted, backend mặc định `voice_text`. Chỉ tách audio/text khi `brse_enabled=true` và `brse_mode="relay"`.
+8. `brse_output_mode="text_only"` nghĩa là BRSE vẫn nghe, vẫn publish source/relay text realtime, nhưng không publish BRSE audio track.
 
 ### Response JSON Schema
 
@@ -257,6 +264,7 @@ Rules:
     "expires_at": "ISO-8601 UTC string",
     "brse_enabled": true,
     "brse_mode": "relay",
+    "brse_output_mode": "voice_text",
     "participant_limit": null,
     "supported_languages": ["vi", "en", "ja", "zh", "ko", "fr", "es"],
     "meeting_languages": ["vi", "ja"]
@@ -279,6 +287,7 @@ Rules:
     "expires_at": "2026-04-29T13:30:00.000Z",
     "brse_enabled": true,
     "brse_mode": "relay",
+    "brse_output_mode": "voice_text",
     "participant_limit": null,
     "supported_languages": ["vi", "en", "ja", "zh", "ko", "fr", "es"],
     "meeting_languages": ["vi", "ja"]
@@ -311,6 +320,7 @@ Lấy snapshot room khi FE load room page hoặc reconnect.
     "expires_at": "ISO-8601 UTC string",
     "brse_enabled": true,
     "brse_mode": "relay",
+    "brse_output_mode": "voice_text",
     "participant_limit": null,
     "supported_languages": ["vi", "en", "ja", "zh", "ko", "fr", "es"],
     "meeting_languages": ["vi", "ja"],
@@ -374,6 +384,7 @@ Lấy snapshot room khi FE load room page hoặc reconnect.
     "expires_at": "2026-04-29T13:30:00.000Z",
     "brse_enabled": true,
     "brse_mode": "relay",
+    "brse_output_mode": "voice_text",
     "participant_limit": null,
     "supported_languages": ["vi", "en", "ja", "zh", "ko", "fr", "es"],
     "meeting_languages": ["vi", "ja"],
@@ -407,7 +418,7 @@ Lấy snapshot room khi FE load room page hoặc reconnect.
 
 ## `POST /api/rooms/{room_id}/summary`
 
-Generate hoặc refresh meeting summary.
+Generate hoặc refresh meeting recap package.
 
 Query:
 
@@ -432,7 +443,7 @@ Error cases:
 
 ## `GET /api/rooms/{room_id}/summary`
 
-Lấy stored meeting summary. Default `type=final` để giữ tương thích contract cũ.
+Lấy stored meeting recap package. Default `type=final` để giữ tương thích contract cũ.
 
 Query:
 
@@ -462,20 +473,29 @@ Nếu chưa có summary record, trả `404 meeting_summary_not_found`.
   "generated_at": "ISO-8601 UTC string | null",
   "summary_language": "en",
   "summary_text": "The meeting discussed ...",
-  "highlights": ["..."],
+  "key_points": ["..."],
   "decisions": ["..."],
-  "action_items": [
+  "action_items": ["..."],
+  "participant_highlights": [
     {
-      "text": "...",
-      "owner": "string | null",
-      "due": "string | null"
+      "participant_id": "pt_...",
+      "display_name": "Huy",
+      "summary": "..."
     }
   ],
+  "highlights": ["..."],
   "participant_summary": [
     {
       "participant_id": "pt_...",
       "display_name": "Huy",
       "summary": "..."
+    }
+  ],
+  "action_item_details": [
+    {
+      "text": "...",
+      "owner": "string | null",
+      "due": "string | null"
     }
   ],
   "duration_seconds": 900,
@@ -498,6 +518,19 @@ Nếu chưa có summary record, trả `404 meeting_summary_not_found`.
   "error": null
 }
 ```
+
+Recap field semantics:
+
+- `summary_text`: short whole-meeting paragraph.
+- `key_points`: main discussion points; not follow-up tasks.
+- `action_items`: explicit next tasks only. If no clear evidence, this is `[]`.
+- `decisions`: clearly agreed decisions only. If no clear evidence, this is `[]`.
+- `participant_highlights`: short grounded contribution summary per participant.
+- `highlights`: backward-compatible alias of `key_points`.
+- `participant_summary`: backward-compatible alias of `participant_highlights`.
+- `action_item_details`: additive compatibility/detail field for legacy
+  object-shaped action item records; FE can ignore it when rendering the
+  canonical recap.
 
 ## `POST /api/rooms/{room_id}/join`
 
@@ -537,6 +570,8 @@ Join room và nhận đủ credentials cho Gateway WS + LiveKit.
     "room_id": "string",
     "state": "active",
     "brse_enabled": true,
+    "brse_mode": "relay",
+    "brse_output_mode": "voice_text",
     "participant_limit": null,
     "supported_languages": ["vi", "en", "ja", "zh", "ko", "fr", "es"],
     "meeting_languages": ["vi", "ja"],
@@ -582,6 +617,8 @@ Join room và nhận đủ credentials cho Gateway WS + LiveKit.
     "room_id": "rm_8f3k2v1m",
     "state": "active",
     "brse_enabled": true,
+    "brse_mode": "relay",
+    "brse_output_mode": "voice_text",
     "participant_limit": null,
     "supported_languages": ["vi", "en", "ja", "zh", "ko", "fr", "es"],
     "meeting_languages": ["vi", "ja"],
@@ -670,6 +707,7 @@ Response là room summary đã cập nhật:
   "state": "active",
   "brse_enabled": true,
   "brse_mode": "relay",
+  "brse_output_mode": "voice_text",
   "participant_limit": null,
   "supported_languages": ["vi", "en", "ja", "zh", "ko", "fr", "es"],
   "meeting_languages": ["vi", "ja"],
@@ -864,6 +902,8 @@ Validation:
     "room": {
       "state": "created | active | empty",
       "brse_enabled": true,
+      "brse_mode": "relay",
+      "brse_output_mode": "voice_text",
       "participant_limit": null,
       "supported_languages": ["vi", "en", "ja", "zh", "ko", "fr", "es"],
       "meeting_languages": ["vi", "ja"],
@@ -898,6 +938,8 @@ Validation:
     "room": {
       "state": "active",
       "brse_enabled": true,
+      "brse_mode": "relay",
+      "brse_output_mode": "voice_text",
       "participant_limit": null,
       "supported_languages": ["vi", "en", "ja", "zh", "ko", "fr", "es"],
       "meeting_languages": ["vi", "ja"],
@@ -934,6 +976,8 @@ Gateway broadcast khi room đổi BRSE mode.
   "payload": {
     "room_id": "rm_8f3k2v1m",
     "brse_enabled": false,
+    "brse_mode": "relay",
+    "brse_output_mode": "voice_text",
     "timestamp": "2026-05-01T08:40:00.000Z",
     "changed_by": "pt_01hs8x4e3m",
     "reason": "ws_disable"
@@ -1181,6 +1225,9 @@ FE có thể render trực tiếp speaker panel từ các field:
 5. Dùng `kind = "translated"` để render lời dịch cho listener hiện tại
 6. Nếu `fallback_used == true`, UI phải hiển thị badge degraded và không chờ audio track
 7. Với listener khác ngôn ngữ, `audio_track_name` và `audio_output.track_name` là canonical translated audio path mà FE nên ưu tiên phát
+8. Với BRSE relay text-only, `kind="relay"` vẫn được publish nhưng
+   `audio_track_name=null` và `audio_output.output_suppressed=true` với
+   `audio_output.suppressed_reason="brse_text_only_output_mode"`.
 
 ## `interpreter.status`
 

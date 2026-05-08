@@ -12,7 +12,7 @@ from server.events import EventType
 from server.service.gateway.room_store import RoomStore
 from server.service.brain_runtime.events import RedisEventPublisher
 from server.service.brain_runtime.room_manager import RoomInterpreterManager
-from server.meeting_modes import active_human_participant_count
+from server.meeting_modes import DEFAULT_BRSE_OUTPUT_MODE, active_human_participant_count
 
 logger = logging.getLogger(__name__)
 
@@ -127,13 +127,21 @@ class InterpreterDaemon:
             return None
 
         brse_mode = getattr(snapshot.room, "brse_mode", "relay")
+        brse_output_mode = getattr(snapshot.room, "brse_output_mode", DEFAULT_BRSE_OUTPUT_MODE)
         logger.info(
-            "Spawning interpreter manager for room %s brse_mode=%s",
+            "Spawning interpreter manager for room %s brse_mode=%s brse_output_mode=%s",
             room_id,
             brse_mode,
+            brse_output_mode,
         )
         publisher = RedisEventPublisher(self.redis, room_id, self.interpreter_events_channel)
-        manager = RoomInterpreterManager(room_id, self.settings, publisher, brse_mode=brse_mode)
+        manager = RoomInterpreterManager(
+            room_id,
+            self.settings,
+            publisher,
+            brse_mode=brse_mode,
+            brse_output_mode=brse_output_mode,
+        )
         self.managers[room_id] = manager
 
         try:

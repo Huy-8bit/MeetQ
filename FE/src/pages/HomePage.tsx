@@ -4,6 +4,11 @@ import { motion, AnimatePresence } from "motion/react";
 import { Zap, Mic2, CheckCircle2, Globe2 } from "lucide-react";
 import { api, ApiError } from "../lib/api";
 import {
+  BRSE_CREATE_MODE_OPTIONS,
+  buildCreateBrsePayload,
+  type BrseCreateMode,
+} from "../lib/brseModes";
+import {
   getLanguageLabel,
   isMeetingLanguage,
   SUPPORTED_MEETING_LANGUAGES,
@@ -18,6 +23,7 @@ type Slide = "chaos" | "clarity" | "translation" | "global";
 
 const SLIDES: Slide[] = ["chaos", "clarity", "translation", "global"];
 const SLIDE_DURATION = 6000; // ms each
+const CREATE_BRSE_MODE_STORAGE_KEY = "meetq:create-brse-mode";
 
 const CHAOS_TEXTS = [
   "Xin chào?",
@@ -306,11 +312,18 @@ export function HomePage() {
   const [roomInput, setRoomInput] = useState("");
   const [langA, setLangA] = useState<MeetingLanguage | "">("");
   const [langB, setLangB] = useState<MeetingLanguage | "">("");
+  const [brseCreateMode, setBrseCreateMode] = useState<BrseCreateMode>(
+    () => loadCreateBrseModePreference(),
+  );
   const [creating, setCreating] = useState(false);
   const [validationError, setValidationError] = useState<string | null>(null);
   const [createError, setCreateError] = useState<string | null>(null);
   const [joinError, setJoinError] = useState<string | null>(null);
   const landingNotice = getLandingNotice(location.state);
+
+  useEffect(() => {
+    saveCreateBrseModePreference(brseCreateMode);
+  }, [brseCreateMode]);
 
   function handleLangAChange(lang: MeetingLanguage | "") {
     setLangA(lang);
@@ -336,7 +349,10 @@ export function HomePage() {
     setValidationError(null);
 
     try {
-      const res = await api.createRoom({ meeting_languages: [langA, langB] });
+      const res = await api.createRoom({
+        meeting_languages: [langA, langB],
+        ...buildCreateBrsePayload(brseCreateMode),
+      });
       navigate(`/rooms/${res.room.room_id}`);
     } catch (err) {
       setCreateError(
@@ -360,6 +376,9 @@ export function HomePage() {
   ];
 
   const canCreate = !!langA && !!langB && langA !== langB;
+  const selectedBrseOption =
+    BRSE_CREATE_MODE_OPTIONS.find((option) => option.value === brseCreateMode) ??
+    BRSE_CREATE_MODE_OPTIONS[0];
 
   return (
     <main className="hp-root">
@@ -393,7 +412,7 @@ export function HomePage() {
             </div>
             <div className="hp-card-meta">
               <span>60 min</span>
-              <span>BRSE relay</span>
+              <span>{selectedBrseOption.label}</span>
             </div>
           </div>
 
@@ -419,6 +438,24 @@ export function HomePage() {
                 ariaLabel="Language B"
               />
             </div>
+          </div>
+
+          <div className="hp-brse-mode" role="group" aria-label="BRSE output mode">
+            {BRSE_CREATE_MODE_OPTIONS.map((option) => (
+              <button
+                key={option.value}
+                type="button"
+                className={[
+                  "hp-brse-mode-option",
+                  option.value === brseCreateMode ? "is-active" : "",
+                ].filter(Boolean).join(" ")}
+                aria-pressed={option.value === brseCreateMode}
+                onClick={() => setBrseCreateMode(option.value)}
+              >
+                <strong>{option.label}</strong>
+                <span>{option.detail}</span>
+              </button>
+            ))}
           </div>
 
           {(validationError ?? createError) && (
@@ -456,7 +493,7 @@ export function HomePage() {
 
         <ul className="hp-pills" aria-label="Room defaults">
           <li>60-min rooms</li>
-          <li>BRSE relay</li>
+          <li>{selectedBrseOption.detail}</li>
           <li>No account</li>
         </ul>
 
@@ -483,6 +520,35 @@ function getLandingNotice(state: unknown): string | null {
   if (!state || typeof state !== "object") return null;
   const notice = (state as { notice?: unknown }).notice;
   return typeof notice === "string" ? notice : null;
+}
+
+function loadCreateBrseModePreference(): BrseCreateMode {
+  if (typeof window === "undefined") {
+    return "voice_text";
+  }
+
+  try {
+    const stored = window.localStorage.getItem(CREATE_BRSE_MODE_STORAGE_KEY);
+    return isBrseCreateMode(stored) ? stored : "voice_text";
+  } catch {
+    return "voice_text";
+  }
+}
+
+function saveCreateBrseModePreference(mode: BrseCreateMode): void {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  try {
+    window.localStorage.setItem(CREATE_BRSE_MODE_STORAGE_KEY, mode);
+  } catch {
+    // Preference storage is optional.
+  }
+}
+
+function isBrseCreateMode(value: unknown): value is BrseCreateMode {
+  return value === "voice_text" || value === "text_only" || value === "off";
 }
 
 function mapCreateRoomError(error: ApiError): string {

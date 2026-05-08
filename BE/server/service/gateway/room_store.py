@@ -117,6 +117,7 @@ class RoomStore:
             expires_at=room_state.expires_at,
             brse_enabled=room_state.brse_enabled,
             brse_mode=room_state.brse_mode,
+            brse_output_mode=room_state.brse_output_mode,
             participant_limit=room_state.participant_limit,
             supported_languages=room_state.supported_languages,
             meeting_languages=room_state.meeting_languages,

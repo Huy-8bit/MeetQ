@@ -13,6 +13,7 @@ export type MeetingLanguage = SelectableLanguage;
 export type RoomState = "created" | "active" | "empty";
 export type SameLanguagePolicy = "human_passthrough" | "muted";
 export type BrseMode = "relay" | "silent_summary";
+export type BrseOutputMode = "voice_text" | "text_only";
 export type MeetingMode = "direct_translation" | "brse_relay" | "brse_silent_summary";
 export type InterpreterMode = "per_listener" | "brse_participant";
 export type ParticipantKind = "human" | "virtual_brse";
@@ -21,16 +22,20 @@ export type MeetingSummaryType = "interim" | "final";
 export type MeetingSummaryStatus = "pending" | "completed" | "skipped" | "failed";
 export type MeetingAudioModel =
   | "translated_audio_first"
-  | "brse_participant_audio";
+  | "brse_participant_audio"
+  | "brse_text_only_relay"
+  | "brse_silent_listener";
 export type CrossLanguageRemoteAudioPolicy =
   | "interpreter_track"
-  | "human_original_plus_brse";
+  | "human_original_plus_brse"
+  | "human_original_only";
 export type CanonicalRemoteAudioPolicy =
   | "interpreter_track_for_cross_language"
   | "human_original_track";
 export type AiRelayAudioPolicy =
   | "listener_private_track"
-  | "virtual_participant_track";
+  | "virtual_participant_track"
+  | "disabled";
 
 export type ParticipantStatus =
   | "joining"
@@ -49,10 +54,17 @@ export interface ApiErrorEnvelope {
 
 export interface AudioRouting {
   model: MeetingAudioModel;
+  brse_mode?: BrseMode;
+  brse_output_mode?: BrseOutputMode;
   cross_language_remote_audio: CrossLanguageRemoteAudioPolicy;
   canonical_remote_audio: CanonicalRemoteAudioPolicy;
   same_language_policy: SameLanguagePolicy;
   ai_relay_audio?: AiRelayAudioPolicy;
+  ai_audio_output_enabled?: boolean;
+  relay_text_output_enabled?: boolean;
+  ai_audio_suppressed_reason?: string | null;
+  source_transcript_capture?: boolean;
+  relay_transcript_policy?: "publish_realtime" | "source_only_internal";
   interpreter_mode?: InterpreterMode;
   bridge_strategy?: "speaker_language_map";
   relay_language_map?: Partial<Record<SelectableLanguage, SelectableLanguage>>;
@@ -67,15 +79,19 @@ export interface AudioOutputTrackDescriptor {
   target_language?: Language | null;
   track_available?: boolean;
   authoritative?: boolean;
-  mode?: "interpreter_track" | "virtual_participant_track";
+  mode?: "interpreter_track" | "virtual_participant_track" | "disabled";
   participant_id?: string;
   participant_kind?: ParticipantKind;
   livekit_identity?: string | null;
+  output_suppressed?: boolean;
+  suppressed_reason?: string | null;
+  relay_audio_enabled?: boolean;
+  brse_output_mode?: BrseOutputMode;
 }
 
 export interface AudioOutputDescriptor {
   model: MeetingAudioModel;
-  mode: "interpreter_track" | "virtual_participant_track";
+  mode: "interpreter_track" | "virtual_participant_track" | "disabled";
   canonical: boolean;
   track_available?: boolean;
   track_name: string | null;
@@ -89,6 +105,10 @@ export interface AudioOutputDescriptor {
   participant_id?: string;
   participant_kind?: ParticipantKind;
   livekit_identity?: string | null;
+  output_suppressed?: boolean;
+  suppressed_reason?: string | null;
+  relay_audio_enabled?: boolean;
+  brse_output_mode?: BrseOutputMode;
   track?: AudioOutputTrackDescriptor;
   tracks?: AudioOutputTrackDescriptor[];
 }
@@ -114,6 +134,8 @@ export interface RoomSummary {
   created_at: string;
   expires_at: string;
   brse_enabled?: boolean;
+  brse_mode?: BrseMode;
+  brse_output_mode?: BrseOutputMode;
   participant_limit: number | null;
   supported_languages: Language[];
   meeting_languages?: MeetingLanguage[];
@@ -126,6 +148,7 @@ export interface CreateRoomRequest {
   meeting_languages: [MeetingLanguage, MeetingLanguage];
   brse_enabled?: boolean;
   brse_mode?: BrseMode;
+  brse_output_mode?: BrseOutputMode;
 }
 
 export interface CreateRoomResponse {
@@ -299,6 +322,8 @@ export interface MeetingSummaryActionItem {
   due?: string | null;
 }
 
+export type MeetingSummaryActionItemPayload = string | MeetingSummaryActionItem;
+
 export interface MeetingSummaryParticipantItem {
   participant_id?: string | null;
   display_name?: string | null;
@@ -334,9 +359,12 @@ export interface MeetingSummaryResponse {
   generated_at?: string | null;
   summary_language?: string | null;
   summary_text?: string | null;
+  key_points?: string[] | null;
   highlights?: string[] | null;
   decisions?: string[] | null;
-  action_items?: MeetingSummaryActionItem[] | null;
+  action_items?: MeetingSummaryActionItemPayload[] | null;
+  action_item_details?: MeetingSummaryActionItem[] | null;
+  participant_highlights?: MeetingSummaryParticipantItem[] | null;
   participant_summary?: MeetingSummaryParticipantItem[] | null;
   duration_seconds?: number | null;
   source_window?: MeetingSummarySourceWindow | null;

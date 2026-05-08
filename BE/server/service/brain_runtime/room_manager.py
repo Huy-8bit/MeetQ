@@ -31,12 +31,15 @@ from server.meeting_modes import (
     BRSE_PARTICIPANT_ID,
     BRSE_MODE_SILENT_SUMMARY,
     DEFAULT_BRSE_MODE,
+    DEFAULT_BRSE_OUTPUT_MODE,
     DEFAULT_ROOM_MEETING_LANGUAGES,
     SUPPORTED_MEETING_LANGUAGES,
     build_relay_language_map,
-    brse_output_enabled,
+    brse_audio_output_enabled,
+    brse_relay_text_enabled,
     is_active_human_participant,
     normalize_brse_mode,
+    normalize_brse_output_mode,
     relay_target_language,
 )
 
@@ -106,20 +109,29 @@ class RoomInterpreterManager:
         publisher: RedisEventPublisher,
         *,
         brse_mode: str = DEFAULT_BRSE_MODE,
+        brse_output_mode: str = DEFAULT_BRSE_OUTPUT_MODE,
     ):
         self.room_id = room_id
         self.settings = settings
         self.publisher = publisher
         self.brse_mode = normalize_brse_mode(brse_mode)
-        self.relay_output_enabled = brse_output_enabled(True, self.brse_mode)
+        self.brse_output_mode = normalize_brse_output_mode(brse_output_mode)
+        self.relay_text_enabled = brse_relay_text_enabled(True, self.brse_mode)
+        self.relay_audio_enabled = brse_audio_output_enabled(
+            True,
+            self.brse_mode,
+            self.brse_output_mode,
+        )
+        self.relay_output_enabled = self.relay_text_enabled
         self.silent_summary_mode = self.brse_mode == BRSE_MODE_SILENT_SUMMARY
+        self.text_only_output_mode = self.relay_text_enabled and not self.relay_audio_enabled
         self.runtime = LiveKitRuntime(
             room_id=room_id,
             settings=settings,
             on_media_connected=self._on_media_connected,
             on_media_disconnected=self._on_media_disconnected,
             on_audio_stream=self._on_audio_stream,
-            output_audio_enabled=self.relay_output_enabled,
+            output_audio_enabled=self.relay_audio_enabled,
         )
         self.participants: Dict[str, Dict[str, Any]] = {}
         self.active_streams: Dict[str, rtc.AudioStream] = {}
@@ -154,11 +166,19 @@ class RoomInterpreterManager:
 
     async def start(self) -> None:
         logger.info(
-            "Starting BRSE room runtime room=%s brse_mode=%s relay_output_enabled=%s",
+            "Starting BRSE room runtime room=%s brse_mode=%s brse_output_mode=%s "
+            "relay_text_enabled=%s relay_audio_enabled=%s",
             self.room_id,
             self.brse_mode,
-            self.relay_output_enabled,
+            self.brse_output_mode,
+            self.relay_text_enabled,
+            self.relay_audio_enabled,
         )
+        if self.text_only_output_mode:
+            logger.info(
+                "BRSE text-only relay active room=%s: relay text remains enabled; relay audio is suppressed",
+                self.room_id,
+            )
         await self.runtime.connect()
 
     async def stop(self) -> None:
@@ -423,7 +443,13 @@ class RoomInterpreterManager:
             target_lang=plan.tgt_lang,
             output_sample_rate=getattr(self.settings, "realtime_output_sample_rate", 24000),
             on_track_failure=on_track_failure,
-            output_enabled=self.relay_output_enabled,
+            output_enabled=self.relay_audio_enabled,
+            output_mode=self.brse_output_mode,
+            suppressed_reason=(
+                "brse_text_only_output_mode"
+                if self.text_only_output_mode
+                else "brse_silent_summary_mode"
+            ),
         )
         self.routers[speaker_id] = router
         await router.ensure_track()
@@ -435,7 +461,7 @@ class RoomInterpreterManager:
             tgt_lang=plan.tgt_lang,
             meeting_languages=list(self.meeting_languages),
             audio_input=audio_input,
-            request_audio_output=self.relay_output_enabled,
+            request_audio_output=self.relay_audio_enabled,
             silent_listener_mode=self.silent_summary_mode,
         )
         generation = self._next_speaker_generation(speaker_id)
@@ -514,7 +540,13 @@ class RoomInterpreterManager:
             target_lang=plan.tgt_lang,
             output_sample_rate=getattr(self.settings, "realtime_output_sample_rate", 24000),
             on_track_failure=on_track_failure,
-            output_enabled=self.relay_output_enabled,
+            output_enabled=self.relay_audio_enabled,
+            output_mode=self.brse_output_mode,
+            suppressed_reason=(
+                "brse_text_only_output_mode"
+                if self.text_only_output_mode
+                else "brse_silent_summary_mode"
+            ),
         )
         self.routers[speaker_id] = router
         await router.ensure_track()
@@ -532,7 +564,7 @@ class RoomInterpreterManager:
             router=router,
         )
         client.meeting_languages = list(self.meeting_languages)
-        client.request_audio_output = self.relay_output_enabled
+        client.request_audio_output = self.relay_audio_enabled
         if hasattr(client, "silent_listener_mode"):
             client.silent_listener_mode = self.silent_summary_mode
         await client.update_routing(plan.src_lang, plan.tgt_lang)
@@ -1969,12 +2001,15 @@ class RoomInterpreterManager:
         router: OutputRouter,
         encoded: str,
     ) -> None:
-        if not self.relay_output_enabled:
+        if not self.relay_audio_enabled:
             logger.debug(
-                "Suppressing BRSE audio delta by silent listener mode room=%s speaker=%s generation=%d",
+                "Suppressing BRSE audio delta by output mode room=%s speaker=%s generation=%d "
+                "brse_mode=%s brse_output_mode=%s",
                 self.room_id,
                 speaker_id,
                 generation,
+                self.brse_mode,
+                self.brse_output_mode,
             )
             return
         if not self._runtime_generation_matches(speaker_id, generation, router):
@@ -2000,12 +2035,15 @@ class RoomInterpreterManager:
         generation: int,
         router: OutputRouter,
     ) -> None:
-        if not self.relay_output_enabled:
+        if not self.relay_audio_enabled:
             logger.debug(
-                "Suppressing BRSE audio flush by silent listener mode room=%s speaker=%s generation=%d",
+                "Suppressing BRSE audio flush by output mode room=%s speaker=%s generation=%d "
+                "brse_mode=%s brse_output_mode=%s",
                 self.room_id,
                 speaker_id,
                 generation,
+                self.brse_mode,
+                self.brse_output_mode,
             )
             return
         if not self._runtime_generation_matches(speaker_id, generation, router):
@@ -2271,6 +2309,7 @@ class RoomInterpreterManager:
             created_at=state["created_at"],
             brse_livekit_identity=self.runtime.livekit_identity,
             audio_track_name=router.audio_track_name(),
+            audio_track=router.track_descriptor(),
             audience_participant_ids=sorted(self.speaker_audiences.get(speaker_id, frozenset())),
             relay_style=state.get("relay_style", "normal"),
             relay_focus=self._relay_focus_payload(speaker_id),
@@ -2300,7 +2339,7 @@ class RoomInterpreterManager:
         logger.info(
             "BRSE relay final room=%s speaker=%s utterance=%s route=%s->%s "
             "source_chars=%d relay_chars=%d latency_ms=%d audience=%d generation=%d "
-            "relay_style=%s overlap_level=%s",
+            "relay_style=%s overlap_level=%s relay_audio_enabled=%s",
             self.room_id,
             speaker_id,
             state["utterance_id"],
@@ -2313,6 +2352,7 @@ class RoomInterpreterManager:
             generation,
             state.get("relay_style", "normal"),
             state.get("public_relay_overlap_level", _OVERLAP_LEVEL_SINGLE),
+            self.relay_audio_enabled,
         )
         await self.publisher.publish_relay_transcript_final(
             transcript_id=state["relay_transcript_id"],
@@ -2326,6 +2366,7 @@ class RoomInterpreterManager:
             created_at=state["created_at"],
             brse_livekit_identity=self.runtime.livekit_identity,
             audio_track_name=router.audio_track_name(),
+            audio_track=router.track_descriptor(),
             audience_participant_ids=sorted(self.speaker_audiences.get(speaker_id, frozenset())),
             latency_ms=latency_ms,
             relay_style=state.get("relay_style", "normal"),

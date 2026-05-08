@@ -23,7 +23,7 @@ Backend của MeetQ phục vụ một meeting room realtime có các capability 
 - screen share
 - room expiry 30 phút
 - MongoDB historical persistence cho room / participant / conversation archive
-- post-meeting summary dựa trên archive thật của room
+- post-meeting recap package dựa trên archive thật của room
 - Telegram notification khi tạo room
 - Telegram notification khi user join room
 
@@ -171,6 +171,8 @@ Khối này chịu trách nhiệm:
 - spawn / stop room-level brain managers
 - gate runtime theo `brse_enabled`
 - chọn BRSE runtime behavior theo `brse_mode`: `relay` hoặc `silent_summary`
+- chọn BRSE relay output theo `brse_output_mode`: `voice_text` hoặc
+  `text_only`
 - điều phối room-level AI lifecycle
 - publish transcript / relay / status events ngược về Gateway
 
@@ -255,7 +257,7 @@ Gateway ghi side effect vào MongoDB để lưu:
 - `rooms`: metadata room, languages, BRSE mode, lifecycle timestamps, duration, participant totals.
 - `room_participants`: participant summaries và session join/leave history.
 - `room_messages`: chat messages, source transcripts, translated transcripts, và BRSE relay lines.
-- `meeting_summaries`: post-meeting summary status và generated summary gắn với `room_id`.
+- `meeting_summaries`: interim/final meeting recap status và structured recap package gắn với `room_id`.
 
 Nếu MongoDB timeout hoặc lỗi tạm thời:
 
@@ -278,22 +280,22 @@ MongoDB phải chạy với authentication:
 - Với volume Mongo cũ từng chạy no-auth, cần migrate/create user thủ công hoặc
   recreate volume cho local dev trước khi bật stack auth.
 
-### 4.2 Meeting summary
+### 4.2 Meeting recap
 
-Meeting summary là feature additive với 2 semantic tách biệt:
+Meeting recap là feature additive với 2 semantic tách biệt:
 
-- `interim`: live checkpoint summary được tạo/refresh chủ động khi meeting đang
+- `interim`: live checkpoint recap được tạo/refresh chủ động khi meeting đang
   diễn ra.
-- `final`: post-meeting summary được tạo sau khi room kết thúc.
+- `final`: post-meeting recap được tạo sau khi room kết thúc.
 
 Trigger hiện tại:
 
 - `POST /api/rooms/{room_id}/summary` khi room còn active tạo/refresh latest
-  `interim` summary từ Redis hot snapshot.
-- room chuyển sang `empty` khi participant cuối rời room tạo `final` summary.
+  `interim` recap từ Redis hot snapshot.
+- room chuyển sang `empty` khi participant cuối rời room tạo `final` recap.
 - room được archival là `expired` ở scheduled expiry / expired join / expired
-  websocket path tạo `final` summary.
-- `POST /api/rooms/{room_id}/summary?type=final` có thể tạo/trả final summary
+  websocket path tạo `final` recap.
+- `POST /api/rooms/{room_id}/summary?type=final` có thể tạo/trả final recap
   sau khi room đã terminal.
 
 Flow:
@@ -304,16 +306,36 @@ Flow:
    participants, recent final transcripts/relay lines, và recent chat messages.
 4. Với `final`, Mongo archive cập nhật terminal lifecycle trước, rồi source lấy
    từ `rooms`, `room_participants`, và chronological `room_messages`.
-5. `server.brain.meeting_summary` gọi model text-only để tạo grounded summary.
+5. `server.brain.meeting_summary` gọi model text-only để tạo grounded recap
+   package.
 6. Kết quả được lưu vào `meeting_summaries`; room archive cập nhật
    `rooms.meeting_summaries.{interim|final}`. Với final, backend cũng giữ
    `rooms.meeting_summary` legacy pointer để tương thích contract cũ.
+
+Canonical recap package fields:
+
+- `summary_text`: một đoạn tóm tắt ngắn toàn cuộc họp.
+- `key_points`: các điểm chính đã thảo luận, không phải việc cần làm.
+- `action_items`: string list cho việc cần làm tiếp khi source nói đủ rõ.
+- `decisions`: quyết định/chốt rõ ràng; không có thì để `[]`.
+- `participant_highlights`: đóng góp ngắn gọn theo participant, gồm
+  `participant_id`, `display_name`, và `summary`.
+
+Backward-compatible aliases:
+
+- `highlights` vẫn được trả và mirror `key_points`.
+- `participant_summary` vẫn được trả và mirror `participant_highlights`.
+- legacy object-shaped `action_items` trong Mongo được normalize thành
+  canonical string list khi đọc.
 
 Grounding policy:
 
 - source transcript là evidence chính
 - trong `brse_mode=silent_summary`, source transcript vẫn được archive làm
   evidence cho summary dù relay audio/text realtime bị suppress
+- trong `brse_mode=relay` + `brse_output_mode=text_only`, relay text realtime
+  vẫn được publish như BRSE relay thường, nhưng relay audio của BRSE bị
+  suppress ở media output path
 - relay / translated lines chỉ hỗ trợ hiểu nội dung đa ngôn ngữ
 - chat được đưa vào nếu có trong archive
 - model không được thêm quyết định, owner, deadline, hoặc next step nếu source

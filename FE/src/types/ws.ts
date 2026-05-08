@@ -1,6 +1,8 @@
 import type {
   AudioOutputDescriptor,
   AudioRouting,
+  BrseMode,
+  BrseOutputMode,
   ChatMessage,
   ChatTranslationMode,
   InterpreterMode,
@@ -33,6 +35,8 @@ export type RoomSnapshotEvent = WsEnvelope<
     room: {
       state: "created" | "active" | "empty";
       brse_enabled?: boolean;
+      brse_mode?: BrseMode;
+      brse_output_mode?: BrseOutputMode;
       participant_limit: number | null;
       expires_at?: string;
       supported_languages: Language[];
@@ -233,6 +237,9 @@ export type RoomBrseUpdatedEvent = WsEnvelope<
   {
     room_id: string;
     brse_enabled: boolean;
+    brse_mode?: BrseMode;
+    brse_output_mode?: BrseOutputMode;
+    audio_routing?: AudioRouting;
     timestamp: string;
     changed_by?: string | null;
     reason?: string | null;

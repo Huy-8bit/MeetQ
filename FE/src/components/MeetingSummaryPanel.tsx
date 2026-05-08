@@ -1,4 +1,6 @@
 import type {
+  MeetingSummaryActionItem,
+  MeetingSummaryActionItemPayload,
   MeetingSummaryResponse,
   MeetingSummaryType,
 } from "../types/api";
@@ -202,10 +204,24 @@ export function MeetingSummaryPanel({
               <p className="summary-main-text">{visibleSummary!.summary_text}</p>
             ) : null}
 
-            <SummaryList title="Highlights" items={visibleSummary!.highlights ?? []} />
+            <SummaryList
+              title="Key points"
+              items={visibleSummary!.key_points ?? visibleSummary!.highlights ?? []}
+            />
             <SummaryList title="Decisions" items={visibleSummary!.decisions ?? []} />
-            <ActionItems items={visibleSummary!.action_items ?? []} />
-            <ParticipantSummaries items={visibleSummary!.participant_summary ?? []} />
+            <ActionItems
+              items={normalizeActionItemsForDisplay(
+                visibleSummary!.action_items,
+                visibleSummary!.action_item_details,
+              )}
+            />
+            <ParticipantSummaries
+              items={
+                visibleSummary!.participant_highlights?.length
+                  ? visibleSummary!.participant_highlights
+                  : visibleSummary!.participant_summary ?? []
+              }
+            />
             <SourceStats stats={visibleSummary!.source_stats} />
           </article>
         ) : null}
@@ -243,7 +259,7 @@ function SummaryList({ title, items }: { title: string; items: string[] }) {
 function ActionItems({
   items,
 }: {
-  items: NonNullable<MeetingSummaryResponse["action_items"]>;
+  items: MeetingSummaryActionItem[];
 }) {
   if (items.length === 0) {
     return null;
@@ -367,9 +383,45 @@ function hasSummaryContent(summary: MeetingSummaryResponse | null): boolean {
 
   return Boolean(
     summary.summary_text?.trim()
+      || summary.key_points?.length
       || summary.highlights?.length
       || summary.decisions?.length
       || summary.action_items?.length
+      || summary.participant_highlights?.length
       || summary.participant_summary?.length,
   );
+}
+
+function normalizeActionItemsForDisplay(
+  items: MeetingSummaryResponse["action_items"],
+  details: MeetingSummaryResponse["action_item_details"],
+): MeetingSummaryActionItem[] {
+  const sourceItems =
+    Array.isArray(details) && details.length > 0 ? details : items;
+  if (!Array.isArray(sourceItems)) {
+    return [];
+  }
+
+  const normalized: MeetingSummaryActionItem[] = [];
+  for (const item of sourceItems as MeetingSummaryActionItemPayload[]) {
+    if (typeof item === "string") {
+      const text = item.trim();
+      if (text) {
+        normalized.push({ text, owner: null, due: null });
+      }
+      continue;
+    }
+
+    if (!item || typeof item.text !== "string" || !item.text.trim()) {
+      continue;
+    }
+
+    normalized.push({
+      text: item.text.trim(),
+      owner: typeof item.owner === "string" ? item.owner : null,
+      due: typeof item.due === "string" ? item.due : null,
+    });
+  }
+
+  return normalized;
 }

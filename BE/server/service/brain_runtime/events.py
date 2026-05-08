@@ -119,6 +119,7 @@ class RedisEventPublisher:
         created_at: str,
         brse_livekit_identity: str,
         audio_track_name: Optional[str] = None,
+        audio_track: Optional[Dict[str, Any]] = None,
         audience_participant_ids: Optional[list[str]] = None,
         fallback_used: bool = False,
         relay_style: str = "normal",
@@ -139,6 +140,7 @@ class RedisEventPublisher:
                 created_at=created_at,
                 brse_livekit_identity=brse_livekit_identity,
                 audio_track_name=audio_track_name,
+                audio_track=audio_track,
                 audience_participant_ids=audience_participant_ids or [],
                 fallback_used=fallback_used,
                 is_final=False,
@@ -162,6 +164,7 @@ class RedisEventPublisher:
         created_at: str,
         brse_livekit_identity: str,
         audio_track_name: Optional[str] = None,
+        audio_track: Optional[Dict[str, Any]] = None,
         audience_participant_ids: Optional[list[str]] = None,
         fallback_used: bool = False,
         latency_ms: Optional[int] = None,
@@ -181,6 +184,7 @@ class RedisEventPublisher:
             created_at=created_at,
             brse_livekit_identity=brse_livekit_identity,
             audio_track_name=audio_track_name,
+            audio_track=audio_track,
             audience_participant_ids=audience_participant_ids or [],
             fallback_used=fallback_used,
             is_final=True,
@@ -318,6 +322,7 @@ class RedisEventPublisher:
         created_at: str,
         brse_livekit_identity: str,
         audio_track_name: Optional[str],
+        audio_track: Optional[Dict[str, Any]],
         audience_participant_ids: list[str],
         fallback_used: bool,
         is_final: bool,
@@ -333,6 +338,7 @@ class RedisEventPublisher:
             brse_livekit_identity=brse_livekit_identity,
             audio_track_name=audio_track_name,
             audience_participant_ids=audience_participant_ids,
+            audio_track=audio_track,
         )
         payload = {
             "transcript_id": transcript_id,
@@ -401,6 +407,8 @@ class RedisEventPublisher:
                 "track_sid",
                 "output_suppressed",
                 "suppressed_reason",
+                "relay_audio_enabled",
+                "brse_output_mode",
             ):
                 if key in audio_track:
                     payload[key] = audio_track.get(key)

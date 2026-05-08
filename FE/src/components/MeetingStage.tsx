@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { ParticipantSnapshot } from "../types/api";
 import type { ScreenShareFeed, VideoFeed } from "../types/livekit";
+import type { BrseRoomMode } from "../lib/brseModes";
 import { preferScreenShareHighQuality } from "../lib/livekit";
 import { ParticipantTile } from "./ParticipantTile";
 import { VideoTrackView } from "./MediaElements";
@@ -14,6 +15,8 @@ interface MeetingStageProps {
   selectedScreenFeed: ScreenShareFeed | null;
   activeScreenShareCount: number;
   brseEnabled: boolean;
+  brseRoomMode: BrseRoomMode;
+  brseAudioExpected: boolean;
   relayStatusLabel: string;
   sidePanelOpen?: boolean;
 }
@@ -25,6 +28,8 @@ export function MeetingStage({
   selectedScreenFeed,
   activeScreenShareCount,
   brseEnabled,
+  brseRoomMode,
+  brseAudioExpected,
   relayStatusLabel,
   sidePanelOpen: _sidePanelOpen,
 }: MeetingStageProps) {
@@ -54,6 +59,8 @@ export function MeetingStage({
           selectedScreenSharer={selectedScreenSharer}
           selectedScreenFeed={selectedScreenFeed}
           brseEnabled={brseEnabled}
+          brseRoomMode={brseRoomMode}
+          brseAudioExpected={brseAudioExpected}
           relayStatusLabel={relayStatusLabel}
         />
       ) : (
@@ -61,6 +68,8 @@ export function MeetingStage({
           videos={videos}
           participantById={participantById}
           brseEnabled={brseEnabled}
+          brseRoomMode={brseRoomMode}
+          brseAudioExpected={brseAudioExpected}
           relayStatusLabel={relayStatusLabel}
         />
       )}
@@ -74,6 +83,8 @@ function SharedScreenStage({
   selectedScreenSharer,
   selectedScreenFeed,
   brseEnabled,
+  brseRoomMode,
+  brseAudioExpected,
   relayStatusLabel,
 }: {
   videos: VideoFeed[];
@@ -81,6 +92,8 @@ function SharedScreenStage({
   selectedScreenSharer: ParticipantSnapshot;
   selectedScreenFeed: ScreenShareFeed | null;
   brseEnabled: boolean;
+  brseRoomMode: BrseRoomMode;
+  brseAudioExpected: boolean;
   relayStatusLabel: string;
 }) {
   useEffect(() => {
@@ -108,6 +121,8 @@ function SharedScreenStage({
         videos={videos}
         participantById={participantById}
         brseEnabled={brseEnabled}
+        brseRoomMode={brseRoomMode}
+        brseAudioExpected={brseAudioExpected}
         relayStatusLabel={relayStatusLabel}
       />
     </div>
@@ -206,11 +221,15 @@ function ParticipantGrid({
   videos,
   participantById,
   brseEnabled,
+  brseRoomMode,
+  brseAudioExpected,
   relayStatusLabel,
 }: {
   videos: VideoFeed[];
   participantById: Map<string, ParticipantSnapshot>;
   brseEnabled: boolean;
+  brseRoomMode: BrseRoomMode;
+  brseAudioExpected: boolean;
   relayStatusLabel: string;
 }) {
   return (
@@ -226,6 +245,8 @@ function ParticipantGrid({
             feed={feed}
             participant={participantById.get(feed.participantId)}
             brseEnabled={brseEnabled}
+            brseRoomMode={brseRoomMode}
+            brseAudioExpected={brseAudioExpected}
             relayStatusLabel={relayStatusLabel}
           />
         ))
@@ -238,11 +259,15 @@ function ParticipantFilmstrip({
   videos,
   participantById,
   brseEnabled,
+  brseRoomMode,
+  brseAudioExpected,
   relayStatusLabel,
 }: {
   videos: VideoFeed[];
   participantById: Map<string, ParticipantSnapshot>;
   brseEnabled: boolean;
+  brseRoomMode: BrseRoomMode;
+  brseAudioExpected: boolean;
   relayStatusLabel: string;
 }) {
   if (videos.length === 0) {
@@ -257,6 +282,8 @@ function ParticipantFilmstrip({
           feed={feed}
           participant={participantById.get(feed.participantId)}
           brseEnabled={brseEnabled}
+          brseRoomMode={brseRoomMode}
+          brseAudioExpected={brseAudioExpected}
           relayStatusLabel={relayStatusLabel}
         />
       ))}
@@ -268,11 +295,15 @@ function StageTile({
   feed,
   participant,
   brseEnabled,
+  brseRoomMode,
+  brseAudioExpected,
   relayStatusLabel,
 }: {
   feed: VideoFeed;
   participant?: ParticipantSnapshot;
   brseEnabled: boolean;
+  brseRoomMode: BrseRoomMode;
+  brseAudioExpected: boolean;
   relayStatusLabel: string;
 }) {
   const isBrse = feed.kind === "virtual_brse" || feed.isVirtual;
@@ -284,6 +315,8 @@ function StageTile({
       isHost={!!participant?.is_host}
       isMutedByHost={!!participant?.muted_by_host}
       isBrseEnabled={brseEnabled}
+      brseRoomMode={brseRoomMode}
+      brseAudioExpected={brseAudioExpected}
       relayStatusLabel={relayStatusLabel}
       label={
         feed.isLocal
