@@ -1,42 +1,40 @@
 export type AppThemeMode = "light" | "dark";
 export type RoomLayoutMode = "stage-focus" | "balanced" | "compact";
 
-const THEME_STORAGE_KEY = "brseai_theme_mode";
 const ROOM_LAYOUT_STORAGE_KEY = "brseai_room_layout_mode";
 
-const DEFAULT_THEME_MODE: AppThemeMode = "dark";
 const DEFAULT_ROOM_LAYOUT_MODE: RoomLayoutMode = "balanced";
 
-export function loadThemePreference(): AppThemeMode {
-  if (typeof window === "undefined") {
-    return DEFAULT_THEME_MODE;
-  }
-
-  const stored = readStorageValue(THEME_STORAGE_KEY);
-  return isAppThemeMode(stored) ? stored : DEFAULT_THEME_MODE;
-}
-
-export function saveThemePreference(theme: AppThemeMode): void {
-  if (typeof window === "undefined") {
-    return;
-  }
-
-  writeStorageValue(THEME_STORAGE_KEY, theme);
+function getOsTheme(): AppThemeMode {
+  if (typeof window === "undefined") return "light";
+  return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
 }
 
 export function applyThemePreference(theme: AppThemeMode): void {
-  if (typeof document === "undefined") {
-    return;
-  }
-
+  if (typeof document === "undefined") return;
   document.documentElement.dataset.theme = theme;
   document.documentElement.style.setProperty("color-scheme", theme);
 }
 
 export function initThemePreference(): AppThemeMode {
-  const theme = loadThemePreference();
+  const theme = getOsTheme();
   applyThemePreference(theme);
+
+  if (typeof window !== "undefined") {
+    window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", (e) => {
+      applyThemePreference(e.matches ? "dark" : "light");
+    });
+  }
+
   return theme;
+}
+
+export function loadThemePreference(): AppThemeMode {
+  return getOsTheme();
+}
+
+export function saveThemePreference(_theme: AppThemeMode): void {
+  // Theme is driven by OS; no manual override saved.
 }
 
 export function loadRoomLayoutPreference(): RoomLayoutMode {
