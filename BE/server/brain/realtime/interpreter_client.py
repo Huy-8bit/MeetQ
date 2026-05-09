@@ -708,17 +708,21 @@ class InterpreterRealtimeClient(RealtimeClient):
                 )
                 + " Summarize the validated overlap snippets below only. "
                 "Do not translate or summarize anything outside these snippets. "
-                "Do not use speaker labels, participant names, or narrator wording."
+                "Do not add facts, decisions, or context not present in the snippets. "
+                "Do not use speaker labels, participant names, or narrator wording. "
+                "Stop immediately after the summary."
             )
         else:
             instructions = (
                 self._current_instructions()
                 + " Relay the following validated source transcript only. "
-                "Produce the direct interpreted message only, as if speaking for the original speaker. "
-                "Do not say or imply that a person said, is saying, mentioned, or discussed something. "
+                "Output only the direct interpreted message — nothing else. "
+                "Do not add explanation, qualification, context, or commentary. "
+                "Do not reference who said it. "
+                "Do not infer meaning beyond what the text says. "
                 "Do not use prior audio or conversation context. "
-                "If this text is clear enough for a faithful relay, provide the relay; "
-                "output nothing only when the text is insufficient, unclear, or incomplete."
+                "Preserve technical terms, code terms, and product names exactly as they appear. "
+                "Stop immediately after the relay."
             )
         payload = {
             "type": "response.create",

@@ -1176,10 +1176,12 @@ class RoomInterpreterManager:
         *,
         speaker_id: str,
         state: Dict[str, Any],
+        overlap_level: Optional[str] = None,
     ) -> None:
         audience_count = len(self.speaker_audiences.get(speaker_id, frozenset()))
         relay_style = str(state.get("relay_style") or "normal")
-        overlap_level = self._overlap_level()
+        if overlap_level is None:
+            overlap_level = self._overlap_level()
         decision = self.policy.decide_public_relay(
             speaker_id=speaker_id,
             utterance_id=str(state.get("utterance_id") or ""),
@@ -1388,6 +1390,7 @@ class RoomInterpreterManager:
         speaker_id: str,
         target_lang: str,
         current_state: Dict[str, Any],
+        overlap_level: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
         return self.overlap.build_summary_plan_if_chaotic(
             speaker_id=speaker_id,
@@ -1396,6 +1399,7 @@ class RoomInterpreterManager:
             pending_relay_count=self._pending_relay_count(),
             transcript_states=self.transcript_states,
             relay_source_is_active_response=self._relay_source_is_active_response,
+            overlap_level=overlap_level,
         )
 
     def _relay_source_is_active_response(self, relay_source_id: str) -> bool:
@@ -1739,12 +1743,15 @@ class RoomInterpreterManager:
                     speaker_id=speaker_id,
                     state=state,
                 )
+                # Compute overlap_level once and reuse; avoids triple computation
+                # across _build_summary_plan_if_chaotic and _apply_public_relay_policy.
                 overlap_level = self._overlap_level()
                 if self.relay_output_enabled:
                     summary_plan = self._build_summary_plan_if_chaotic(
                         speaker_id=speaker_id,
                         target_lang=target_lang,
                         current_state=state,
+                        overlap_level=overlap_level,
                     )
                     candidate = self.policy.select_relay_candidate(
                         speaker_id=speaker_id,
@@ -1767,9 +1774,11 @@ class RoomInterpreterManager:
                     state["relay_source_text"] = normalized_text
                     state["relay_candidate_reason"] = "relay_output_disabled"
                     state["relay_candidate_metadata"] = {}
+                # Pass pre-computed overlap_level to avoid a third call
                 self._apply_public_relay_policy(
                     speaker_id=speaker_id,
                     state=state,
+                    overlap_level=overlap_level,
                 )
                 logger.info(
                     "BRSE source transcript completed room=%s speaker=%s utterance=%s "

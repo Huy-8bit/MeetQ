@@ -14,18 +14,18 @@ BRSE_RELAY_LANGUAGE_MAP: Dict[str, str] = dict(DEFAULT_RELAY_LANGUAGE_MAP)
 INTERPRETER_VAD_CONFIG = {
     "type": "server_vad",
     "threshold": 0.64,
-    "prefix_padding_ms": 320,
-    "silence_duration_ms": 1350,
+    "prefix_padding_ms": 300,
+    "silence_duration_ms": 700,  # reduced from 1350 — primary latency fix
     "create_response": False,
     "interrupt_response": False,
 }
 
-INTERPRETER_TEMPERATURE = 0.6
+INTERPRETER_TEMPERATURE = 0.4  # reduced from 0.6 — less drift/hallucination
 INTERPRETER_INPUT_TRANSCRIPTION_MODEL = "gpt-4o-transcribe"
 INTERPRETER_INPUT_TRANSCRIPTION_PROMPT = build_technical_transcription_prompt()
-INTERPRETER_FINAL_TRANSCRIPT_HOLD_MS = 240
+INTERPRETER_FINAL_TRANSCRIPT_HOLD_MS = 80  # reduced from 240 — fast relay after ASR
 INTERPRETER_VOICE = "alloy"
-INTERPRETER_MAX_RESPONSE_OUTPUT_TOKENS = 4096
+INTERPRETER_MAX_RESPONSE_OUTPUT_TOKENS = 300  # reduced from 4096 — cap relay length, prevent elaboration
 INTERPRETER_INPUT_QUEUE_MAXSIZE = 420
 INTERPRETER_INPUT_WARMUP_CHUNKS = 45
 INTERPRETER_SEND_QUEUE_MAXSIZE = 420

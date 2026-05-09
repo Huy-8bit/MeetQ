@@ -423,15 +423,21 @@ def assess_source_transcript(
         if final
         else SOURCE_MIN_PARTIAL_MEANINGFUL_TOKENS
     )
+    # Short text with known protected technical terms passes length check.
+    # Handles standalone terms like "k8s", "kubectl", "CI/CD" as valid short turns.
+    has_protected_terms = bool(technical.protected_terms and not technical.ambiguous_fragments)
     if meaningful_chars < min_chars:
-        return False, "too_short_transcript", normalized, signal
+        if not has_protected_terms:
+            return False, "too_short_transcript", normalized, signal
+        signal["short_protected_term_bypass"] = True
     if len(meaningful_tokens) < min_tokens:
         longest_token = max((len(token) for token in meaningful_tokens), default=0)
-        if longest_token < min_chars:
+        if longest_token < min_chars and not has_protected_terms:
             return False, "too_few_meaningful_tokens", normalized, signal
 
     if final and duration_ms is not None and duration_ms < SOURCE_MIN_SPEECH_DURATION_MS:
-        return False, "speech_too_short", normalized, signal
+        if not has_protected_terms:
+            return False, "speech_too_short", normalized, signal
 
     return True, "ok", normalized, signal
 

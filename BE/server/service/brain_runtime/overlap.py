@@ -223,6 +223,13 @@ class OverlapManager:
         )
 
     def overlap_level(self, *, pending_relay_count: int) -> str:
+        # Fast path: no active overlap indicators — skip expensive context iteration.
+        # Safe because: no blocked speakers means no active overlap suppression,
+        # no window means no recent multi-speaker capture, no pending relays means
+        # no queued output contention. Single speaker meeting hits this on every turn.
+        if not self.blocked_speakers and self.window is None and pending_relay_count == 0:
+            return OVERLAP_LEVEL_SINGLE
+
         recent_turns, distinct_speakers = self.recent_overlap_context()
         window_turns = self.window_turns()
         window_speakers = {
@@ -371,8 +378,10 @@ class OverlapManager:
         pending_relay_count: int,
         transcript_states: Dict[str, Dict[str, Any]],
         relay_source_is_active_response: Callable[[str], bool],
+        overlap_level: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
-        overlap_level = self.overlap_level(pending_relay_count=pending_relay_count)
+        if overlap_level is None:
+            overlap_level = self.overlap_level(pending_relay_count=pending_relay_count)
         if overlap_level != OVERLAP_LEVEL_HEAVY:
             return None
 
