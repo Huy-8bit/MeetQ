@@ -403,7 +403,6 @@ export function HomePage() {
       {/* Nav — absolute top */}
       <nav className="hp-nav">
         <div className="hp-nav-brand">
-          <span className="hp-nav-logo">MQ</span>
           <span className="hp-nav-name">MeetQ</span>
         </div>
         <Link to="/test" className="hp-nav-link">Mic test</Link>

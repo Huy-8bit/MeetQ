@@ -39,7 +39,7 @@ from server.shared.logging_utils import get_logger, print_translation
 # ---------------------------------------------------------------------------
 
 REALTIME_URL_TEMPLATE = "wss://api.openai.com/v1/realtime?model={model}"
-DEFAULT_MODEL = "gpt-realtime-mini"
+DEFAULT_MODEL = "gpt-realtime"
 SAMPLE_RATE = 16000
 SPEAKER_SAMPLE_RATE = 24000   # Realtime API outputs PCM16 at 24kHz
 MAX_RECONNECT_ATTEMPTS = 5
@@ -58,7 +58,7 @@ def _build_session_update(instructions: str, enable_audio: bool) -> dict:
         "modalities": modalities,
         "instructions": instructions,
         "input_audio_format": "pcm16",
-        "input_audio_transcription": {"model": "whisper-1"},
+        "input_audio_transcription": {"model": "gpt-4o-transcribe"},
         "turn_detection": {
             "type": "server_vad",
             "threshold": 0.5,

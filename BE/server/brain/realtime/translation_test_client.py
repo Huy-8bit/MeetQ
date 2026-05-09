@@ -23,6 +23,7 @@ from typing import Callable, Optional
 from server.shared.audio import AudioInput, AudioMetadata
 from server.brain.realtime.interpreter_client import InterpreterRealtimeClient
 from server.brain.realtime.session_config import (
+    INTERPRETER_INPUT_TRANSCRIPTION_MODEL,
     build_interpreter_instructions,
     INTERPRETER_TEMPERATURE,
     INTERPRETER_VAD_CONFIG,
@@ -108,7 +109,7 @@ def _build_test_session_update(src_lang: str, tgt_lang: str) -> dict:
             "modalities": ["text"],  # text-only; no audio output for test mode
             "instructions": instructions,
             "input_audio_format": "pcm16",
-            "input_audio_transcription": {"model": "whisper-1"},
+            "input_audio_transcription": {"model": INTERPRETER_INPUT_TRANSCRIPTION_MODEL},
             "turn_detection": dict(_TEST_VAD_CONFIG),
             "temperature": INTERPRETER_TEMPERATURE,
             "max_response_output_tokens": INTERPRETER_MAX_RESPONSE_OUTPUT_TOKENS,
@@ -133,7 +134,7 @@ class TranslationTestClient:
         api_key: str,
         src_lang: str,
         tgt_lang: str,
-        model: str = "gpt-realtime-mini",
+        model: str = "gpt-realtime",
     ) -> None:
         self._api_key = api_key
         self._src_lang = src_lang

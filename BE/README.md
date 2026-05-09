@@ -67,7 +67,8 @@ pip install -r requirements.txt
 cp .env.example .env
 # edit .env and set:
 #   OPENAI_API_KEY=sk-...
-#   OPENAI_REALTIME_MODEL=gpt-realtime-mini
+#   OPENAI_REALTIME_MODEL=gpt-realtime
+#   OPENAI_REALTIME_TRANSCRIPTION_MODEL=gpt-4o-transcribe
 #   DISCORD_BOT_TOKEN=... (for Discord mode)
 ```
 
@@ -75,7 +76,8 @@ or:
 
 ```bash
 export OPENAI_API_KEY="sk-..."
-export OPENAI_REALTIME_MODEL="gpt-realtime-mini"  # optional override
+export OPENAI_REALTIME_MODEL="gpt-realtime"  # optional override
+export OPENAI_REALTIME_TRANSCRIPTION_MODEL="gpt-4o-transcribe"  # optional override
 export DISCORD_BOT_TOKEN="..."  # for Discord mode
 ```
 
@@ -262,7 +264,7 @@ Default auto table in code:
 | `--list-speakers` | off | list output devices and exit |
 | `--seconds` | `5.0` | fallback clip duration |
 | `--sample-rate` | `None` | legacy; fallback uses `sample-rate` or `input-rate` |
-| `--model` | `gpt-realtime-mini` | overridable via `OPENAI_REALTIME_MODEL` or explicit flag |
+| `--model` | `gpt-realtime` | overridable via `OPENAI_REALTIME_MODEL` or explicit flag |
 | `--transcribe-model` | `whisper-1` | fallback only |
 | `--chat-model` | `gpt-4o-mini` | fallback only |
 | `--src` | `auto` | language source |

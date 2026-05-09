@@ -1,5 +1,179 @@
 # Backend Implementation State
 
+## Turn Update: 2026-05-09 BRSE Translation Quality / Conservative Relay Gate
+
+- Time: 2026-05-09T17:58:22+07:00
+- Mode: CODE-ONLY
+- Status: implemented
+- Testing deferred: yes, per instruction
+
+### Objective
+
+Improve BRSE capture, translation, and relay decisioning so the runtime
+translates less aggressively but with materially higher confidence. The goal is
+to stop publishing translations from noisy source, filler, overlap fragments, or
+unfinished turns while preserving the normal single-speaker meeting path.
+
+### Read Status
+
+- Required docs read:
+  - `docs/backend/README.md`
+  - `docs/backend/INTERPRETER_DESIGN.md`
+  - `docs/backend/IMPLEMENTATION_STATE.md`
+  - `docs/backend/API_CONTRACT.md`
+- Required backend/runtime files read:
+  - `BE/server/brain/realtime/client.py`
+  - `BE/server/brain/realtime/interpreter_client.py`
+  - `BE/server/brain/realtime/session_config.py`
+  - `BE/server/brain/realtime/source_policy.py`
+  - `BE/server/brain/prompts/language.py`
+  - `BE/server/service/brain_runtime/room_manager.py`
+  - `BE/server/service/media/audio_input.py`
+  - `BE/server/service/media/output_router.py`
+- Related fallback / transcript / overlap / summary files read:
+  - `BE/server/brain/fallback/pipeline.py`
+  - `BE/server/brain/realtime/translation_test_client.py`
+  - `BE/server/service/gateway/chat_translator.py`
+  - `BE/server/config.py`
+
+### Root Cause Traced
+
+- Model quality was a real contributor: the production default had previously
+  been moved from the higher-quality realtime model to `gpt-realtime-mini` for
+  cost. The existing state file already noted quality risk for that change.
+- ASR quality was also constrained by hardcoded `whisper-1` inside realtime
+  session updates. That made the relay path vulnerable to weak source text
+  before translation even started.
+- Source policy was too permissive:
+  - final source threshold allowed 4 meaningful chars and 1 meaningful token,
+    so many fragments could become `source_valid=true`;
+  - final source validation did not reject obvious hanging fragments ending in
+    connectors, commas, ellipses, or incomplete clause openings;
+  - short speech under roughly half a second could still pass if it contained
+    enough characters.
+- Turn-complete behavior was still eager for product use: server VAD silence
+  was 1050 ms and relay response creation could happen immediately after the
+  transcript final, leaving little buffer for a speaker who had not actually
+  finished the thought.
+- Overlap handling had improved in the previous turn, but blocked-overlap
+  source could still be approved as normal literal relay unless the whole room
+  had escalated to heavy overlap. That allowed light overlap/room bleed to leak
+  as confident public translation.
+- Output gating protected against narrator-style text, but released public
+  audio/text as soon as the first usable-looking delta arrived. It did not block
+  model meta-output such as "I can't hear/translate" or equivalent unclear
+  wording from becoming public if the model produced it.
+- Prompt policy was already source-transcript-first, but it did not explicitly
+  tell the realtime model not to repair likely ASR mistakes or to prefer a
+  small delay/suppression over a guessed relay.
+
+### Model Strategy
+
+- Default realtime relay model is now `gpt-realtime`, replacing
+  `gpt-realtime-mini`, because current product risk is accuracy rather than
+  cost. `OPENAI_REALTIME_MODEL` remains the rollback/override path.
+- Realtime input transcription now defaults to `gpt-4o-transcribe` instead of
+  `whisper-1` for stronger source transcript quality before translation.
+- Added `OPENAI_REALTIME_TRANSCRIPTION_MODEL` /
+  `openai_realtime_transcription_model` so deployments can explicitly roll back
+  transcription to `whisper-1` if account/model availability requires it.
+- Overlap summary relay continues through the realtime model path; no separate
+  summary model was introduced, keeping architecture boundaries unchanged.
+- Meeting recap summary model remains `gpt-4o-mini`; it is not part of live
+  relay decisioning.
+
+### Source Policy / Turn Completeness Changes
+
+- Raised final source signal requirements:
+  - final meaningful chars: 4 -> 5
+  - final meaningful tokens: 1 -> 2, with long single-token CJK/Japanese turns
+    still allowed by existing longest-token logic
+  - partial meaningful chars: 8 -> 10
+  - normal speech minimum duration: 420 ms -> 650 ms
+  - short meaningful speech minimum duration: 250 ms -> 320 ms
+- Expanded short meaningful phrases so concise meeting turns like thanks,
+  apologies, agreement, `お願いします`, `大丈夫です`, `ありがとうございます`,
+  Korean/Chinese thanks/apologies, and Vietnamese `được`, `đồng ý`, `cảm ơn`
+  remain relayable.
+- Added final-source rejection for incomplete fragments:
+  - connector / comma / ellipsis endings;
+  - hanging English starts such as `I think`, `we need to`, `can you`;
+  - hanging Vietnamese starts such as `em nghĩ là`, `chúng ta cần`, `nên`,
+    `thì`, `là`;
+  - common Japanese dangling fillers/connectors such as `けど`, `ので`,
+    `えっと`, `あの`.
+- Server VAD is less eager:
+  - threshold: 0.58 -> 0.64
+  - prefix padding: 300 ms -> 320 ms
+  - silence duration: 1050 ms -> 1350 ms
+- Added a 240 ms final-transcript hold before normal relay response creation,
+  skipped for overlap-summary relay, to reduce immediate translation of
+  just-finished or borderline turns.
+
+### Relay / Output Gating Changes
+
+- Normal literal relay from a speaker blocked due to overlap is now suppressed
+  with reason `overlap_blocked_literal_relay_suppressed`. Those turns can still
+  be captured internally and contribute to overlap summary relay.
+- Heavy overlap literal relay remains suppressed; summary relay remains the
+  approved fallback style.
+- Recent overlap context now keeps 9 seconds to match the 9-second overlap
+  understanding window.
+- Public relay approved logs now include signal details, not only the approval
+  reason.
+- Added relay output text assessment:
+  - rejects empty or punctuation-only relay output;
+  - rejects meta/unclear outputs like "I can't hear/translate", "unclear",
+    `không nghe rõ`, `聞き取れません`, `无法翻译`, and equivalent phrases;
+  - holds public output until partial relay text has enough meaningful signal,
+    while still allowing short final relay text such as yes/no confirmations.
+- Audio remains held behind the text gate until output is usable; rejected
+  output clears the public audio buffer.
+
+### Prompt Changes
+
+- Interpreter prompt now explicitly says to translate less but more correctly:
+  brief delay/silence is preferable to confident relay from weak source.
+- Source transcript policy now tells the model not to repair likely ASR
+  mistakes, not just not to guess missing words.
+- Relay policy now emphasizes natural, idiomatic, meaning-preserving meeting
+  interpretation over awkward word-by-word translation.
+
+### Observability
+
+- Session config logs now include realtime VAD, transcription model, and
+  temperature.
+- Room runtime logs now include selected realtime model and input transcription
+  model for each BRSE speaker runtime.
+- Existing source accepted/rejected, public relay approved/suppressed, pending
+  relay dropped, overlap window, and overlap-summary logs remain in place.
+
+### Files Modified
+
+- `.env.example`
+- `BE/.env.example`
+- `BE/README.md`
+- `BE/server/config.py`
+- `BE/server/brain/realtime/client.py`
+- `BE/server/brain/realtime/interpreter_client.py`
+- `BE/server/brain/realtime/session_config.py`
+- `BE/server/brain/realtime/source_policy.py`
+- `BE/server/brain/realtime/translation_test_client.py`
+- `BE/server/service/brain_runtime/room_manager.py`
+- `docker-compose.yml`
+- `docker-compose.prod.yml`
+- `docs/backend/IMPLEMENTATION_STATE.md`
+
+### Verification
+
+- Full test suite not run, per CODE-ONLY instruction.
+- New tests not added.
+- Existing tests not modified.
+- Lightweight backend compile only:
+  - `PYTHONPATH=BE python -m py_compile BE/server/brain/realtime/source_policy.py BE/server/brain/realtime/session_config.py BE/server/brain/realtime/interpreter_client.py BE/server/service/brain_runtime/room_manager.py BE/server/brain/realtime/client.py BE/server/brain/realtime/translation_test_client.py BE/server/config.py`
+
+---
+
 ## Turn Update: 2026-05-09 BRSE Overlap Summary Relay Runtime Fix
 
 - Time: 2026-05-09T17:07:48+07:00

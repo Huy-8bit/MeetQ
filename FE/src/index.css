@@ -6171,14 +6171,9 @@ html[data-theme="dark"] .translation-text-box-right .translation-text-content {
 .hp-nav-logo {
   width: 32px;
   height: 32px;
-  display: grid;
-  place-items: center;
   border-radius: 8px;
-  background: var(--hp-nav-logo-bg);
-  color: var(--hp-nav-logo-color);
-  font-size: 0.66rem;
-  font-weight: 900;
-  letter-spacing: 0.04em;
+  object-fit: contain;
+  display: block;
 }
 
 .hp-nav-name {

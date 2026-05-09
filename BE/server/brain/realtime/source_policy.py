@@ -4,12 +4,12 @@ import re
 from typing import Any, Dict, Optional
 
 
-SOURCE_MIN_FINAL_MEANINGFUL_CHARS = 4
-SOURCE_MIN_FINAL_MEANINGFUL_TOKENS = 1
-SOURCE_MIN_PARTIAL_MEANINGFUL_CHARS = 8
+SOURCE_MIN_FINAL_MEANINGFUL_CHARS = 5
+SOURCE_MIN_FINAL_MEANINGFUL_TOKENS = 2
+SOURCE_MIN_PARTIAL_MEANINGFUL_CHARS = 10
 SOURCE_MIN_PARTIAL_MEANINGFUL_TOKENS = 2
-SOURCE_MIN_SPEECH_DURATION_MS = 420
-SOURCE_MIN_SHORT_MEANINGFUL_DURATION_MS = 250
+SOURCE_MIN_SPEECH_DURATION_MS = 650
+SOURCE_MIN_SHORT_MEANINGFUL_DURATION_MS = 320
 PUBLIC_RELAY_MIN_MEANINGFUL_CHARS = SOURCE_MIN_FINAL_MEANINGFUL_CHARS
 PUBLIC_RELAY_MIN_MEANINGFUL_TOKENS = SOURCE_MIN_FINAL_MEANINGFUL_TOKENS
 PUBLIC_RELAY_MIN_SPEECH_DURATION_MS = SOURCE_MIN_SPEECH_DURATION_MS
@@ -69,6 +69,9 @@ _SOURCE_SHORT_MEANINGFUL_PHRASES = {
     "yep",
     "yup",
     "sure",
+    "thanks",
+    "thank you",
+    "sorry",
     "alright",
     "all right",
     "right",
@@ -83,6 +86,11 @@ _SOURCE_SHORT_MEANINGFUL_PHRASES = {
     "ok em",
     "đúng",
     "đúng rồi",
+    "có",
+    "được",
+    "đồng ý",
+    "cảm ơn",
+    "xin lỗi",
     "được rồi",
     "rồi",
     "em hiểu",
@@ -99,15 +107,24 @@ _SOURCE_SHORT_MEANINGFUL_PHRASES = {
     "そうですね",
     "わかりました",
     "了解",
+    "お願いします",
+    "ありがとうございます",
+    "すみません",
+    "大丈夫です",
+    "問題ないです",
     "無理",
     "ダメ",
     "네",
     "응",
+    "감사합니다",
+    "죄송합니다",
     "아니요",
     "안 됩니다",
     "알겠습니다",
     "嗯",
     "好的",
+    "谢谢",
+    "不好意思",
     "不",
     "不是",
     "不行",
@@ -137,6 +154,29 @@ _PUBLIC_RELAY_FRAGMENT_END_RE = re.compile(
     r"|[,;:、，]\s*"
     r"|\.\.\.\s*|…\s*"
     r")$",
+    re.IGNORECASE,
+)
+_SOURCE_HANGING_FRAGMENT_RE = re.compile(
+    r"(?:"
+    r"\b(?:i\s+think|i\s+mean|we\s+need\s+to|we\s+should|i\s+want\s+to|"
+    r"can\s+you|could\s+you|because|so|then|and|or|but)\s*$"
+    r"|(?:em|anh|chị|tôi|mình|chúng\s+ta)\s+(?:nghĩ\s+là|cần|muốn)\s*$"
+    r"|\b(?:bởi\s+vì|tại\s+vì|cho\s+nên|vì|nên|thì|là|và|nhưng)\s*$"
+    r"|(?:けど|ので|えっと|あの)\s*$"
+    r")",
+    re.IGNORECASE,
+)
+_RELAY_META_OR_UNCLEAR_RE = re.compile(
+    r"^\s*(?:"
+    r"(?:sorry|i'?m\s+sorry|i\s+cannot|i\s+can't|cannot|can'?t)\s+"
+    r"(?:hear|understand|translate|determine)|"
+    r"(?:the\s+audio|the\s+speech|it)\s+(?:is|was)\s+(?:unclear|inaudible|unintelligible)|"
+    r"(?:unclear|inaudible|unintelligible|not\s+enough\s+context|no\s+clear\s+speech)|"
+    r"(?:(?:xin\s+lỗi[, ]+)?(?:không\s+nghe\s+rõ|không\s+rõ|không\s+thể\s+dịch|không\s+đủ\s+ngữ\s+cảnh))|"
+    r"(?:聞き取れません|聞き取れない|不明です|翻訳できません|音声が不明)|"
+    r"(?:들리지\s+않|명확하지\s+않|번역할\s+수\s+없)|"
+    r"(?:听不清|不清楚|无法翻译|沒有聽清|无法确定)"
+    r")",
     re.IGNORECASE,
 )
 _NARRATOR_OPENING_PATTERNS = (
@@ -213,6 +253,8 @@ def assess_public_relay_readiness(
         return False, "empty_public_relay", signal
     if relay_style == "summary":
         return True, "summary_fallback", signal
+    if overlap_blocked:
+        return False, "overlap_blocked_literal_relay_suppressed", signal
     if chaos or overlap_level == "heavy":
         return False, "heavy_overlap_literal_relay_suppressed", signal
 
@@ -228,7 +270,6 @@ def assess_public_relay_readiness(
         duration_ms is not None
         and duration_ms < PUBLIC_RELAY_MIN_SPEECH_DURATION_MS
         and not high_value_short
-        and meaningful_chars < PUBLIC_RELAY_MIN_MEANINGFUL_CHARS
     ):
         return False, "speech_too_short_for_public_relay", signal
     if (
@@ -239,6 +280,25 @@ def assess_public_relay_readiness(
         return False, "low_usefulness_short_turn", signal
 
     return True, "short_meaningful_turn" if short_meaningful else "ok", signal
+
+
+def assess_relay_output_text(text: str) -> tuple[bool, str, Dict[str, Any]]:
+    normalized = normalize_source_text(text)
+    tokens = _SOURCE_TOKEN_RE.findall(normalized)
+    meaningful_chars = sum(1 for char in normalized if char.isalnum())
+    signal = {
+        "chars": len(normalized),
+        "meaningful_chars": meaningful_chars,
+        "tokens": len(tokens),
+    }
+
+    if not normalized:
+        return False, "empty_relay_output", signal
+    if meaningful_chars == 0:
+        return False, "punctuation_only_relay_output", signal
+    if _RELAY_META_OR_UNCLEAR_RE.search(normalized):
+        return False, "meta_or_unclear_relay_output", signal
+    return True, "ok", signal
 
 
 def relay_text_has_narrator_opening(
@@ -327,6 +387,12 @@ def assess_source_transcript(
 
     if not meaningful_tokens and not short_meaningful:
         return False, "filler_only_transcript", normalized, signal
+
+    if final and not short_meaningful:
+        if _PUBLIC_RELAY_FRAGMENT_END_RE.search(normalized):
+            return False, "incomplete_fragment", normalized, signal
+        if _SOURCE_HANGING_FRAGMENT_RE.search(normalized):
+            return False, "hanging_fragment", normalized, signal
 
     if final and short_meaningful:
         if (

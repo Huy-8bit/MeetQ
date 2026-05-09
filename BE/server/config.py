@@ -5,7 +5,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     # OpenAI
     openai_api_key: str
-    openai_realtime_model: str = "gpt-realtime-mini"
+    openai_realtime_model: str = "gpt-realtime"
+    openai_realtime_transcription_model: str = "gpt-4o-transcribe"
     openai_summary_model: str = "gpt-4o-mini"
     meeting_summary_language: str = "en"
     meeting_summary_max_source_items: int = 240

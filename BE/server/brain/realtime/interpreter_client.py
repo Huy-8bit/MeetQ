@@ -13,6 +13,8 @@ import websockets
 from server.shared.audio import AudioInput, MicInput
 from server.brain.realtime.client import REALTIME_URL_TEMPLATE, RealtimeClient
 from server.brain.realtime.session_config import (
+    INTERPRETER_FINAL_TRANSCRIPT_HOLD_MS,
+    INTERPRETER_INPUT_TRANSCRIPTION_MODEL,
     INTERPRETER_TEMPERATURE,
     INTERPRETER_VAD_CONFIG,
     INTERPRETER_SEND_QUEUE_MAXSIZE,
@@ -35,6 +37,10 @@ class InterpreterRealtimeClient(RealtimeClient):
         self.request_audio_output = kwargs.pop("request_audio_output", True)
         self.silent_listener_mode = kwargs.pop("silent_listener_mode", False)
         self.meeting_languages = kwargs.pop("meeting_languages", None)
+        self.input_transcription_model = kwargs.pop(
+            "input_transcription_model",
+            INTERPRETER_INPUT_TRANSCRIPTION_MODEL,
+        )
         kwargs["enable_speaker"] = False
         super().__init__(*args, **kwargs)
         self._deterministic_routing = self.src_lang != "auto" and self.tgt_lang != "auto"
@@ -148,7 +154,9 @@ class InterpreterRealtimeClient(RealtimeClient):
                     "interpreter.session_config "
                     f"src={self.src_lang} tgt={self.tgt_lang} "
                     f"meeting_languages={self.meeting_languages} "
-                    f"vad={INTERPRETER_VAD_CONFIG} temp={INTERPRETER_TEMPERATURE}"
+                    f"vad={INTERPRETER_VAD_CONFIG} "
+                    f"transcription_model={self.input_transcription_model} "
+                    f"temp={INTERPRETER_TEMPERATURE}"
                 )
 
                 try:
@@ -365,6 +373,9 @@ class InterpreterRealtimeClient(RealtimeClient):
                     relay_request = self._normalize_relay_approval(
                         relay_source_id,
                         default_source_text=transcript,
+                    )
+                    await self._hold_for_turn_completion(
+                        relay_style=relay_request["relay_style"],
                     )
                     await self._create_response_from_source_transcript(
                         ws,
@@ -737,6 +748,22 @@ class InterpreterRealtimeClient(RealtimeClient):
             f"modalities={','.join(modalities)} relay_style={relay_style}"
         )
 
+    async def _hold_for_turn_completion(self, *, relay_style: str) -> None:
+        if relay_style == "summary" or INTERPRETER_FINAL_TRANSCRIPT_HOLD_MS <= 0:
+            return
+        stopped_at = self._speech_stopped_at
+        if stopped_at is None:
+            return
+        elapsed_ms = int(max(0.0, time.monotonic() - stopped_at) * 1000)
+        remaining_ms = INTERPRETER_FINAL_TRANSCRIPT_HOLD_MS - elapsed_ms
+        if remaining_ms <= 0:
+            return
+        self._log(
+            "turn_completion_hold "
+            f"remaining_ms={remaining_ms} elapsed_since_speech_stop_ms={elapsed_ms}"
+        )
+        await asyncio.sleep(remaining_ms / 1000)
+
     async def _start_next_pending_relay(self, ws) -> bool:
         if self._relay_response_busy():
             return False
@@ -831,6 +858,7 @@ class InterpreterRealtimeClient(RealtimeClient):
         return build_interpreter_session_update(
             instructions,
             self.request_audio_output,
+            input_transcription_model=self.input_transcription_model,
         )
 
     async def _cancel_response(self, ws) -> None:

@@ -20,6 +20,7 @@ from server.brain.realtime.session_config import (
     INTERPRETER_INPUT_WARMUP_CHUNKS,
 )
 from server.brain.realtime.source_policy import (
+    assess_relay_output_text,
     assess_public_relay_readiness,
     assess_source_transcript,
     relay_text_has_narrator_opening,
@@ -51,7 +52,7 @@ _SUPPORTED_LANGS_MESSAGE = ", ".join(SUPPORTED_MEETING_LANGUAGES)
 _INPUT_QUEUE_MAXSIZE = INTERPRETER_INPUT_QUEUE_MAXSIZE
 _INPUT_WARMUP_CHUNKS = INTERPRETER_INPUT_WARMUP_CHUNKS
 _OVERLAP_FOCUS_COOLDOWN_SECONDS = 0.85
-_CHAOS_RECENT_WINDOW_SECONDS = 7.0
+_CHAOS_RECENT_WINDOW_SECONDS = 9.0
 _CHAOS_MIN_SUMMARY_TURNS = 3
 _CHAOS_MIN_DISTINCT_SPEAKERS = 2
 _CHAOS_PENDING_RELAY_THRESHOLD = 3
@@ -66,6 +67,7 @@ _OVERLAP_HEAVY_BLOCKED_SPEAKER_THRESHOLD = 2
 _SUMMARY_MAX_SOURCE_CHARS = 1400
 _RELAY_STATE_CLEANUP_DELAY_SECONDS = 1.0
 _PUBLIC_TEXT_GATE_REASON = "pending_public_text_gate"
+_PUBLIC_TEXT_GATE_MIN_PARTIAL_MEANINGFUL_CHARS = 8
 _PUBLIC_RELAY_MAX_START_DELAY_SECONDS = 8.0
 _PUBLIC_SUMMARY_MAX_START_DELAY_SECONDS = 24.0
 
@@ -475,12 +477,23 @@ class RoomInterpreterManager:
         client = InterpreterRealtimeClient(
             api_key=self.settings.openai_api_key,
             model=self.settings.openai_realtime_model,
+            input_transcription_model=self.settings.openai_realtime_transcription_model,
             src_lang=plan.src_lang,
             tgt_lang=plan.tgt_lang,
             meeting_languages=list(self.meeting_languages),
             audio_input=audio_input,
             request_audio_output=self.relay_audio_enabled,
             silent_listener_mode=self.silent_summary_mode,
+        )
+        logger.info(
+            "BRSE model path selected room=%s speaker=%s realtime_model=%s "
+            "input_transcription_model=%s overlap_summary_model=%s fallback_override_env=%s",
+            self.room_id,
+            speaker_id,
+            self.settings.openai_realtime_model,
+            self.settings.openai_realtime_transcription_model,
+            self.settings.openai_realtime_model,
+            "OPENAI_REALTIME_MODEL,OPENAI_REALTIME_TRANSCRIPTION_MODEL",
         )
         generation = self._next_speaker_generation(speaker_id)
         self.speaker_sources[speaker_id] = plan.src_lang
@@ -583,6 +596,7 @@ class RoomInterpreterManager:
         )
         client.meeting_languages = list(self.meeting_languages)
         client.request_audio_output = self.relay_audio_enabled
+        client.input_transcription_model = self.settings.openai_realtime_transcription_model
         if hasattr(client, "silent_listener_mode"):
             client.silent_listener_mode = self.silent_summary_mode
         await client.update_routing(plan.src_lang, plan.tgt_lang)
@@ -1351,7 +1365,7 @@ class RoomInterpreterManager:
             logger.info(
                 "BRSE public relay approved room=%s speaker=%s utterance=%s "
                 "reason=%s relay_style=%s audience=%d overlap_level=%s chaos=%s "
-                "approved_total=%d single_speaker_total=%d",
+                "approved_total=%d single_speaker_total=%d signal=%s",
                 self.room_id,
                 speaker_id,
                 state.get("utterance_id"),
@@ -1362,6 +1376,7 @@ class RoomInterpreterManager:
                 chaos,
                 self.public_relay_approved_count,
                 self.single_speaker_relay_approved_count,
+                signal,
             )
             return
 
@@ -1441,6 +1456,39 @@ class RoomInterpreterManager:
         if state.get("public_output_rejected"):
             return False
         text = str(state.get("brse_text") or "")
+        output_ok, output_reason, output_signal = assess_relay_output_text(text)
+        if not output_ok:
+            if final:
+                state["public_output_rejected"] = True
+                state["public_output_ready"] = False
+                state["public_output_gate_reason"] = output_reason
+                state["brse_text"] = ""
+                logger.warning(
+                    "BRSE relay output rejected room=%s speaker=%s utterance=%s "
+                    "reason=%s relay_style=%s signal=%s text=%r",
+                    self.room_id,
+                    speaker_id,
+                    state.get("utterance_id"),
+                    output_reason,
+                    state.get("relay_style", "normal"),
+                    output_signal,
+                    text,
+                )
+                asyncio.create_task(router.reject_public_output(reason=output_reason))
+            elif not state.get("public_output_gate_logged"):
+                state["public_output_gate_logged"] = True
+                logger.info(
+                    "BRSE relay output held pending usable text room=%s speaker=%s "
+                    "utterance=%s reason=%s signal=%s text=%r",
+                    self.room_id,
+                    speaker_id,
+                    state.get("utterance_id"),
+                    output_reason,
+                    output_signal,
+                    text,
+                )
+            return False
+
         if relay_text_has_narrator_opening(
             text,
             speaker_name=self._speaker_name(speaker_id),
@@ -1459,6 +1507,24 @@ class RoomInterpreterManager:
                 text,
             )
             asyncio.create_task(router.reject_public_output(reason="narrator_style_output"))
+            return False
+
+        if (
+            not final
+            and int(output_signal.get("meaningful_chars") or 0)
+            < _PUBLIC_TEXT_GATE_MIN_PARTIAL_MEANINGFUL_CHARS
+        ):
+            if not state.get("public_output_gate_logged"):
+                state["public_output_gate_logged"] = True
+                logger.info(
+                    "BRSE relay output held until stronger partial room=%s speaker=%s "
+                    "utterance=%s signal=%s text=%r",
+                    self.room_id,
+                    speaker_id,
+                    state.get("utterance_id"),
+                    output_signal,
+                    text,
+                )
             return False
 
         if not final and relay_text_needs_more_opening_context(
