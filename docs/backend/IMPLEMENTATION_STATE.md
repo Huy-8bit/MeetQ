@@ -1,5 +1,138 @@
 # Backend Implementation State
 
+## Turn Update: 2026-05-10 BRSE Runtime End-to-End Wiring
+
+- Time: 2026-05-10T00:54:26+07:00
+- Mode: CODE-ONLY
+- Status: implemented
+- Testing deferred: yes, per instruction
+
+### Objective
+
+Finish the runtime refactor beyond file boundaries. This turn wires room-level
+context, overlap understanding, policy selection, and text-first delivery into
+the real live BRSE path for both normal single-speaker relay and overlap-summary
+relay.
+
+### Read Status
+
+- Required docs inspected:
+  - `docs/backend/README.md`
+  - `docs/backend/INTERPRETER_DESIGN.md`
+  - `docs/backend/IMPLEMENTATION_STATE.md`
+  - `docs/backend/TRANSLATION_SUMMARY_FLOW_AUDIT.md`
+- Required runtime files inspected:
+  - `BE/server/service/brain_runtime/room_manager.py`
+  - `BE/server/service/brain_runtime/daemon.py`
+  - `BE/server/service/media/livekit_runtime.py`
+  - `BE/server/service/media/audio_input.py`
+  - `BE/server/service/media/output_router.py`
+  - `BE/server/brain/realtime/interpreter_client.py`
+  - `BE/server/brain/realtime/session_config.py`
+  - `BE/server/brain/realtime/source_policy.py`
+  - `BE/server/brain/prompts/language.py`
+
+### Implementation Notes
+
+- `RoomContextBuffer` is now more than a recent-turn list. It owns room-level
+  relay focus state, mirrors active overlap window metadata, tracks recent relay
+  decisions, tracks recent relay outputs, and keeps speaker metadata.
+- `RoomInterpreterManager` now uses `RoomContextBuffer` for relay focus state
+  through accessors, instead of owning raw focus state as independent manager
+  fields.
+- `OverlapManager` now mirrors opened/updated/closed overlap window metadata
+  into `RoomContextBuffer`, records every validated source turn, logs
+  `BRSE understanding source_turn_recorded`, and still builds the overlap
+  summary source package from validated room-window turns.
+- `ConversationPolicyEngine` now selects the relay candidate before model relay:
+  normal single-speaker candidate, delayed normal candidate for light overlap,
+  or overlap-summary candidate for heavy overlap.
+- Light overlap no longer defaults to silence. If the blocked speaker's source
+  is validated and the overlap is not heavy, policy approves a delayed normal
+  relay with reason `light_overlap_delayed_normal_relay`; the existing pending
+  relay queue starts it after relay focus is released.
+- Heavy overlap keeps the summary rescue path. `OverlapManager` builds the
+  source package from validated snippets, `ConversationPolicyEngine` approves
+  the summary candidate, the realtime client receives a `relay_style=summary`
+  response request, and the resulting relay text is published through the same
+  text-first delivery path.
+- `RelayDeliveryController` now returns a concrete delivery plan for partial
+  and final relay text publication. The plan records text/audio actions and
+  delivery mode (`voice_text`, `text_only`, or suppressed) before publishing.
+- Relay transcript events now carry additive `relay_decision` and `delivery`
+  metadata when available. Existing payload fields are preserved.
+
+### Flow Now Implemented
+
+Normal single-speaker path:
+
+```text
+completed source transcript
+  -> source policy validates
+  -> RoomContextBuffer records source turn
+  -> ConversationPolicyEngine selects normal relay candidate
+  -> ConversationPolicyEngine approves public relay
+  -> realtime response.create from candidate source text
+  -> output text gate passes
+  -> RelayDeliveryController plans text/audio delivery
+  -> Redis relay transcript text publish
+  -> OutputRouter publishes audio only when delivery mode allows
+```
+
+Light overlap path:
+
+```text
+speaker B overlaps speaker A
+  -> OverlapManager opens window and marks B blocked from immediate output
+  -> B capture continues
+  -> B validated source turn is recorded in RoomContextBuffer and overlap window
+  -> policy selects normal delayed candidate, not silence
+  -> policy approves `light_overlap_delayed_normal_relay`
+  -> client queues relay while A owns focus
+  -> focus release starts B pending relay
+  -> text-first delivery publishes relay text, with optional audio by mode
+```
+
+Heavy overlap path:
+
+```text
+multiple validated source turns in overlap window
+  -> OverlapManager builds summary source package from validated snippets
+  -> ConversationPolicyEngine selects/approves overlap-summary candidate
+  -> realtime response.create uses summary instructions and relay_style=summary
+  -> output text gate validates model text
+  -> RelayDeliveryController publishes canonical relay text
+  -> audio is delivered only for voice_text rooms
+```
+
+### Files Modified In This Turn
+
+- `BE/server/service/brain_runtime/context.py`
+- `BE/server/service/brain_runtime/delivery.py`
+- `BE/server/service/brain_runtime/events.py`
+- `BE/server/service/brain_runtime/overlap.py`
+- `BE/server/service/brain_runtime/policy.py`
+- `BE/server/service/brain_runtime/room_manager.py`
+- `docs/backend/IMPLEMENTATION_STATE.md`
+
+### Deferred Outside This Scope
+
+- Full extraction of all transcript-state lifecycle out of
+  `RoomInterpreterManager`.
+- Full glossary provider and room-specific protected-term memory.
+- Multi-model orchestration or long-lived organization memory.
+- FE changes for visualizing new `relay_decision` / `delivery` metadata.
+
+### Verification
+
+- Full test suite not run, per CODE-ONLY instruction.
+- New tests not added.
+- Existing tests not modified.
+- Lightweight backend compile only:
+  - `PYTHONPATH=BE python -m py_compile BE/server/service/brain_runtime/context.py BE/server/service/brain_runtime/policy.py BE/server/service/brain_runtime/delivery.py BE/server/service/brain_runtime/overlap.py BE/server/service/brain_runtime/events.py BE/server/service/brain_runtime/room_manager.py`
+
+---
+
 ## Turn Update: 2026-05-10 BRSE Runtime Architecture Boundaries
 
 - Time: 2026-05-10T00:47:24+07:00

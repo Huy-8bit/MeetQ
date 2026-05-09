@@ -131,6 +131,14 @@ class OverlapManager:
                 primary_speaker_id=primary_speaker_id,
             )
             self.window = window
+            self.context.set_overlap_window(
+                {
+                    "id": window.window_id,
+                    "opened_at": window.opened_at,
+                    "primary_speaker_id": primary_speaker_id,
+                    "reason": reason,
+                }
+            )
             logger.warning(
                 "BRSE understanding overlap_window_opened room=%s window=%s primary=%s reason=%s",
                 self.room_id,
@@ -143,6 +151,17 @@ class OverlapManager:
         if primary_speaker_id:
             window.speaker_ids.add(primary_speaker_id)
         window.speaker_ids.add(blocked_speaker_id)
+        self.context.set_overlap_window(
+            {
+                "id": window.window_id,
+                "opened_at": window.opened_at,
+                "updated_at": window.updated_at,
+                "primary_speaker_id": window.primary_speaker_id,
+                "speaker_ids": sorted(window.speaker_ids),
+                "source_item_count": len(window.source_utterance_ids),
+                "summary_count": window.summary_count,
+            }
+        )
         return window
 
     def current_window(self) -> Optional[OverlapUnderstandingWindow]:
@@ -173,6 +192,7 @@ class OverlapManager:
             summary_utterance_id or "-",
         )
         self.window = None
+        self.context.clear_overlap_window()
 
     def window_turns(self) -> list[Dict[str, Any]]:
         window = self.current_window()
@@ -253,6 +273,18 @@ class OverlapManager:
             window.updated_at = now
             window.speaker_ids.add(speaker_id)
             window.source_utterance_ids.add(state["utterance_id"])
+            self.context.set_overlap_window(
+                {
+                    "id": window.window_id,
+                    "opened_at": window.opened_at,
+                    "updated_at": window.updated_at,
+                    "primary_speaker_id": window.primary_speaker_id,
+                    "speaker_ids": sorted(window.speaker_ids),
+                    "source_item_count": len(window.source_utterance_ids),
+                    "summary_count": window.summary_count,
+                    "summary_target_languages": sorted(window.summary_target_langs),
+                }
+            )
             logger.info(
                 "BRSE understanding overlap_source_aggregated room=%s window=%s utterance=%s "
                 "speaker=%s items=%d speakers=%d blocked=%s",
@@ -278,10 +310,22 @@ class OverlapManager:
             overlap_window_id=overlap_window_id,
             glossary_hints=state.get("source_signal", {}).get("technical_terms") or {},
         )
-        return self.context.record_source_turn(
+        payload = self.context.record_source_turn(
             turn,
             retention_seconds=self.recent_window_seconds,
         )
+        logger.info(
+            "BRSE understanding source_turn_recorded room=%s speaker=%s utterance=%s "
+            "target=%s blocked=%s overlap_window=%s recent_turns=%d",
+            self.room_id,
+            speaker_id,
+            state["utterance_id"],
+            state["target_lang"],
+            state.get("source_blocked_for_overlap", False),
+            overlap_window_id or "-",
+            len(self.context.recent_validated_source_turns),
+        )
+        return payload
 
     def overlap_payload(
         self,

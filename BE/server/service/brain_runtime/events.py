@@ -125,6 +125,8 @@ class RedisEventPublisher:
         relay_style: str = "normal",
         relay_focus: Optional[Dict[str, Any]] = None,
         overlap: Optional[Dict[str, Any]] = None,
+        relay_decision: Optional[Dict[str, Any]] = None,
+        delivery: Optional[Dict[str, Any]] = None,
     ) -> None:
         await self._publish(
             EventType.TRANSCRIPT_PARTIAL,
@@ -147,6 +149,8 @@ class RedisEventPublisher:
                 relay_style=relay_style,
                 relay_focus=relay_focus,
                 overlap=overlap,
+                relay_decision=relay_decision,
+                delivery=delivery,
             ),
         )
 
@@ -171,6 +175,8 @@ class RedisEventPublisher:
         relay_style: str = "normal",
         relay_focus: Optional[Dict[str, Any]] = None,
         overlap: Optional[Dict[str, Any]] = None,
+        relay_decision: Optional[Dict[str, Any]] = None,
+        delivery: Optional[Dict[str, Any]] = None,
     ) -> None:
         payload = self._build_relay_payload(
             transcript_id=transcript_id,
@@ -191,6 +197,8 @@ class RedisEventPublisher:
             relay_style=relay_style,
             relay_focus=relay_focus,
             overlap=overlap,
+            relay_decision=relay_decision,
+            delivery=delivery,
         )
         if latency_ms is not None:
             payload["latency_ms"] = latency_ms
@@ -329,6 +337,8 @@ class RedisEventPublisher:
         relay_style: str = "normal",
         relay_focus: Optional[Dict[str, Any]] = None,
         overlap: Optional[Dict[str, Any]] = None,
+        relay_decision: Optional[Dict[str, Any]] = None,
+        delivery: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         speaker_ref = self._build_speaker_ref(speaker_id, speaker_name, src_lang)
         audio_output = self._build_audio_output(
@@ -369,6 +379,10 @@ class RedisEventPublisher:
             payload["relay_focus"] = relay_focus
         if overlap is not None:
             payload["overlap"] = overlap
+        if relay_decision is not None:
+            payload["relay_decision"] = relay_decision
+        if delivery is not None:
+            payload["delivery"] = delivery
         return payload
 
     def _build_audio_output(

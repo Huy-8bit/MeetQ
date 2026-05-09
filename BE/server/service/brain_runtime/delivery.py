@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
+from typing import Dict
 
 from server.meeting_modes import (
     BRSE_MODE_SILENT_SUMMARY,
@@ -11,6 +13,26 @@ from server.meeting_modes import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class RelayDeliveryPlan:
+    text_enabled: bool
+    audio_enabled: bool
+    delivery_mode: str
+    text_action: str
+    audio_action: str
+    reason: str
+
+    def as_payload(self) -> Dict[str, object]:
+        return {
+            "text_enabled": self.text_enabled,
+            "audio_enabled": self.audio_enabled,
+            "delivery_mode": self.delivery_mode,
+            "text_action": self.text_action,
+            "audio_action": self.audio_action,
+            "reason": self.reason,
+        }
 
 
 class RelayDeliveryController:
@@ -88,3 +110,41 @@ class RelayDeliveryController:
             audio_action,
             reason,
         )
+
+    def plan_publish(
+        self,
+        *,
+        speaker_id: str,
+        utterance_id: str,
+        relay_style: str,
+        final: bool,
+        policy_reason: str,
+    ) -> RelayDeliveryPlan:
+        if not self.relay_text_enabled:
+            plan = RelayDeliveryPlan(
+                text_enabled=False,
+                audio_enabled=False,
+                delivery_mode="suppressed",
+                text_action="suppress",
+                audio_action="suppressed",
+                reason="relay_text_disabled",
+            )
+        else:
+            delivery_mode = "voice_text" if self.relay_audio_enabled else "text_only"
+            plan = RelayDeliveryPlan(
+                text_enabled=True,
+                audio_enabled=self.relay_audio_enabled,
+                delivery_mode=delivery_mode,
+                text_action="publish_final" if final else "publish_partial",
+                audio_action="enabled" if self.relay_audio_enabled else "suppressed",
+                reason=policy_reason,
+            )
+        self.log_publish_decision(
+            speaker_id=speaker_id,
+            utterance_id=utterance_id,
+            relay_style=relay_style,
+            text_action=plan.text_action,
+            audio_action=plan.audio_action,
+            reason=plan.reason,
+        )
+        return plan
