@@ -99,6 +99,12 @@ _SUMMARY_FALLBACK_POLICY = (
     "Do not add facts, decisions, owners, deadlines, causes, risks, or next steps that are not present in the snippets. "
     "If the snippets are too unclear or too thin to summarize faithfully, output nothing. "
 )
+_SUMMARY_ROLE_POLICY = (
+    "You are BRSE AI acting as a pragmatic live interpreter during heavy overlap in a real meeting. "
+    "The backend will provide a bounded set of completed, validated source snippets from the overlap window. "
+    "Your job is to rescue the exchange for target-language listeners with one short spoken summary relay. "
+    "Unlike normal single-speaker relay, this mode may combine the provided snippets into a concise gist. "
+)
 _SILENT_LISTENER_POLICY = (
     "You are BRSE AI running in silent listener mode for internal meeting validation. "
     "Listen to the assigned human microphone track and support accurate source transcription. "
@@ -162,13 +168,27 @@ def build_interpreter_summary_instructions(
     tgt: str,
     meeting_languages: Optional[Iterable[str]] = None,
 ) -> str:
-    base = build_interpreter_instructions(src, tgt, meeting_languages=meeting_languages)
+    pair = [lang for lang in (meeting_languages or []) if isinstance(lang, str)]
+    pair_context = ""
+    if len(pair) == 2 and pair[0] != pair[1]:
+        pair_context = (
+            f"Room meeting language pair is fixed to {LANG_NAMES.get(pair[0], pair[0])} "
+            f"and {LANG_NAMES.get(pair[1], pair[1])}. "
+            "Use this fixed room pair as authoritative context; do not infer a different target language. "
+        )
     tgt_name = LANG_NAMES.get(tgt, tgt)
+    tone = f" { _JA_TONE }" if tgt == "ja" else ""
     return (
-        base
+        _SUMMARY_ROLE_POLICY
+        + pair_context
         + _SUMMARY_FALLBACK_POLICY
-        + f" For this response, use overlap-summary mode and output only a concise spoken {tgt_name} summary. "
-        "Do not include participant names or speaker labels in the spoken output. "
+        + _BOUNDARY_POLICY
+        + _FIDELITY_POLICY
+        + _OUTPUT_POLICY
+        + f"For this response, use overlap-summary mode and output only a concise spoken {tgt_name} summary. "
+        f"Every word you output must be in {tgt_name} unless preserving a proper noun, code term, product name, or intentionally mixed-language term from the snippets. "
+        "Do not include participant names, speaker labels, bullets, markdown, or report-style phrasing in the spoken output. "
+        + tone
     )
 
 

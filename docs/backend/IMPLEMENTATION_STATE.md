@@ -1,5 +1,145 @@
 # Backend Implementation State
 
+## Turn Update: 2026-05-09 BRSE Overlap Summary Relay Runtime Fix
+
+- Time: 2026-05-09T17:07:48+07:00
+- Mode: CODE-ONLY
+- Status: implemented
+- Testing deferred: yes, per instruction
+
+### Objective
+
+Fix BRSE / AI relay behavior for strong overlap and multi-speaker chaos so the
+runtime does not default to blank suppression. Heavy overlap must continue
+source capture, aggregate a bounded understanding window, generate a short
+grounded summary relay, and publish that relay outward while preserving the
+single-speaker happy path.
+
+### Read Status
+
+- Required docs read:
+  - `docs/backend/README.md`
+  - `docs/backend/INTERPRETER_DESIGN.md`
+  - `docs/backend/IMPLEMENTATION_STATE.md`
+  - `docs/backend/API_CONTRACT.md`
+- Required backend/runtime files read:
+  - `BE/server/service/brain_runtime/room_manager.py`
+  - `BE/server/service/media/livekit_runtime.py`
+  - `BE/server/service/media/audio_input.py`
+  - `BE/server/service/media/output_router.py`
+  - `BE/server/brain/realtime/interpreter_client.py`
+  - `BE/server/brain/realtime/session_config.py`
+  - `BE/server/brain/realtime/source_policy.py`
+  - `BE/server/brain/prompts/language.py`
+- Related overlap / arbitration / transcript publish files read:
+  - `BE/server/service/brain_runtime/events.py`
+  - `BE/server/service/gateway/event_consumer.py`
+  - `BE/server/service/persistence/room_history.py`
+  - `BE/server/models.py`
+
+### Root Cause Traced
+
+- The current runtime already separates source capture from relay publication,
+  and `LiveKitAudioInput` is no longer torn down during overlap.
+- Room focus arbitration still marks secondary speakers as
+  `blocked_due_to_overlap`, clears their router output, and prevents normal
+  publish while focus is held.
+- Overlap identity was not sticky enough: if focus was released before ASR
+  final completed, `source_blocked_for_overlap` could be overwritten back to
+  false, making the later source final look like a clean turn.
+- Heavy-overlap literal relay is intentionally suppressed by public relay
+  policy, but summary fallback was too late and too fragile:
+  - it required a higher recent-turn threshold before summary mode activated,
+  - it depended on active blocked/pending pressure at the exact source-final
+    moment,
+  - summary relay freshness was only 10 seconds while it may wait behind an
+    in-flight relay,
+  - stale or replaced pending normal relays could stay at the head of the
+    pending queue and block a summary relay behind them.
+- Prompt root cause: overlap summary used the normal interpreter instruction as
+  its base, including the rule to never combine multiple speakers. That
+  conflicted with the overlap-summary request and could make the model choose
+  silence.
+
+### Overlap Understanding Window Strategy
+
+- Added a bounded room-level overlap understanding window:
+  - opens on real room focus overlap when a secondary speaker is blocked,
+  - keeps capture active and aggregates completed, validated source transcript
+    items for up to 9 seconds,
+  - tracks window id, primary/blocked speakers, source utterance ids, speaker
+    count, summary count, and summary target languages,
+  - caps summary source selection to the latest 6 validated window turns and
+    1400 source chars.
+- Source transcript capture continues through overlap. The runtime now keeps
+  the overlap marker from commit through final transcript even if focus is
+  released before transcription completes.
+- Overlap payloads include additive `understanding_window` metadata for
+  observability. Existing `relay_style="summary"` remains the outward marker for
+  overlap summary relay; no new contract-breaking field was added.
+
+### Summarize-And-Relay Policy
+
+- Heavy overlap can now be triggered from the understanding window once there
+  are at least 2 validated turns, at least 2 speakers, and enough combined
+  signal, instead of waiting for the older stricter chaos threshold.
+- In heavy overlap, normal literal relay remains suppressible, but the runtime
+  builds a short source-grounded summary request from validated snippets and
+  publishes it outward through the normal relay transcript/audio path.
+- Pending normal relay items included in a summary window can be marked
+  `replaced_by_overlap_summary` so the summary relay is not buried behind stale
+  literal turns. Active in-flight relay is not cut; the summary queues behind it.
+- Summary freshness was raised from 10 seconds to 24 seconds so a valid overlap
+  summary can survive waiting for the current AI relay/focus to finish.
+
+### Output Gating / Prompt Adjustments
+
+- Public relay readiness still suppresses heavy-overlap literal relay, but
+  `relay_style="summary"` remains explicitly approved.
+- Pending relay queue now has a permanent-drop callback for stale, invalid,
+  route-mismatched, replaced, or public-rejected items. This prevents a dead
+  pending item from blocking a later summary relay.
+- Summary instructions no longer inherit the normal single-speaker rule that
+  forbids combining speakers. Summary mode now has a dedicated prompt:
+  - summarize only backend-provided validated overlap snippets,
+  - output one concise spoken target-language relay,
+  - do not use participant names, speaker labels, markdown, report phrasing, or
+    narrator wording,
+  - do not invent facts, decisions, owners, deadlines, causes, risks, or next
+    steps.
+
+### Observability
+
+- Added logs for:
+  - overlap understanding window opened/closed,
+  - overlap source item aggregated with item/speaker counts,
+  - overlap summary relay generated with item count, signal chars, target, and
+    replaced normal relay count,
+  - overlap summary relay published,
+  - pending relay dropped with concrete reason.
+- Existing logs still report public relay approved/suppressed reason, stale
+  suppression, narrator-style output rejection, relay final, focus
+  claim/release, and blocked overlap status.
+
+### Files Modified
+
+- `BE/server/service/brain_runtime/room_manager.py`
+- `BE/server/brain/realtime/interpreter_client.py`
+- `BE/server/brain/realtime/session_config.py`
+- `docs/backend/IMPLEMENTATION_STATE.md`
+
+### Verification
+
+- Full test suite not run, per CODE-ONLY instruction.
+- New tests not added.
+- Existing tests not modified.
+- Lightweight backend checks only:
+  - `python -m py_compile BE/server/service/brain_runtime/room_manager.py BE/server/brain/realtime/interpreter_client.py BE/server/brain/realtime/session_config.py`
+  - `git diff --check -- BE/server/service/brain_runtime/room_manager.py BE/server/brain/realtime/interpreter_client.py BE/server/brain/realtime/session_config.py docs/backend/IMPLEMENTATION_STATE.md`
+- Completed at: 2026-05-09T17:15:31+07:00
+
+---
+
 ## Turn Update: 2026-05-08 Meeting Recap Package Backend
 
 - Time: 2026-05-08T00:00:00+07:00

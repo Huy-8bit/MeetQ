@@ -77,6 +77,7 @@ class InterpreterRealtimeClient(RealtimeClient):
         self.on_error: Callable[[Dict[str, Any]], None] = lambda err: None
         self.on_response_done: Callable[[Optional[str]], None] = lambda source_id: None
         self.can_start_relay_response: Callable[[str], bool] = lambda _relay_source_id: True
+        self.should_drop_pending_relay: Callable[[str], bool] = lambda _relay_source_id: False
         self.on_relay_response_starting: Callable[[str], None] = lambda _relay_source_id: None
 
     def _current_instructions(self) -> str:
@@ -744,6 +745,14 @@ class InterpreterRealtimeClient(RealtimeClient):
             relay_source_id = str(request.get("relay_source_id") or "")
             if not relay_source_id:
                 self._pending_relay_requests.pop(0)
+                continue
+            if self.should_drop_pending_relay(relay_source_id):
+                self._pending_relay_requests.pop(0)
+                self._log(
+                    "relay_response_pending_dropped "
+                    f"source_id={relay_source_id} style={request.get('relay_style')} "
+                    f"remaining={len(self._pending_relay_requests)}"
+                )
                 continue
             if not self.can_start_relay_response(relay_source_id):
                 self._log(
