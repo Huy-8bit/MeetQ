@@ -1,5 +1,50 @@
 # Frontend Implementation State
 
+## Turn Update: 2026-05-09 Frontend Feature Inventory
+
+- Time: 2026-05-09T00:00:00+07:00
+- Mode: CODE-ONLY / read-only analysis
+- Status: completed
+- Testing deferred: yes, per instruction
+
+### Objective
+
+Read FE codebase and produce a complete feature inventory document grounded in
+actual code — not docs, not assumptions.
+
+### Areas Read
+
+- `FE/src/App.tsx` — routes
+- `FE/src/pages/HomePage.tsx` — landing, create room, join room, intro slideshow
+- `FE/src/pages/RoomPage.tsx` — room entry, pre-join, in-meeting layout, post-meeting
+- `FE/src/pages/TestPage.tsx` — mic test, translation test
+- `FE/src/components/` — all 21 components
+- `FE/src/features/room/useMeetingRoom.ts` (header/imports), `useRoomExpiry.ts`, `interpreter.ts`, `transcripts.ts`
+- `FE/src/features/test/useMicTest.ts`, `useTranslationTest.ts` (via TestPage)
+- `FE/src/lib/api.ts`, `audioOutput.ts`, `brseModes.ts`, `languages.ts`, `livekit.ts`, `rooms.ts`, `uiPreferences.ts`, `userPrefs.ts`, `ws.ts`
+- `FE/src/state/session.tsx`
+- `FE/src/types/api.ts`, `livekit.ts`, `ws.ts`
+
+### Artifact Created
+
+- `docs/FRONTEND_FEATURE_INVENTORY.md` — complete feature inventory of the FE
+  as-built, organized by: overview, user flows, stage, controls, BRSE/AI
+  features, chat, summary, people, audio devices, layout/theme, responsive
+  behavior, persistence, test page, partial/in-progress features, open gaps.
+
+### Strategy
+
+- Read all pages, all components, key lib files, state, and types.
+- Cross-referenced feature behavior across component props and useMeetingRoom
+  interface to confirm what is actually wired vs. just present in code.
+- Noted `InterpreterStatusPanel` and `TranscriptPanel` exist but are not wired
+  into the active side panel layout.
+- Noted `silent_summary` mode is implemented in all UI but not selectable at
+  create time.
+- No tests added. No code changed.
+
+---
+
 ## Turn Update: 2026-05-08 BRSE Text-Only Mode UI Follow-Up
 
 - Time: 2026-05-08T00:00:00+07:00

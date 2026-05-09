@@ -26,11 +26,23 @@ const SLIDE_DURATION = 6000; // ms each
 const CREATE_BRSE_MODE_STORAGE_KEY = "meetq:create-brse-mode";
 
 const CHAOS_TEXTS = [
-  "Xin chào?",
-  "Tôi không nghe thấy gì...",
-  "Wait, the screen is frozen",
-  "Est-ce que ça marche?",
-  "Moshi moshi?",
+  "Hello? Can you hear me?",
+  "Subtitle dịch sai thuật ngữ rồi...",
+  "誰か説明できますか？",
+  "Can someone translate this?",
+  "意味がちょっと違います...",
+  "Ý của họ là gì vậy?",
+  "会話についていけないです",
+  "The translation feels wrong",
+  "専門用語の翻訳が違います",
+  "Không ai hiểu đang nói gì...",
+  "Communication is breaking again...",
+  "Dịch bị lệch context rồi",
+  "これは本当に正しい翻訳ですか？",
+  "We are losing time because of translation",
+  "Can we switch back to English?",
+  "会議が止まってしまった...",
+  "Không follow kịp cuộc họp...",
 ];
 
 const TRANSLATION_STEPS = [
@@ -72,7 +84,7 @@ function ChaosSlide() {
               className="intro-tile-img"
             />
             <div className="intro-tile-overlay" />
-            <span className="intro-tile-badge">USER_{i} · LAGGING</span>
+            <span className="intro-tile-badge">USER_{i} · UNDERSTAND</span>
           </div>
         ))}
       </div>
