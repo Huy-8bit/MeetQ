@@ -1,5 +1,12 @@
 # Interpreter Service Design
 
+> Update note (2026-05-10): active BRSE room runtime now has explicit
+> Perception / Understanding / Policy / Delivery boundaries inside
+> `server.service.brain_runtime`. `RoomInterpreterManager` still owns the room
+> lifecycle and realtime callback wiring, but shared room context, overlap
+> understanding windows, relay policy decisions, and delivery-mode semantics now
+> live in dedicated runtime components.
+>
 > Update note (2026-05-03): backend AI/model-facing code lives under `server.brain`; backend orchestration around room lifecycle, Redis control, and LiveKit media lives under `server.service`. Historical references below may describe the pre-refactor `server/interpreter` layout; active runtime modules are documented in `docs/backend/FILE_STRUCTURE.md`.
 >
 > Update note (2026-05-01): interpreter runtime is gated by room `brse_enabled`. When false, the daemon does not spawn a room runtime, does not join LiveKit as `BRSE AI`, and ignores stale interpreter output for that room. Live toggle uses `room.brse_updated`: OFF terminates the manager and disconnects BRSE runtime; ON spawns a fresh manager from the current room snapshot.
@@ -46,9 +53,43 @@ InterpreterService
                                |
                                +--> LiveKitAudioInput
                                +--> InterpreterRealtimeClient
+                               +--> RoomContextBuffer
+                               +--> OverlapManager
+                               +--> ConversationPolicyEngine
+                               +--> RelayDeliveryController
                                +--> OutputRouter
                                +--> FallbackTranslator
 ```
+
+## Active BRSE Runtime Layers
+
+The active room runtime is still incremental and callback-driven, but core
+decisions are now grouped by layer:
+
+```text
+Perception
+  - LiveKitAudioInput
+  - InterpreterRealtimeClient ASR/final transcript events
+  - ConversationPolicyEngine source assessment wrapper
+
+Understanding
+  - RoomContextBuffer
+  - OverlapManager
+  - recent validated source turns / recent relay outputs / speaker metadata
+
+Policy
+  - ConversationPolicyEngine
+  - public relay readiness
+  - relay output text publish / hold / reject
+
+Delivery
+  - RelayDeliveryController
+  - Redis relay text publish remains canonical
+  - OutputRouter delivers audio only when mode allows it
+```
+
+Text relay is the canonical output. Voice relay is an optional delivery channel
+selected after relay text is produced and gated.
 
 ## Dependencies To Add
 

@@ -79,7 +79,7 @@ export function RoomSidePanel({
         </button>
       </div>
 
-      <div className="side-panel-body" role="tabpanel">
+      <div className={`side-panel-body side-panel-body-${activeTab}`} role="tabpanel">
         {content[activeTab]}
       </div>
     </aside>

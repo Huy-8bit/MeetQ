@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 import { getLanguageLabel } from "../lib/languages";
 import type { ChatTranslationMode, MeetingLanguage, RoomChatMessage } from "../types/api";
 
@@ -50,6 +50,7 @@ export function ChatPanel({
     loadStoredTranslationMode,
   );
   const listRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
 
   // Auto-scroll to bottom on new messages
   useEffect(() => {
@@ -59,13 +60,21 @@ export function ChatPanel({
     }
   }, [messages.length]);
 
+  useEffect(() => {
+    const el = inputRef.current;
+    if (!el) {
+      return;
+    }
+    el.style.height = "auto";
+    el.style.height = `${el.scrollHeight}px`;
+  }, [inputText]);
+
   function handleModeChange(mode: ChatTranslationMode): void {
     setTranslationMode(mode);
     saveTranslationMode(mode);
   }
 
-  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
+  async function submitMessage() {
     const trimmed = inputText.trim();
     if (!trimmed || disabled || isSending) {
       return;
@@ -75,6 +84,19 @@ export function ChatPanel({
     if (sent) {
       setInputText("");
     }
+  }
+
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    await submitMessage();
+  }
+
+  function handleInputKeyDown(event: KeyboardEvent<HTMLTextAreaElement>): void {
+    if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing) {
+      return;
+    }
+    event.preventDefault();
+    void submitMessage();
   }
 
   function formatTime(sentAt: string): string {
@@ -92,7 +114,7 @@ export function ChatPanel({
 
   return (
     <section className={embedded ? "chat-panel panel-section" : "panel chat-panel"}>
-      <div className="panel-header">
+      <div className="panel-header chat-intro">
         <div>
           <h3>Room Chat</h3>
           <p>Send messages to everyone in the room.</p>
@@ -100,7 +122,10 @@ export function ChatPanel({
         <span className="panel-count">{messages.length}</span>
       </div>
 
-      <div className="chat-message-list" ref={listRef}>
+      <div
+        className={`chat-message-list ${messages.length === 0 ? "chat-message-list-empty" : ""}`}
+        ref={listRef}
+      >
         {messages.length === 0 ? (
           <div className="chat-empty">
             <p>No messages yet. Start the conversation!</p>
@@ -161,50 +186,53 @@ export function ChatPanel({
         )}
       </div>
 
-      {canTranslate ? (
-        <div className="chat-mode-bar">
-          <button
-            type="button"
-            className={`chat-mode-btn ${translationMode === "original_only" ? "chat-mode-btn-active" : ""}`}
-            onClick={() => handleModeChange("original_only")}
-            disabled={disabled}
-            title="Send without translation"
-          >
-            Original
-          </button>
-          <button
-            type="button"
-            className={`chat-mode-btn ${translationMode === "translate" ? "chat-mode-btn-active" : ""}`}
-            onClick={() => handleModeChange("translate")}
-            disabled={disabled}
-            title="Send with translation"
-          >
-            + Translate
-          </button>
-        </div>
-      ) : null}
+      <div className="chat-composer">
+        {canTranslate ? (
+          <div className="chat-mode-bar" aria-label="Chat send mode">
+            <button
+              type="button"
+              className={`chat-mode-btn ${translationMode === "original_only" ? "chat-mode-btn-active" : ""}`}
+              onClick={() => handleModeChange("original_only")}
+              disabled={disabled}
+              title="Send without translation"
+            >
+              Original
+            </button>
+            <button
+              type="button"
+              className={`chat-mode-btn ${translationMode === "translate" ? "chat-mode-btn-active" : ""}`}
+              onClick={() => handleModeChange("translate")}
+              disabled={disabled}
+              title="Send with translation"
+            >
+              + Translate
+            </button>
+          </div>
+        ) : null}
 
-      <form className="chat-input-bar" onSubmit={(event) => void handleSubmit(event)}>
-        <input
-          className="chat-input"
-          type="text"
-          placeholder={disabled ? "Chat is unavailable right now" : "Type a message…"}
-          value={inputText}
-          onChange={(event) => setInputText(event.target.value)}
-          disabled={disabled || isSending}
-          maxLength={2000}
-          autoComplete="off"
-        />
-        <button
-          className="button-primary chat-send-btn"
-          type="submit"
-          disabled={disabled || isSending || !inputText.trim()}
-        >
-          {isSending ? "Sending…" : "Send"}
-        </button>
-      </form>
+        <form className="chat-input-bar" onSubmit={(event) => void handleSubmit(event)}>
+          <textarea
+            ref={inputRef}
+            className="chat-input"
+            placeholder={disabled ? "Chat is unavailable right now" : "Type a message..."}
+            value={inputText}
+            onChange={(event) => setInputText(event.target.value)}
+            onKeyDown={handleInputKeyDown}
+            disabled={disabled || isSending}
+            maxLength={2000}
+            rows={1}
+          />
+          <button
+            className="button-primary chat-send-btn"
+            type="submit"
+            disabled={disabled || isSending || !inputText.trim()}
+          >
+            {isSending ? "Sending..." : "Send"}
+          </button>
+        </form>
 
-      {error ? <div className="inline-error">{error}</div> : null}
+        {error ? <div className="inline-error">{error}</div> : null}
+      </div>
     </section>
   );
 }

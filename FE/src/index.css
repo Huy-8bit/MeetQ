@@ -1283,23 +1283,42 @@ button {
 
 .chat-panel {
   padding: 16px;
-  display: grid;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
   gap: 12px;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.chat-intro,
+.chat-composer {
+  flex-shrink: 0;
 }
 
 .chat-message-list {
-  max-height: 320px;
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: none;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
   gap: 8px;
-  padding-right: 4px;
+  padding: 2px 4px 2px 0;
+  scroll-behavior: smooth;
+}
+
+.chat-message-list-empty {
+  justify-content: center;
 }
 
 .chat-empty {
-  padding: 24px 18px;
+  width: 100%;
+  max-width: 280px;
+  margin: auto;
+  padding: 20px 18px;
   text-align: center;
-  border-radius: 14px;
+  border-radius: 12px;
   background: var(--surface-muted);
   border: 1px dashed var(--border-subtle);
 }
@@ -1321,6 +1340,11 @@ button {
 .chat-message-self {
   background: var(--accent-soft);
   border-color: var(--border-subtle);
+  align-self: flex-end;
+}
+
+.chat-message-other {
+  align-self: flex-start;
 }
 
 .chat-message-header {
@@ -1357,23 +1381,38 @@ button {
 }
 
 /* ── Input bar ── */
+.chat-composer {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border-subtle);
+  background: var(--panel-bg);
+}
+
 .chat-input-bar {
   display: flex;
-  gap: 8px;
-  align-items: stretch;
+  gap: 10px;
+  align-items: flex-end;
+  min-width: 0;
 }
 
 .chat-input {
   flex: 1;
+  min-width: 0;
   min-height: 42px;
+  max-height: 132px;
   border-radius: 12px;
   border: 1px solid var(--border-subtle);
   background: var(--surface);
   color: var(--text-body);
-  padding: 0 14px;
+  padding: 10px 14px;
   outline: none;
   font: inherit;
   font-size: 0.9rem;
+  line-height: 1.45;
+  resize: none;
+  overflow-y: auto;
   transition: border-color 140ms, box-shadow 140ms;
 }
 
@@ -1392,7 +1431,8 @@ button {
 
 .chat-send-btn {
   width: auto !important;
-  min-width: 64px;
+  flex: 0 0 auto;
+  min-width: 72px;
   padding: 0 16px !important;
   min-height: 42px;
   border-radius: 12px;
@@ -1420,6 +1460,7 @@ button {
   border: 1px solid var(--border-subtle);
   border-radius: 10px;
   width: fit-content;
+  max-width: 100%;
 }
 
 .chat-mode-btn {
@@ -2440,6 +2481,19 @@ button {
   align-content: start;
 }
 
+.side-panel-body-chat {
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  align-content: stretch;
+}
+
+.side-panel-body-chat > .chat-panel {
+  flex: 1 1 auto;
+}
+
 /* keep old selectors working for chat/people panels */
 .room-side-content {
   min-height: 0;
@@ -2453,6 +2507,11 @@ button {
 .panel-section {
   display: grid;
   gap: 14px;
+}
+
+.chat-panel.panel-section {
+  display: flex;
+  flex-direction: column;
 }
 
 .room-side-content .panel-header {
@@ -2654,7 +2713,6 @@ button {
 
 .room-side-content .chat-panel {
   min-height: calc(100vh - 150px);
-  grid-template-rows: auto minmax(0, 1fr) auto auto;
 }
 
 .room-side-content .chat-message-list {
@@ -2672,11 +2730,11 @@ button {
 }
 
 .room-side-content .chat-message-other {
-  justify-self: start;
+  align-self: flex-start;
 }
 
 .room-side-content .chat-message-self {
-  justify-self: end;
+  align-self: flex-end;
   background: var(--accent-soft);
   border-color: var(--border-subtle);
 }
@@ -2687,6 +2745,10 @@ button {
 
 .room-side-content .chat-input {
   background: var(--surface);
+}
+
+.room-side-content .chat-composer {
+  background: var(--panel-bg);
 }
 
 .room-side-content .chat-send-btn {
@@ -4191,14 +4253,17 @@ button {
 /* ─── Side panel body passes content correctly ──────────────────────────────── */
 
 .side-panel-body .chat-panel {
-  display: grid;
-  grid-template-rows: minmax(0, 1fr) auto;
+  display: flex;
+  flex-direction: column;
   gap: 10px;
+  height: 100%;
   min-height: 0;
+  overflow: hidden;
 }
 
 .side-panel-body .chat-message-list {
   max-height: none;
+  min-height: 0;
   overflow-y: auto;
   align-content: start;
 }
@@ -4211,17 +4276,21 @@ button {
 }
 
 .side-panel-body .chat-message-self {
-  justify-self: end;
+  align-self: flex-end;
   background: #ecfdf5;
   border-color: rgba(13, 148, 136, 0.16);
 }
 
 .side-panel-body .chat-message-other {
-  justify-self: start;
+  align-self: flex-start;
 }
 
 .side-panel-body .chat-input {
   background: white;
+}
+
+.side-panel-body .chat-composer {
+  background: var(--panel-bg);
 }
 
 .side-panel-body .chat-send-btn {

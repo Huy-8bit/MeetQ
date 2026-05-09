@@ -59,6 +59,7 @@ Brain Runtime Service
     +--> LiveKit room participant runtime
     +--> Audio input / output routing
     +--> Brain realtime clients
+    +--> Perception / Understanding / Policy / Delivery components
     +--> Transcript / relay event publishing
 
 Brain
@@ -68,6 +69,21 @@ Brain
     +--> source gating / anti-hallucination policy
     +--> fallback translation path
 ```
+
+### Active BRSE Runtime Shape
+
+As of 2026-05-10, live BRSE runtime keeps the existing room lifecycle and
+event contracts, but the runtime path is split into explicit layers:
+
+- Perception: LiveKit audio input, ASR/final transcript events, source
+  assessment.
+- Understanding: room-level context buffer and overlap understanding windows.
+- Policy: relay/suppress/hold decisions for source, public relay, and output
+  text.
+- Delivery: canonical relay text publishing plus optional audio delivery.
+
+Relay text is the source of truth. Voice output is a delivery mode selected
+after text has been produced and gated.
 
 ### System Diagram
 

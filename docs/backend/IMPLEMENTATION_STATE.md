@@ -1,5 +1,185 @@
 # Backend Implementation State
 
+## Turn Update: 2026-05-10 BRSE Runtime Architecture Boundaries
+
+- Time: 2026-05-10T00:47:24+07:00
+- Mode: CODE-ONLY
+- Status: implemented
+- Testing deferred: yes, per instruction
+
+### Objective
+
+Move the live BRSE runtime away from an implicit per-utterance translation
+pipeline toward explicit runtime boundaries:
+
+1. Perception
+2. Understanding
+3. Policy
+4. Delivery
+
+This turn keeps the existing room lifecycle, Gateway/Redis event contract,
+LiveKit connection model, chat/screen share/persistence/summary behavior, and
+current BRSE modes intact. The implementation is an incremental architectural
+refactor, not a full rewrite.
+
+### Previous Architecture Mismatch
+
+- `BE/server/service/brain_runtime/room_manager.py` owned too many runtime
+  responsibilities at once: LiveKit track handling, transcript state, overlap
+  blocking, source validation, public relay gating, output text gating, relay
+  publishing, and summary fallback.
+- Translation still effectively ran as source finalization -> source policy ->
+  `response.create` for that speaker. That happy path is preserved, but the
+  relay decision was previously spread across callbacks.
+- Overlap was implemented as room-manager state plus utility methods. The
+  behavior already captured and summarized some overlap, but there was no
+  first-class room-level understanding component.
+- Mode semantics such as text-only and silent summary were applied by local
+  conditionals in the runtime instead of a delivery-facing boundary.
+- Recent source turns existed only as raw room-manager state. There was no
+  named room context abstraction where future understanding, protected-term,
+  or speaker metadata logic could attach.
+
+### New Runtime Boundaries
+
+- `BE/server/service/brain_runtime/context.py`
+  - Adds `RoomContextBuffer`.
+  - Stores recent validated source turns, recent relay outputs, and speaker
+    metadata at room scope.
+  - Provides the practical shared context foundation for understanding/policy
+    decisions without changing persistence contracts.
+- `BE/server/service/brain_runtime/overlap.py`
+  - Adds `OverlapManager`.
+  - Owns overlap-block bookkeeping, bounded understanding windows, validated
+    overlap source aggregation, overlap severity, and chaotic-summary planning.
+  - Preserves the current behavior shape: overlap is still bounded and does not
+    make the normal one-speaker path wait.
+- `BE/server/service/brain_runtime/policy.py`
+  - Adds `ConversationPolicyEngine`.
+  - Centralizes source transcript assessment, public relay readiness, and relay
+    output text gating around existing source-policy functions.
+  - Keeps current anti-hallucination gates while making publish/hold/reject
+    decisions explicit and loggable.
+- `BE/server/service/brain_runtime/delivery.py`
+  - Adds `RelayDeliveryController`.
+  - Centralizes BRSE mode/output mode semantics for text relay, audio relay,
+    text-only delivery, and silent summary.
+  - Treats relay text as the source of truth and audio as an optional delivery
+    channel.
+
+### Integrated Runtime Flow
+
+Current live happy path after this turn:
+
+```text
+speaker audio
+  -> LiveKitAudioInput
+  -> InterpreterRealtimeClient ASR/final events
+  -> RoomInterpreterManager transcript state
+  -> ConversationPolicyEngine source assessment
+  -> RoomContextBuffer records validated source turn
+  -> InterpreterRealtimeClient response.create from validated source text
+  -> ConversationPolicyEngine relay output text gate
+  -> Redis transcript/relay event publish as canonical text
+  -> RelayDeliveryController / OutputRouter optionally deliver audio
+  -> RoomContextBuffer records relay output
+```
+
+Overlap path after this turn:
+
+```text
+multiple active speakers
+  -> RoomInterpreterManager detects focus/overlap using existing timing
+  -> OverlapManager opens bounded understanding window
+  -> validated source turns are added to RoomContextBuffer and OverlapManager
+  -> OverlapManager decides whether a chaotic overlap summary is eligible
+  -> existing summary relay path creates the overlap summary candidate
+  -> ConversationPolicyEngine and DeliveryController gate/publish delivery
+```
+
+### Text-First Strategy
+
+- Relay text remains the canonical runtime output. The text event is published
+  before audio delivery decisions are treated as optional side effects.
+- Audio relay remains routed through `OutputRouter`, but audio enablement and
+  suppression reason now come from `RelayDeliveryController`.
+- Existing websocket/API payload contracts are preserved. New metadata/logging
+  is additive; no FE contract change is required in this turn.
+
+### Overlap Strategy
+
+- Overlap is now a first-class component instead of only room-manager fields.
+- Windowing remains room scoped, bounded by the existing configured durations
+  and thresholds.
+- Source turns are still validated independently per speaker before they are
+  accepted into the overlap window.
+- Heavy overlap can still suppress normal relay generation and route toward an
+  overlap summary, but the component now models the sequence as:
+
+```text
+capture -> validate source turns -> aggregate room window -> summary candidate -> policy -> delivery
+```
+
+### Glossary / Protected-Term Hook
+
+- This turn does not add a new glossary service.
+- The hook point is now explicit:
+  - source-side term normalization and confidence signals remain in
+    `BE/server/brain/realtime/source_policy.py` and prompt helpers;
+  - validated turns and their `source_signal` are recorded in
+    `RoomContextBuffer`;
+  - future protected-term or mixed-language room hints can be attached at the
+    perception/understanding boundary without changing delivery contracts.
+
+### Observability
+
+Added layer-oriented logs:
+
+- `BRSE perception source_final`
+- `BRSE perception source_rejected_partial`
+- `BRSE understanding overlap_window_opened`
+- `BRSE understanding overlap_window_closed`
+- `BRSE understanding overlap_source_aggregated`
+- `BRSE understanding overlap_summary_candidate`
+- `BRSE policy relay_decision`
+- `BRSE delivery startup`
+- `BRSE delivery relay_publish`
+
+These logs are intentionally concise and tied to room/speaker/utterance IDs so
+operators can see the runtime move through hear -> understand -> decide ->
+deliver without reading callback internals.
+
+### Files Modified
+
+- `BE/server/service/brain_runtime/context.py`
+- `BE/server/service/brain_runtime/delivery.py`
+- `BE/server/service/brain_runtime/overlap.py`
+- `BE/server/service/brain_runtime/policy.py`
+- `BE/server/service/brain_runtime/room_manager.py`
+- `docs/backend/IMPLEMENTATION_STATE.md`
+- `docs/backend/INTERPRETER_DESIGN.md`
+- `docs/backend/README.md`
+
+### Deferred
+
+- Full extraction of transcript state and model-response creation out of
+  `RoomInterpreterManager`.
+- A dedicated glossary/protected-terms provider with room-specific hints.
+- Richer understanding memory beyond recent validated turns and recent relay
+  outputs.
+- A fully independent delivery service for all Redis publish operations.
+- Automated tests and full suite verification, per instruction.
+
+### Verification
+
+- Full test suite not run, per CODE-ONLY instruction.
+- New tests not added.
+- Existing tests not modified.
+- Lightweight backend compile only:
+  - `PYTHONPATH=BE python -m py_compile BE/server/service/brain_runtime/context.py BE/server/service/brain_runtime/policy.py BE/server/service/brain_runtime/delivery.py BE/server/service/brain_runtime/overlap.py BE/server/service/brain_runtime/room_manager.py`
+
+---
+
 ## Turn Update: 2026-05-09 BRSE Technical Terms / Mixed-Language Relay Quality
 
 - Time: 2026-05-09T18:56:37+07:00
