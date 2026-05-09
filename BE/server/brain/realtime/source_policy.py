@@ -3,6 +3,8 @@ from __future__ import annotations
 import re
 from typing import Any, Dict, Optional
 
+from server.brain.prompts.technical_terms import normalize_technical_terms
+
 
 SOURCE_MIN_FINAL_MEANINGFUL_CHARS = 5
 SOURCE_MIN_FINAL_MEANINGFUL_TOKENS = 2
@@ -283,13 +285,15 @@ def assess_public_relay_readiness(
 
 
 def assess_relay_output_text(text: str) -> tuple[bool, str, Dict[str, Any]]:
-    normalized = normalize_source_text(text)
+    technical = normalize_technical_terms(text)
+    normalized = normalize_source_text(technical.text)
     tokens = _SOURCE_TOKEN_RE.findall(normalized)
     meaningful_chars = sum(1 for char in normalized if char.isalnum())
     signal = {
         "chars": len(normalized),
         "meaningful_chars": meaningful_chars,
         "tokens": len(tokens),
+        "technical_terms": technical.as_signal(),
     }
 
     if not normalized:
@@ -298,6 +302,8 @@ def assess_relay_output_text(text: str) -> tuple[bool, str, Dict[str, Any]]:
         return False, "punctuation_only_relay_output", signal
     if _RELAY_META_OR_UNCLEAR_RE.search(normalized):
         return False, "meta_or_unclear_relay_output", signal
+    if technical.ambiguous_fragments:
+        return False, "ambiguous_technical_relay_output", signal
     return True, "ok", signal
 
 
@@ -350,7 +356,8 @@ def assess_source_transcript(
     duration_ms: Optional[int],
     final: bool,
 ) -> tuple[bool, str, str, Dict[str, Any]]:
-    normalized = normalize_source_text(text)
+    technical = normalize_technical_terms(text)
+    normalized = normalize_source_text(technical.text)
     tokens = _SOURCE_TOKEN_RE.findall(normalized)
     meaningful_tokens = [
         token
@@ -368,6 +375,7 @@ def assess_source_transcript(
         "duration_ms": duration_ms,
         "final": final,
         "short_meaningful_turn": short_meaningful,
+        "technical_terms": technical.as_signal(),
     }
 
     if not normalized:
@@ -387,6 +395,9 @@ def assess_source_transcript(
 
     if not meaningful_tokens and not short_meaningful:
         return False, "filler_only_transcript", normalized, signal
+
+    if final and technical.ambiguous_fragments:
+        return False, "low_confidence_technical_fragment", normalized, signal
 
     if final and not short_meaningful:
         if _PUBLIC_RELAY_FRAGMENT_END_RE.search(normalized):

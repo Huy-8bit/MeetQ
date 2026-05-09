@@ -32,6 +32,7 @@ from server.brain.prompts.language import (
     DEFAULT_TGT,
     LANG_NAMES,
 )
+from server.brain.prompts.technical_terms import build_technical_transcription_prompt
 from server.shared.logging_utils import get_logger, print_translation
 
 # ---------------------------------------------------------------------------
@@ -52,13 +53,22 @@ logger = get_logger("realtime.client")
 # Session config
 # ---------------------------------------------------------------------------
 
-def _build_session_update(instructions: str, enable_audio: bool) -> dict:
+def _build_session_update(
+    instructions: str,
+    enable_audio: bool,
+    *,
+    input_language: Optional[str] = None,
+) -> dict:
     modalities = ["text", "audio"] if enable_audio else ["text"]
     session: dict = {
         "modalities": modalities,
         "instructions": instructions,
         "input_audio_format": "pcm16",
-        "input_audio_transcription": {"model": "gpt-4o-transcribe"},
+        "input_audio_transcription": {
+            "model": "gpt-4o-transcribe",
+            "prompt": build_technical_transcription_prompt(),
+            **({"language": input_language} if input_language and input_language != "auto" else {}),
+        },
         "turn_detection": {
             "type": "server_vad",
             "threshold": 0.5,
@@ -247,7 +257,13 @@ class RealtimeClient:
                 self._ws = ws
                 self._log(f"ws_connected model={self.model}")
                 instructions = self._current_instructions()
-                await ws.send(json.dumps(_build_session_update(instructions, self.enable_speaker)))
+                await ws.send(json.dumps(
+                    _build_session_update(
+                        instructions,
+                        self.enable_speaker,
+                        input_language=self.src_lang,
+                    )
+                ))
 
                 try:
                     await asyncio.gather(
@@ -531,7 +547,11 @@ class RealtimeClient:
         self._log(f"routing: {LANG_NAMES[detected]} -> {LANG_NAMES[effective_tgt]}")
         try:
             await ws.send(json.dumps(
-                _build_session_update(new_instructions, self.enable_speaker)
+                _build_session_update(
+                    new_instructions,
+                    self.enable_speaker,
+                    input_language=detected,
+                )
             ))
         except Exception as exc:
             logger.warning(f"Could not re-send session.update: {exc}")

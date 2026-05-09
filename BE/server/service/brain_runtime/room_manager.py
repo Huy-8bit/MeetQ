@@ -1979,6 +1979,23 @@ class RoomInterpreterManager:
                 state.get("source_blocked_for_overlap")
                 or speaker_id in self.overlap_blocked_speakers
             )
+            technical_signal = signal.get("technical_terms")
+            if isinstance(technical_signal, dict) and any(
+                technical_signal.get(key)
+                for key in ("protected_terms", "corrections", "ambiguous_fragments")
+            ):
+                logger.info(
+                    "BRSE source technical term signal room=%s speaker=%s utterance=%s "
+                    "route=%s->%s source_ok=%s reason=%s technical=%s",
+                    self.room_id,
+                    speaker_id,
+                    state["utterance_id"],
+                    src_lang,
+                    target_lang,
+                    source_ok,
+                    reason,
+                    technical_signal,
+                )
             if source_ok:
                 self._record_validated_source_turn(
                     speaker_id=speaker_id,

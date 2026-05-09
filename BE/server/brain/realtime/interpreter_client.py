@@ -15,6 +15,7 @@ from server.brain.realtime.client import REALTIME_URL_TEMPLATE, RealtimeClient
 from server.brain.realtime.session_config import (
     INTERPRETER_FINAL_TRANSCRIPT_HOLD_MS,
     INTERPRETER_INPUT_TRANSCRIPTION_MODEL,
+    INTERPRETER_INPUT_TRANSCRIPTION_PROMPT,
     INTERPRETER_TEMPERATURE,
     INTERPRETER_VAD_CONFIG,
     INTERPRETER_SEND_QUEUE_MAXSIZE,
@@ -40,6 +41,10 @@ class InterpreterRealtimeClient(RealtimeClient):
         self.input_transcription_model = kwargs.pop(
             "input_transcription_model",
             INTERPRETER_INPUT_TRANSCRIPTION_MODEL,
+        )
+        self.input_transcription_prompt = kwargs.pop(
+            "input_transcription_prompt",
+            INTERPRETER_INPUT_TRANSCRIPTION_PROMPT,
         )
         kwargs["enable_speaker"] = False
         super().__init__(*args, **kwargs)
@@ -156,6 +161,7 @@ class InterpreterRealtimeClient(RealtimeClient):
                     f"meeting_languages={self.meeting_languages} "
                     f"vad={INTERPRETER_VAD_CONFIG} "
                     f"transcription_model={self.input_transcription_model} "
+                    f"transcription_prompt_chars={len(self.input_transcription_prompt)} "
                     f"temp={INTERPRETER_TEMPERATURE}"
                 )
 
@@ -859,6 +865,8 @@ class InterpreterRealtimeClient(RealtimeClient):
             instructions,
             self.request_audio_output,
             input_transcription_model=self.input_transcription_model,
+            input_transcription_prompt=self.input_transcription_prompt,
+            input_language=self.src_lang,
         )
 
     async def _cancel_response(self, ws) -> None:

@@ -9,6 +9,8 @@ from __future__ import annotations
 import re
 from typing import Optional
 
+from server.brain.prompts.technical_terms import build_technical_translation_policy
+
 # ---------------------------------------------------------------------------
 # Supported languages
 # ---------------------------------------------------------------------------
@@ -185,7 +187,8 @@ def build_instructions(src: str, tgt: str) -> str:
             "Detect the language the user spoke. "
             + _auto_detect_routing_policy()
             + " "
-            "Output the translation text only. No explanations, no labels, no commentary."
+            + build_technical_translation_policy()
+            + "Output the translation text only. No explanations, no labels, no commentary."
         )
 
     if src == "auto":
@@ -194,6 +197,7 @@ def build_instructions(src: str, tgt: str) -> str:
         return (
             f"You are a live interpreter. Detect the language the user spoke "
             f"and translate it to {tgt_name}. "
+            + build_technical_translation_policy()
             + (_JA_TONE if tgt == "ja" else "")
             + "Output the translation text only. No explanations, no labels, no commentary."
         )
@@ -212,8 +216,9 @@ def build_instructions(src: str, tgt: str) -> str:
     return (
         f"You are a live interpreter from {src_name} to {tgt_name}. "
         f"The user will always speak {src_name}. "
-        f"Output ONLY the {tgt_name} translation. {tone}"
-        "No explanations, no labels, no commentary."
+        + build_technical_translation_policy()
+        + f"Output ONLY the {tgt_name} translation. {tone}"
+        + "No explanations, no labels, no commentary."
     )
 
 

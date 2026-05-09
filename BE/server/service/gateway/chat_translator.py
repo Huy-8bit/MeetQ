@@ -16,6 +16,7 @@ import logging
 from typing import List, Optional
 
 from server.brain.prompts.language import LANG_NAMES, build_instructions
+from server.brain.prompts.technical_terms import build_technical_translation_policy
 
 logger = logging.getLogger(__name__)
 
@@ -90,6 +91,7 @@ def _build_chat_translation_prompt(src_lang: str, tgt_lang: str) -> str:
     return (
         f"You are a professional translator from {src_name} to {tgt_name}. "
         f"Translate the following chat message accurately and naturally. "
-        f"Output ONLY the {tgt_name} translation. "
-        "No explanations, no labels, no commentary."
+        + build_technical_translation_policy()
+        + f"Output ONLY the {tgt_name} translation. "
+        + "No explanations, no labels, no commentary."
     )

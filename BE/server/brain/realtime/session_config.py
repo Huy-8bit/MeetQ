@@ -3,6 +3,10 @@ from __future__ import annotations
 from typing import Dict, Iterable, Optional
 
 from server.brain.prompts.language import LANG_NAMES
+from server.brain.prompts.technical_terms import (
+    build_technical_translation_policy,
+    build_technical_transcription_prompt,
+)
 from server.meeting_modes import DEFAULT_RELAY_LANGUAGE_MAP
 
 BRSE_RELAY_LANGUAGE_MAP: Dict[str, str] = dict(DEFAULT_RELAY_LANGUAGE_MAP)
@@ -18,6 +22,7 @@ INTERPRETER_VAD_CONFIG = {
 
 INTERPRETER_TEMPERATURE = 0.6
 INTERPRETER_INPUT_TRANSCRIPTION_MODEL = "gpt-4o-transcribe"
+INTERPRETER_INPUT_TRANSCRIPTION_PROMPT = build_technical_transcription_prompt()
 INTERPRETER_FINAL_TRANSCRIPT_HOLD_MS = 240
 INTERPRETER_VOICE = "alloy"
 INTERPRETER_MAX_RESPONSE_OUTPUT_TOKENS = 4096
@@ -73,6 +78,7 @@ _FIDELITY_POLICY = (
     "Natural spoken rephrasing is allowed when it helps the target audience understand the same meaning more clearly, but it must not change the meaning or add new information. "
     "Keep ambiguity as ambiguity. Keep uncertainty as uncertainty. Keep tentative statements tentative. "
 )
+_TECHNICAL_TERM_POLICY = build_technical_translation_policy()
 _RELAY_POLICY = (
     "This is an interpreted relay, not a literal word-by-word translation. "
     "Speak naturally and idiomatically for a real meeting, but stay strictly within what the speaker actually said. "
@@ -139,6 +145,7 @@ def build_interpreter_instructions(
             + _OVERLAP_DISCIPLINE_POLICY
             + _SOURCE_TRANSCRIPT_POLICY
             + _BOUNDARY_POLICY
+            + _TECHNICAL_TERM_POLICY
             + _FIDELITY_POLICY
             + _RELAY_POLICY
             + _LONG_UTTERANCE_POLICY
@@ -157,6 +164,7 @@ def build_interpreter_instructions(
         + f"The current speaker is speaking primarily in {src_name}. "
         + f"Relay their meaning in natural spoken {tgt_name} for the listeners who use {tgt_name}. "
         + _BOUNDARY_POLICY
+        + _TECHNICAL_TERM_POLICY
         + _FIDELITY_POLICY
         + _RELAY_POLICY
         + _LONG_UTTERANCE_POLICY
@@ -187,6 +195,7 @@ def build_interpreter_summary_instructions(
         + pair_context
         + _SUMMARY_FALLBACK_POLICY
         + _BOUNDARY_POLICY
+        + _TECHNICAL_TERM_POLICY
         + _FIDELITY_POLICY
         + _OUTPUT_POLICY
         + f"For this response, use overlap-summary mode and output only a concise spoken {tgt_name} summary. "
@@ -215,13 +224,19 @@ def build_interpreter_session_update(
     enable_audio: bool,
     *,
     input_transcription_model: str = INTERPRETER_INPUT_TRANSCRIPTION_MODEL,
+    input_transcription_prompt: str = INTERPRETER_INPUT_TRANSCRIPTION_PROMPT,
+    input_language: Optional[str] = None,
 ) -> dict:
     modalities = ["text", "audio"] if enable_audio else ["text"]
     session: dict = {
         "modalities": modalities,
         "instructions": instructions,
         "input_audio_format": "pcm16",
-        "input_audio_transcription": {"model": input_transcription_model},
+        "input_audio_transcription": {
+            "model": input_transcription_model,
+            "prompt": input_transcription_prompt,
+            **({"language": input_language} if input_language and input_language != "auto" else {}),
+        },
         "turn_detection": dict(INTERPRETER_VAD_CONFIG),
         "temperature": INTERPRETER_TEMPERATURE,
         "max_response_output_tokens": INTERPRETER_MAX_RESPONSE_OUTPUT_TOKENS,

@@ -1,5 +1,180 @@
 # Backend Implementation State
 
+## Turn Update: 2026-05-09 BRSE Technical Terms / Mixed-Language Relay Quality
+
+- Time: 2026-05-09T18:56:37+07:00
+- Mode: CODE-ONLY
+- Status: implemented
+- Testing deferred: yes, per instruction
+
+### Objective
+
+Target the BRSE runtime failure mode where Vietnamese speech mixed with English
+technical terms, job titles, UI/product vocabulary, tech stack names, and proper
+nouns is misrecognized, normalized poorly, or translated into nonsense. Keep the
+existing room, LiveKit, websocket, chat, screen share, expiry, persistence,
+overlap, and summary flows intact.
+
+### Read Status
+
+- Required docs read:
+  - `docs/backend/README.md`
+  - `docs/backend/INTERPRETER_DESIGN.md`
+  - `docs/backend/IMPLEMENTATION_STATE.md`
+- Required backend/runtime files read:
+  - `BE/server/brain/realtime/client.py`
+  - `BE/server/brain/realtime/interpreter_client.py`
+  - `BE/server/brain/realtime/session_config.py`
+  - `BE/server/brain/realtime/source_policy.py`
+  - `BE/server/brain/prompts/language.py`
+  - `BE/server/service/brain_runtime/room_manager.py`
+  - `BE/server/service/media/audio_input.py`
+- Related fallback/chat/shared prompt files read:
+  - `BE/server/brain/fallback/pipeline.py`
+  - `BE/server/service/gateway/chat_translator.py`
+  - `BE/server/config.py`
+  - `docs/realtime_protocol.md`
+
+### Root Cause Traced
+
+- ASR source was the first weak point for technical terms. Realtime
+  transcription had no domain vocabulary prompt, so short English loanwords in
+  Vietnamese speech such as `button`, job titles like `software engineer`, and
+  terms like `Docker` / `Redis` depended entirely on generic ASR.
+- There was no glossary/protected-term strategy in `brain/prompts`; prompt text
+  only said to preserve proper nouns/code terms generally, without concrete
+  examples or a maintainable vocabulary list.
+- Source normalization only collapsed whitespace. It did not canonicalize
+  common technical/proper-noun variants such as `go lang` -> `Golang`,
+  `mongo db` -> `MongoDB`, `ho chi minh` -> `Ho Chi Minh`, or
+  `front end engineer` -> `frontend engineer`.
+- Source policy could reject standalone `bg` after the previous stricter
+  thresholds, but phrase-level bad captures such as `em sửa cái bg này` still
+  had enough Vietnamese context to become a valid source turn and go to
+  translation as nonsense.
+- Translation prompt did not explicitly teach mixed Vietnamese + English tech
+  speech. It could over-translate or paraphrase UI/dev terms instead of
+  preserving intended technical vocabulary.
+- There was no post-processing layer that rewrote terms after translation; the
+  production path is source transcript -> source policy -> response.create with
+  validated source text -> output gate.
+
+### Glossary / Protected-Term Strategy
+
+- Added `BE/server/brain/prompts/technical_terms.py` as the single lightweight
+  source of truth for:
+  - protected terms: job titles, UI/product terms, tech stack names, common
+    project/domain names, and place names;
+  - transcription prompt text;
+  - translation prompt policy;
+  - high-confidence source normalization/correction;
+  - ambiguous short technical fragment detection.
+- Protected examples include:
+  - `software engineer`, `frontend engineer`, `backend engineer`,
+    `DevOps engineer`, `QA engineer`;
+  - `button`, `dropdown`, `input`, `screen`, `layout`;
+  - `Python`, `Golang`, `Docker`, `Redis`, `MongoDB`, `PostgreSQL`,
+    `Node.js`, `React`, `Next.js`, `TypeScript`, `JavaScript`, `LiveKit`,
+    `OpenAI`, `BRSE`;
+  - `Ho Chi Minh`, `Saigon`.
+- The glossary is intentionally code-local and tuple/regex based. No new
+  service, database, or runtime dependency was introduced.
+
+### Transcription / Prompt Changes
+
+- Realtime session updates now send a technical-domain transcription prompt
+  through `input_audio_transcription.prompt` and pass the deterministic speaker
+  source language when available.
+- The prompt tells ASR to expect Vietnamese mixed with English IT/product/UI
+  vocabulary and to preserve intended technical/proper terms.
+- Interpreter session logs now include transcription prompt length so operators
+  can confirm the prompt path is active.
+- `build_interpreter_instructions()` now includes a dedicated technical-term
+  policy:
+  - preserve common English IT/product/code terms when naturally intended;
+  - do not over-translate UI/dev terms;
+  - do not expand a short unclear token into a random technical term;
+  - preserve role/title meaning accurately.
+- Shared `build_instructions()` and chat translation prompts now reuse the same
+  technical-term policy so fallback/CLI/chat paths do not regress mixed-language
+  technical text.
+
+### Normalization / Source Policy Changes
+
+- Added source normalization for high-confidence variants:
+  - `front end engineer` -> `frontend engineer`
+  - `back end engineer` -> `backend engineer`
+  - `dev ops engineer` -> `DevOps engineer`
+  - `drop down` -> `dropdown`
+  - `go lang` -> `Golang`
+  - `mongo db` -> `MongoDB`
+  - `live kit` -> `LiveKit`
+  - `ho chi minh` / `hồ chí minh` -> `Ho Chi Minh`
+  - `sai gon` / `sài gòn` -> `Saigon`
+- Added narrow contextual ASR correction for the observed button failure:
+  - `cái bg`, `nút bg`, `sửa bg`, `click bg`, `nhấn bg`, and close phonetic
+    variants become `button`;
+  - standalone `bg` is not force-corrected.
+- Added `low_confidence_technical_fragment` source rejection for ambiguous
+  short technical-looking fragments such as standalone `bg`, `b g`, `bt`,
+  or `b t` when no high-confidence contextual correction was applied.
+- Added relay-output rejection for ambiguous technical fragments that somehow
+  reach output text.
+
+### Observability
+
+- Source transcript signal now includes `technical_terms` with:
+  - `protected_terms`
+  - `corrections`
+  - `ambiguous_fragments`
+  - `source_changed`
+- Room runtime logs `BRSE source technical term signal` whenever protected
+  terms, corrections, or ambiguous fragments are observed, including whether
+  the source was accepted or rejected and the rejection reason.
+- Existing source accepted/rejected, public relay approved/suppressed, relay
+  output rejected, and model path logs remain unchanged.
+
+### Model Strategy
+
+- No additional model change in this turn. The previous turn already moved live
+  BRSE relay to `gpt-realtime` and realtime transcription to
+  `gpt-4o-transcribe`.
+- This turn uses the existing `gpt-4o-transcribe` path more effectively by
+  adding transcription prompt vocabulary and deterministic input language.
+- Rollback paths remain:
+  - `OPENAI_REALTIME_MODEL`
+  - `OPENAI_REALTIME_TRANSCRIPTION_MODEL`
+
+### Files Modified
+
+- `BE/server/brain/prompts/technical_terms.py`
+- `BE/server/brain/prompts/language.py`
+- `BE/server/brain/realtime/client.py`
+- `BE/server/brain/realtime/interpreter_client.py`
+- `BE/server/brain/realtime/session_config.py`
+- `BE/server/brain/realtime/source_policy.py`
+- `BE/server/brain/realtime/translation_test_client.py`
+- `BE/server/service/brain_runtime/room_manager.py`
+- `BE/server/service/gateway/chat_translator.py`
+- `docs/backend/IMPLEMENTATION_STATE.md`
+
+### Verification
+
+- Full test suite not run, per CODE-ONLY instruction.
+- New tests not added.
+- Existing tests not modified.
+- Lightweight backend compile only:
+  - `PYTHONPATH=BE python -m py_compile BE/server/brain/prompts/technical_terms.py BE/server/brain/prompts/language.py BE/server/brain/realtime/source_policy.py BE/server/brain/realtime/session_config.py BE/server/brain/realtime/interpreter_client.py BE/server/brain/realtime/client.py BE/server/brain/realtime/translation_test_client.py BE/server/service/brain_runtime/room_manager.py BE/server/service/gateway/chat_translator.py`
+- Tiny normalization/source-policy smoke only:
+  - `tôi là software engineer ở ho chi minh` -> accepted as
+    `tôi là software engineer ở Ho Chi Minh`
+  - `em sửa cái bg này` -> accepted as `em sửa cái button này`
+  - `bên anh dùng docker với redis` -> accepted as
+    `bên anh dùng Docker với Redis`
+  - `bg` -> rejected as `low_confidence_technical_fragment`
+
+---
+
 ## Turn Update: 2026-05-09 BRSE Translation Quality / Conservative Relay Gate
 
 - Time: 2026-05-09T17:58:22+07:00

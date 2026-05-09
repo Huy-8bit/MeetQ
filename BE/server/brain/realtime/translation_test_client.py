@@ -24,6 +24,7 @@ from server.shared.audio import AudioInput, AudioMetadata
 from server.brain.realtime.interpreter_client import InterpreterRealtimeClient
 from server.brain.realtime.session_config import (
     INTERPRETER_INPUT_TRANSCRIPTION_MODEL,
+    INTERPRETER_INPUT_TRANSCRIPTION_PROMPT,
     build_interpreter_instructions,
     INTERPRETER_TEMPERATURE,
     INTERPRETER_VAD_CONFIG,
@@ -109,7 +110,11 @@ def _build_test_session_update(src_lang: str, tgt_lang: str) -> dict:
             "modalities": ["text"],  # text-only; no audio output for test mode
             "instructions": instructions,
             "input_audio_format": "pcm16",
-            "input_audio_transcription": {"model": INTERPRETER_INPUT_TRANSCRIPTION_MODEL},
+            "input_audio_transcription": {
+                "model": INTERPRETER_INPUT_TRANSCRIPTION_MODEL,
+                "prompt": INTERPRETER_INPUT_TRANSCRIPTION_PROMPT,
+                "language": src_lang,
+            },
             "turn_detection": dict(_TEST_VAD_CONFIG),
             "temperature": INTERPRETER_TEMPERATURE,
             "max_response_output_tokens": INTERPRETER_MAX_RESPONSE_OUTPUT_TOKENS,
