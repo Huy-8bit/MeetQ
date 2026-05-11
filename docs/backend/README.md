@@ -17,6 +17,7 @@ Backend của MeetQ phục vụ một meeting room realtime có các capability 
 - room websocket để đồng bộ state realtime
 - phát hành token LiveKit cho browser participant
 - BRSE / AI relay participant để nghe và relay nội dung đa ngôn ngữ
+- room language configuration linh hoạt qua `room_languages` gồm 1 hoặc nhiều ngôn ngữ; `participant.language` là lựa chọn của user trong room đó
 - BRSE silent listener mode để nghe/capture transcript mà không phát audio relay
 - transcript / relay history
 - chat room với tùy chọn dịch hoặc không dịch
@@ -84,6 +85,10 @@ event contracts, but the runtime path is split into explicit layers:
 
 Relay text is the source of truth. Voice output is a delivery mode selected
 after text has been produced and gated.
+
+Room language routing is no longer pair-only. One-language rooms are valid for
+chat, transcript, summary, and BRSE source capture; translation relay only runs
+when the route has a real cross-language target.
 
 ### System Diagram
 

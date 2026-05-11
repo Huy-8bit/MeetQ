@@ -1,5 +1,363 @@
 # Backend Implementation State
 
+## Turn Update: 2026-05-10 Room Languages List Model — Pair-Only Refactor
+
+- Time: 2026-05-10T(current session)
+- Mode: CODE-ONLY
+- Status: implemented
+- Testing deferred: yes, per instruction
+
+### Objective
+
+Refactor backend room/language semantics so a room is not locked to a fixed
+Language A / Language B pair. Rooms now support one or many configured
+languages, while preserving current 2-language production behavior.
+
+### New Room Language Model
+
+- Canonical room-level field is `room_languages: list[MeetingLanguage]`.
+- `room_languages` must contain at least 1 distinct supported language from
+  `vi,en,ja,zh,ko,fr,es`.
+- `meeting_languages` remains in API/runtime/persistence as a legacy alias and
+  mirrors `room_languages` for backward compatibility.
+- `language_a` / `language_b` are accepted as legacy input/snapshot fields and
+  are mapped into `room_languages` when present.
+- `participant.language` remains separate: it is the participant-selected
+  speaking/listening language inside the room and must be one of
+  `room_languages`.
+
+### Backward Compatibility / Migration
+
+- Old create-room requests using `meeting_languages` still work.
+- Old create-room requests or persisted snapshots with `language_a` +
+  `language_b` are parsed into `room_languages`.
+- Redis `RoomState` validation backfills missing `room_languages` from
+  `meeting_languages`, then from `language_a/language_b`, then from the legacy
+  default `["vi", "ja"]`.
+- Mongo room archive now writes both `room_languages` and `meeting_languages`;
+  summary source collection falls back either direction for old documents.
+- Existing 2-language rooms keep deterministic cross-language behavior because
+  the target list for `["vi", "ja"]` remains `vi -> ja` and `ja -> vi`.
+
+### Runtime / Routing Strategy
+
+- Gateway create/join/set-language validation now uses `room_languages` and no
+  longer rejects a one-language room.
+- BRSE runtime syncs canonical room languages from snapshots and stores
+  `room_languages` internally, with `meeting_languages` kept as a compatibility
+  alias for realtime client prompts.
+- Relay route resolution no longer means "target = the other language":
+  - same-language / one-language room: capture source transcript and suppress
+    relay translation/audio as `same_language_no_translation_required`;
+  - multi-language room: choose target from active listener languages first;
+  - if no listener language is available yet, fall back to room language order
+    for deterministic behavior.
+- `RoomAudioRouting` now exposes `bridge_strategy="participant_language_preference"`
+  and `relay_language_targets`; `relay_language_map` is retained only for exact
+  two-language legacy clients.
+
+### Chat / Summary Strategy
+
+- Chat translation resolves zero or more targets from `room_languages`.
+  One-language rooms produce no translations and keep the original message.
+  Two-language rooms preserve legacy single-target behavior. Multi-language
+  rooms translate to each configured non-source language.
+- Meeting summary is independent of language-pair routing. Summary generation
+  remains grounded in transcript/relay/chat source records and uses configured
+  `MEETING_SUMMARY_LANGUAGE` / settings summary language as the canonical output
+  language.
+- Interim and final summary source payloads include `room_languages` while
+  preserving `meeting_languages`.
+
+### Deferred
+
+- Full personalized many-to-many simultaneous voice fanout for N participants /
+  N target languages is not implemented in this turn. Current runtime keeps one
+  route per speaker and chooses the most practical target using active listener
+  context, preserving existing behavior for 2-language rooms.
+- Frontend UX changes for authoring one-language or multi-language rooms are
+  outside this CODE-ONLY backend turn.
+
+### Files Modified
+
+- `BE/server/models.py`
+- `BE/server/meeting_modes.py`
+- `BE/server/service/gateway/api_rooms.py`
+- `BE/server/service/gateway/room_service.py`
+- `BE/server/service/gateway/room_store.py`
+- `BE/server/service/gateway/chat_translator.py`
+- `BE/server/service/brain_runtime/daemon.py`
+- `BE/server/service/brain_runtime/room_manager.py`
+- `BE/server/brain/realtime/session_config.py`
+- `BE/server/service/persistence/room_history.py`
+- `docs/backend/API_CONTRACT.md`
+- `docs/backend/GATEWAY_DESIGN.md`
+- `docs/backend/INTERPRETER_DESIGN.md`
+- `docs/backend/README.md`
+- `docs/backend/IMPLEMENTATION_STATE.md`
+
+### Verification
+
+- Full test suite not run, per CODE-ONLY instruction.
+- New tests not added.
+- Existing tests not modified.
+- Lightweight syntax/compile check passed for modified backend files.
+- Lightweight model smoke check passed for request alias mapping, old snapshot
+  parsing, and relay target metadata.
+
+---
+
+## Turn Update: 2026-05-10 BRSE Source Transcript Quality — Audio-to-Text Capture Fix
+
+- Time: 2026-05-10T(current session)
+- Mode: CODE-ONLY
+- Status: implemented
+- Testing deferred: yes, per instruction
+
+### Objective
+
+Fix đúng tầng source capture trước translation: source transcript phải sạch hơn
+trước khi relay/dịch, mixed Vietnamese + English không bị ép một ngôn ngữ,
+technical terms/proper nouns được preserve sớm hơn, và transcript dang dở/rác
+không bị commit quá dễ.
+
+### Root Causes Traced
+
+- `conversation.item.input_audio_transcription.completed` được đưa thẳng vào
+  `on_transcript_complete()` rồi publish source final. Hold 80ms hiện tại chỉ
+  chạy trước `response.create` relay, không bảo vệ source-final publish khỏi
+  câu mơ hồ/dang dở.
+- VAD đã giảm `silence_duration_ms` xuống 700ms để sửa latency, nhưng source
+  layer thiếu grace có điều kiện cho transcript có dấu hiệu hanging fragment,
+  low-confidence technical fragment, hoặc câu Việt đang dang dở.
+- ASR prompt có tech context nhưng chưa đủ explicit về code-switch:
+  Vietnamese + English technical terms trong cùng câu, proper noun casing, và
+  các ví dụ như `button`, `software engineer`, `deploy service lên k8s`,
+  `Docker với Redis`.
+- Source policy đã reject một số noise/fragment, nhưng chưa có preflight hold
+  trước accept/publish và chưa log đủ `detected_terms` để debug mixed-language
+  hits.
+- Proper noun preservation chủ yếu dựa vào prompt/glossary nhỏ; detector chưa
+  có rule hẹp cho multi-word Title Case names trong Vietnamese code-switch
+  context.
+- Overlap source path đã tách khỏi normal relay bằng validated source turns,
+  nhưng source final vẫn cần sạch trước khi được ghi vào context/overlap window.
+
+### Source Capture Changes
+
+- Added `INTERPRETER_SOURCE_QUALITY_HOLD_MS = 260`.
+- `InterpreterRealtimeClient` now performs source-quality preflight before
+  calling `on_transcript_complete()`:
+  - clean accepted transcript stays fast path with no extra hold;
+  - hanging/ambiguous source gets a short conditional hold;
+  - if new speech starts during that hold, the held suspicious transcript is
+    rejected as `speech_continued_during_source_quality_hold` instead of being
+    committed as source truth.
+- Source final publish is now protected by the preflight hold because the hold
+  happens before `RoomInterpreterManager.on_transcript_complete()`.
+- Existing relay hold remains separate and small; single-speaker clear speech
+  still takes the no-hold fast path.
+
+### Mixed-Language Strategy
+
+- ASR transcription prompt now explicitly says the meeting may contain
+  Vietnamese mixed with English IT/product/UI/DevOps terms and must not force
+  the utterance into one language.
+- Prompt includes concrete source-level examples:
+  - `tôi là software engineer ở Ho Chi Minh`
+  - `em sửa cái button này`
+  - `bên anh đang deploy service lên k8s`
+  - `bên em dùng Docker với Redis`
+- `term_detector` now treats Vietnamese context as either diacritics or common
+  Vietnamese function words (`em`, `anh`, `cái`, `bên`, `sửa`, `dùng`, `lên`,
+  etc.), so code-switch detection still works when ASR emits unaccented text.
+
+### Technical / Proper-Noun Preservation
+
+- Source layer keeps using rule-based `detect_terms()` as primary detection:
+  alphanumeric shapes (`k8s`), acronyms (`CI/CD`), CamelCase/tools
+  (`Docker`, `Redis`, `LiveKit`), curated tool names, and Vietnamese code-switch
+  English tokens.
+- Added a narrow mixed-context proper noun rule for multi-word Title Case
+  sequences to preserve names/company/place-like phrases without building an
+  infinite glossary.
+- Added safe canonical normalization fallbacks for high-confidence ASR patterns:
+  `HCMC -> Ho Chi Minh`, `key eight s / k eight s -> k8s`,
+  `red dis -> Redis`, `dock er -> Docker`,
+  `software in geneer -> software engineer`.
+- Glossary remains small fallback/exceptions, not the primary strategy.
+
+### Source Policy / Reject-Hold Behavior
+
+- Added `source_transcript_needs_quality_hold()` to classify final transcript
+  preflight before room-level source final handling.
+- Added stronger source rejection for ASR uncertainty phrases and Vietnamese
+  dangling endings such as final `cái`, `bên`, `là`, `và`, `nhưng`, `nên`.
+- Ambiguous technical fragments are rejected only when no confirmed technical
+  term is detected, preserving useful short turns like `k8s` while rejecting
+  unresolved garbage like `bg` in UI context.
+- Short meaningful meeting turns are preserved through the existing
+  `short_meaningful_turn` path; this is not a silence-first change.
+
+### Observability
+
+- Logs now show source-quality hold reason, remaining hold ms, normalized
+  source, and policy signal.
+- Fast-path technical/mixed-language source logs detected terms.
+- Room policy logs include both canonical `technical_terms` and rule-based
+  `detected_terms`.
+- Room manager logs when validated source is handed to relay policy, including
+  relay source chars and relay style.
+
+### Files Modified / Created
+
+- `BE/server/brain/realtime/interpreter_client.py`
+- `BE/server/brain/realtime/session_config.py`
+- `BE/server/brain/realtime/source_policy.py`
+- `BE/server/brain/realtime/term_detector.py`
+- `BE/server/brain/prompts/technical_terms.py`
+- `BE/server/service/brain_runtime/policy.py`
+- `BE/server/service/brain_runtime/room_manager.py`
+- `docs/backend/IMPLEMENTATION_STATE.md`
+
+### Verification
+
+- Full test suite not run, per CODE-ONLY instruction.
+- New tests not added.
+- Existing tests not modified.
+- Lightweight compile check passed for modified backend/runtime files.
+
+---
+
+## Turn Update: 2026-05-10 BRSE Translation Quality — Rule-Based Detection + Latency Fix
+
+- Time: 2026-05-10T(current session)
+- Mode: CODE-ONLY
+- Status: implemented
+- Testing deferred: yes, per instruction
+
+### Objective
+
+Fix triệt để regression về chất lượng dịch/relay:
+- nghe nhầm rồi dịch bậy
+- technical terms (`k8s`, `deploy`, `Docker`, `CI/CD`, `software engineer`) bị phá nghĩa
+- mixed Vietnamese + English bị over-translate hoặc hallucinate
+- output lan man, không bám source
+- latency tăng 20-30% sau refactor trước
+
+### Root Causes Traced
+
+**Latency regression (20-30%)**:
+- `silence_duration_ms: 1350ms` → quá conservative; mỗi turn chờ thêm 550-700ms trailing silence
+- `INTERPRETER_FINAL_TRANSCRIPT_HOLD_MS: 240ms` → thêm 240ms unnecessary wait sau ASR
+- `overlap_level()` bị gọi 3 lần mỗi turn (kể cả happy path), dù mỗi call không nặng, thêm overhead
+- Không có fast-path khi không có overlap indicators
+
+**Quality regression (hallucination/irrelevance)**:
+- `INTERPRETER_MAX_RESPONSE_OUTPUT_TOKENS: 4096` → model có 4096 tokens room để elaborate/bịa
+- Base instruction có full 55-term list lặp lại ở mỗi session → instruction bloat, model drift
+- Không có per-turn term injection → model không biết turn này cụ thể có `k8s`, `Docker`, `deploy`
+- `technical_terms.py` dùng flat list làm primary detection — không scale, có gaps
+
+**Technical term errors (`k8s`, `deploy`)**:
+- `k8s` không trong protected terms gốc (và shape rules không detect alphanumeric-with-digit)
+- `deploy`, `deployment`, `CI/CD`, `kubectl` etc. không được detect reliably
+- Source ngắn chứa technical term bị reject vì `too_short_transcript` (meaningful_chars < 5)
+- Transcription prompt không mention `k8s`, `kubectl`, `Helm` etc.
+
+### Architecture Change: Rule-Based Term Detector
+
+**Trước**: `technical_terms.py` là primary detection — flat list `PROTECTED_TECH_TERMS`, không scale.
+
+**Sau**: `term_detector.py` là primary detection engine với rule-based layers:
+
+1. **Shape rules** (không cần list):
+   - Alphanumeric-with-digit: `k8s`, `gpt4`, `oauth2`, `v1beta`
+   - CamelCase 2+ humps: `Docker`, `MongoDB`, `TypeScript`, `LiveKit`
+   - ALL-CAPS acronyms (filtered): `API`, `CI`, `CD`, `URL`, `SQL`
+   - Dotted tech names: `Node.js`, `Next.js`
+   - Slash abbreviations: `CI/CD`
+
+2. **Multi-word job title patterns** (regex, không list):
+   - `(software|frontend|backend|devops|...) (engineer|developer|manager|...)`
+
+3. **English code-switch in Vietnamese context**:
+   - Detect Vietnamese diacritics → flag context as Vietnamese
+   - English ASCII words in Vietnamese context → check against small vocabulary
+   - Small vocab (`_VI_CODESWITCH_VOCAB`): ~50 frequently code-switched tech words
+   - Curated tool names (`_CURATED_TOOL_NAMES`): ~40 specific tool/framework names
+
+4. **Ambiguous fragment detection** (for gating, not relay):
+   - `bg`, `bt`, short mixed tokens in tech context → flag for rejection
+
+**Key integration**: `interpreter_client._send_relay_response` calls `detect_terms(source_text)` per turn và injects `term_analysis.build_preserve_instruction()` vào `response.create` instructions. Model nhận instruction như:
+> "These terms appear in the source — keep them exactly as written: k8s, Docker, deploy."
+
+Đây là per-turn dynamic injection thay vì static system-level list.
+
+**`technical_terms.py`** giữ vai trò:
+- Canonical normalization (`go lang → Golang`, `k 8 s → k8s`, `ci/cd → CI/CD`)
+- Context-aware ASR corrections (`bg → button` khi có context UI)
+- `build_technical_transcription_prompt()` cho ASR session
+- `build_technical_translation_policy()` — đã rút ngắn, principles-based
+
+### Source Policy Changes
+
+- `assess_source_transcript` dùng `detect_terms()` (rule-based) thay vì chỉ `normalize_technical_terms().protected_terms`
+- Ambiguous fragment gate: chỉ reject khi `term_analysis.has_unresolved_ambiguity` (ambiguous fragments tồn tại MÀ KHÔNG có confirmed technical terms)
+- Short-but-valid bypass: dùng `is_short_but_valid_technical(text, term_analysis)` — cho phép `k8s`, `kubectl`, `CI/CD` pass dù alnum_chars < 5
+- Signal dict include `detected_terms` từ `TermAnalysis.as_signal()` cho observability
+
+### Latency Fixes
+
+| Parameter | Before | After | Impact |
+|---|---|---|---|
+| `silence_duration_ms` | 1350ms | 700ms | -650ms/turn |
+| `INTERPRETER_FINAL_TRANSCRIPT_HOLD_MS` | 240ms | 80ms | -160ms/turn |
+| `INTERPRETER_MAX_RESPONSE_OUTPUT_TOKENS` | 4096 | 300 | cap relay length |
+| `INTERPRETER_TEMPERATURE` | 0.6 | 0.4 | less drift |
+| `overlap_level()` calls/turn | 3 | 1 (cached) | less work |
+| `overlap_level()` fast-path | none | single-speaker → SINGLE immediately | no O(n) on happy path |
+
+### Prompt/Instruction Changes
+
+- `_PRAGMATIC_SPEAKING_POLICY`: simplified — removed conflicting signals ("speak only when relay will help" → was causing model to add commentary about why it's relaying)
+- `build_technical_translation_policy()`: shorter, principle-based — removed full 55-term list (per-turn injection handles specifics)
+- `build_technical_transcription_prompt()`: updated with new terms (k8s, kubectl, Helm, CI/CD, deploy, etc.)
+- Per-turn `term_instruction` via `TermAnalysis.build_preserve_instruction()` — injected into `response.create` for each utterance
+
+### Overlap Path — Unchanged
+
+Normal relay và overlap summary vẫn tách rõ. Overlap manager chỉ activate khi thật sự có overlap. Fast-path `overlap_level()` cho single-speaker case.
+
+### Observability
+
+- `term_injection` log trong `interpreter_client` khi detected terms có trong source
+- `source_policy` signal bao gồm `detected_terms` từ rule-based detector
+- `short_tech_term_bypass` flag khi short transcript pass vì có confirmed tech terms
+
+### Files Modified / Created
+
+**New**:
+- `BE/server/brain/realtime/term_detector.py`
+
+**Modified**:
+- `BE/server/brain/realtime/session_config.py` — VAD silence, hold, max_tokens, temperature, pragmatic policy
+- `BE/server/brain/prompts/technical_terms.py` — canonical normalization kept, policy strings shortened
+- `BE/server/brain/realtime/source_policy.py` — use `detect_terms()`, better ambiguous gating
+- `BE/server/brain/realtime/interpreter_client.py` — per-turn term injection, import term_detector
+- `BE/server/service/brain_runtime/overlap.py` — fast-path `overlap_level()`, `overlap_level` param
+- `BE/server/service/brain_runtime/room_manager.py` — pre-compute overlap_level once per turn, pass to policy
+
+### Testing Deferred
+
+- Full test suite not run, per CODE-ONLY instruction
+- New tests not added
+- Existing tests not modified
+- Lightweight compile check: all modified files compiled clean
+
+---
+
 ## Turn Update: 2026-05-10 BRSE Runtime End-to-End Wiring
 
 - Time: 2026-05-10T00:54:26+07:00

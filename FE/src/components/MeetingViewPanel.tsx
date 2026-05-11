@@ -1,12 +1,11 @@
 import type { AppThemeMode, RoomLayoutMode } from "../lib/uiPreferences";
+import { MotionButton } from "./MotionButton";
 
 interface MeetingViewPanelProps {
   themeMode: AppThemeMode;
   layoutMode: RoomLayoutMode;
-  stageFocusActive: boolean;
   onThemeChange: (theme: AppThemeMode) => void;
   onLayoutChange: (layout: RoomLayoutMode) => void;
-  onToggleStageFocus: () => void;
 }
 
 const THEME_OPTIONS: Array<{ value: AppThemeMode; label: string }> = [
@@ -17,7 +16,7 @@ const THEME_OPTIONS: Array<{ value: AppThemeMode; label: string }> = [
 const LAYOUT_OPTIONS: Array<{ value: RoomLayoutMode; label: string; helper: string }> = [
   {
     value: "stage-focus",
-    label: "Stage focus",
+    label: "Wide stage",
     helper: "More space for video and shared screen.",
   },
   {
@@ -35,16 +34,14 @@ const LAYOUT_OPTIONS: Array<{ value: RoomLayoutMode; label: string; helper: stri
 export function MeetingViewPanel({
   themeMode,
   layoutMode,
-  stageFocusActive,
   onThemeChange,
   onLayoutChange,
-  onToggleStageFocus,
 }: MeetingViewPanelProps) {
   return (
     <section className="meeting-view-panel panel-section" aria-labelledby="meeting-view-title">
       <div className="panel-header compact">
         <h3 id="meeting-view-title">View</h3>
-        <p>Theme, room layout, and stage focus.</p>
+        <p>Theme and room layout.</p>
       </div>
 
       <div className="view-setting-block">
@@ -54,7 +51,7 @@ export function MeetingViewPanel({
         </div>
         <div className="segmented-control" role="group" aria-label="Theme mode">
           {THEME_OPTIONS.map((option) => (
-            <button
+            <MotionButton
               key={option.value}
               className={themeMode === option.value ? "is-active" : ""}
               type="button"
@@ -62,7 +59,7 @@ export function MeetingViewPanel({
               aria-pressed={themeMode === option.value}
             >
               {option.label}
-            </button>
+            </MotionButton>
           ))}
         </div>
       </div>
@@ -74,7 +71,7 @@ export function MeetingViewPanel({
         </div>
         <div className="layout-option-grid" role="group" aria-label="Meeting layout">
           {LAYOUT_OPTIONS.map((option) => (
-            <button
+            <MotionButton
               key={option.value}
               className={layoutMode === option.value ? "layout-option is-active" : "layout-option"}
               type="button"
@@ -83,23 +80,9 @@ export function MeetingViewPanel({
             >
               <strong>{option.label}</strong>
               <span>{option.helper}</span>
-            </button>
+            </MotionButton>
           ))}
         </div>
-      </div>
-
-      <div className="view-setting-block focus-setting-block">
-        <div className="view-setting-label">
-          <strong>Stage focus</strong>
-          <span>Hide the side panel and enlarge meeting content.</span>
-        </div>
-        <button
-          className={stageFocusActive ? "button-secondary focus-toggle is-active" : "button-secondary focus-toggle"}
-          type="button"
-          onClick={onToggleStageFocus}
-        >
-          {stageFocusActive ? "Exit focus" : "Focus stage"}
-        </button>
       </div>
     </section>
   );

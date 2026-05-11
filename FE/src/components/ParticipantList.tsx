@@ -1,6 +1,8 @@
 import type { ParticipantSnapshot } from "../types/api";
 import type { BrseRoomMode } from "../lib/brseModes";
 import { getLanguageLabel } from "../lib/languages";
+import { useRevealMotion } from "../lib/motion";
+import { MotionButton } from "./MotionButton";
 
 interface ParticipantListProps {
   participants: ParticipantSnapshot[];
@@ -25,6 +27,14 @@ export function ParticipantList({
   brseAudioExpected = true,
   embedded = false,
 }: ParticipantListProps) {
+  const participantMotionRef = useRevealMotion<HTMLElement>({
+    selector: "[data-participant-motion]",
+    distance: 8,
+    duration: 300,
+    stagger: 28,
+    scaleFrom: 0.996,
+    dependencies: [participants.length, brseEnabled, brseRoomMode, brseAudioExpected],
+  });
   const brsePeopleCopy = getBrsePeopleCopy({
     brseEnabled,
     brseRoomMode,
@@ -32,7 +42,10 @@ export function ParticipantList({
   });
 
   return (
-    <section className={embedded ? "participant-list-panel panel-section" : "panel participant-list-panel"}>
+    <section
+      className={embedded ? "participant-list-panel panel-section" : "panel participant-list-panel"}
+      ref={participantMotionRef}
+    >
       <div className="panel-header">
         <div>
           <h3>Participants</h3>
@@ -42,6 +55,14 @@ export function ParticipantList({
       </div>
 
       <div className="participant-list">
+        {participants.length === 0 ? (
+          <div className="people-empty panel-empty-state" data-participant-motion>
+            <span className="panel-empty-kicker">People</span>
+            <strong>No participants yet</strong>
+            <p>Joined participants and BRSE relay presence will appear here.</p>
+          </div>
+        ) : null}
+
         {participants.map((participant) => {
           const isSelf = participant.participant_id === selfParticipantId;
           const isVirtual = participant.kind === "virtual_brse" || participant.is_virtual;
@@ -52,7 +73,11 @@ export function ParticipantList({
             onMuteParticipant;
 
           return (
-            <div className="participant-row" key={participant.participant_id}>
+            <div
+              className="participant-row"
+              key={participant.participant_id}
+              data-participant-motion
+            >
               <div>
                 <strong>
                   {participant.display_name}
@@ -81,13 +106,13 @@ export function ParticipantList({
                 ) : null}
                 <span className="language-pill">{getLanguageLabel(participant.language)}</span>
                 {canMute ? (
-                  <button
+                  <MotionButton
                     className="button-mute-participant"
                     onClick={() => onMuteParticipant(participant.participant_id)}
                     disabled={isMutingParticipant === participant.participant_id}
                   >
                     {isMutingParticipant === participant.participant_id ? "Muting..." : "Mute"}
-                  </button>
+                  </MotionButton>
                 ) : null}
               </div>
             </div>
@@ -109,7 +134,7 @@ function getBrsePeopleCopy({
 }) {
   if (!brseEnabled) {
     return {
-      panel: "Human attendees in the normal meeting.",
+      panel: "People currently in the room.",
       virtual: "BRSE relay is off",
       badge: "BRSE off",
     };
@@ -117,7 +142,7 @@ function getBrsePeopleCopy({
 
   if (brseRoomMode === "text_only" || !brseAudioExpected) {
     return {
-      panel: "Human attendees and BRSE text relay are tracked from room state.",
+      panel: "People and the text relay presence.",
       virtual: "BRSE text relay participant",
       badge: "BRSE text",
     };
@@ -125,14 +150,14 @@ function getBrsePeopleCopy({
 
   if (brseRoomMode === "silent_summary") {
     return {
-      panel: "Human attendees and BRSE summary capture are tracked from room state.",
+      panel: "People and summary capture presence.",
       virtual: "BRSE summary participant",
       badge: "BRSE summary",
     };
   }
 
   return {
-    panel: "Human attendees and the AI voice + text relay are tracked from room state.",
+    panel: "People and AI relay presence.",
     virtual: "AI voice + text relay participant",
     badge: "AI relay",
   };

@@ -3,6 +3,7 @@ import type { InterpreterStatusEntry } from "../features/room/interpreter";
 import type { TranscriptEntry } from "../features/room/transcripts";
 import type { BrseRoomMode } from "../lib/brseModes";
 import { formatLanguageFlow, getLanguageLabel } from "../lib/languages";
+import { animateLatestItem, useRevealMotion } from "../lib/motion";
 import type { MeetingLanguage } from "../types/api";
 
 interface BrseRelayPanelProps {
@@ -24,6 +25,13 @@ export function BrseRelayPanel({
   transcripts,
 }: BrseRelayPanelProps) {
   const listRef = useRef<HTMLDivElement | null>(null);
+  const emptyMotionRef = useRevealMotion<HTMLDivElement>({
+    selector: "[data-relay-empty-motion]",
+    distance: 8,
+    duration: 280,
+    stagger: 36,
+    dependencies: [brseEnabled, brseRoomMode, brseAudioExpected],
+  });
   const isNearBottomRef = useRef(true);
 
   const visibleEntries = useMemo(
@@ -48,6 +56,11 @@ export function BrseRelayPanel({
     }
   }, [visibleEntries]);
 
+  useEffect(() => {
+    const animation = animateLatestItem(listRef.current);
+    return () => animation?.pause?.();
+  }, [latestId]);
+
   if (visibleEntries.length === 0) {
     const emptyCopy = getRelayEmptyCopy({
       brseEnabled,
@@ -56,9 +69,10 @@ export function BrseRelayPanel({
     });
 
     return (
-      <div className="relay-history-empty">
-        <span>{emptyCopy.title}</span>
-        <p>{emptyCopy.detail}</p>
+      <div className="relay-history-empty panel-empty-state" ref={emptyMotionRef}>
+        <span className="panel-empty-kicker" data-relay-empty-motion>Relay</span>
+        <strong data-relay-empty-motion>{emptyCopy.title}</strong>
+        <p data-relay-empty-motion>{emptyCopy.detail}</p>
       </div>
     );
   }
@@ -130,6 +144,7 @@ function RelayEntry({
         isPartial ? "relay-entry-partial" : "",
         isLatest ? "relay-entry-latest" : "",
       ].filter(Boolean).join(" ")}
+      data-motion-latest={isLatest ? "true" : undefined}
     >
       <div className="relay-entry-meta">
         <span className="relay-entry-speaker">{entry.actorName}</span>

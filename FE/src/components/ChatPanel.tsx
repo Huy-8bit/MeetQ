@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 import { getLanguageLabel } from "../lib/languages";
+import { animateLatestItem } from "../lib/motion";
 import type { ChatTranslationMode, MeetingLanguage, RoomChatMessage } from "../types/api";
+import { MotionButton } from "./MotionButton";
 
 const TRANSLATION_MODE_STORAGE_KEY = "brseai_chat_translation_mode";
 
@@ -51,6 +53,7 @@ export function ChatPanel({
   );
   const listRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const latestMessageId = messages[messages.length - 1]?.message_id ?? null;
 
   // Auto-scroll to bottom on new messages
   useEffect(() => {
@@ -59,6 +62,11 @@ export function ChatPanel({
       el.scrollTop = el.scrollHeight;
     }
   }, [messages.length]);
+
+  useEffect(() => {
+    const animation = animateLatestItem(listRef.current);
+    return () => animation?.pause?.();
+  }, [latestMessageId]);
 
   useEffect(() => {
     const el = inputRef.current;
@@ -127,8 +135,10 @@ export function ChatPanel({
         ref={listRef}
       >
         {messages.length === 0 ? (
-          <div className="chat-empty">
-            <p>No messages yet. Start the conversation!</p>
+          <div className="chat-empty panel-empty-state">
+            <span className="panel-empty-kicker">Chat</span>
+            <strong>No messages yet</strong>
+            <p>Chat notes for this room will appear here.</p>
           </div>
         ) : (
           messages.map((message) => {
@@ -145,6 +155,7 @@ export function ChatPanel({
               <div
                 className={`chat-message ${isSelf ? "chat-message-self" : "chat-message-other"}`}
                 key={message.message_id}
+                data-motion-latest={message.message_id === latestMessageId ? "true" : undefined}
               >
                 <div className="chat-message-header">
                   <strong>{isSelf ? "You" : message.display_name}</strong>
@@ -189,7 +200,7 @@ export function ChatPanel({
       <div className="chat-composer">
         {canTranslate ? (
           <div className="chat-mode-bar" aria-label="Chat send mode">
-            <button
+            <MotionButton
               type="button"
               className={`chat-mode-btn ${translationMode === "original_only" ? "chat-mode-btn-active" : ""}`}
               onClick={() => handleModeChange("original_only")}
@@ -197,8 +208,8 @@ export function ChatPanel({
               title="Send without translation"
             >
               Original
-            </button>
-            <button
+            </MotionButton>
+            <MotionButton
               type="button"
               className={`chat-mode-btn ${translationMode === "translate" ? "chat-mode-btn-active" : ""}`}
               onClick={() => handleModeChange("translate")}
@@ -206,7 +217,7 @@ export function ChatPanel({
               title="Send with translation"
             >
               + Translate
-            </button>
+            </MotionButton>
           </div>
         ) : null}
 
@@ -222,13 +233,14 @@ export function ChatPanel({
             maxLength={2000}
             rows={1}
           />
-          <button
+          <MotionButton
             className="button-primary chat-send-btn"
             type="submit"
             disabled={disabled || isSending || !inputText.trim()}
+            attentionKey={inputText.trim() ? "chat-ready" : null}
           >
             {isSending ? "Sending..." : "Send"}
-          </button>
+          </MotionButton>
         </form>
 
         {error ? <div className="inline-error">{error}</div> : null}

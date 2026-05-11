@@ -154,6 +154,7 @@ _CANONICAL_REPLACEMENTS: tuple[tuple[str, Pattern[str], str], ...] = (
     ("tech_stack", re.compile(r"\bjava\s*script\b", re.IGNORECASE), "JavaScript"),
     ("tech_stack", re.compile(r"\bpostgre\s*sql\b", re.IGNORECASE), "PostgreSQL"),
     ("place_name", re.compile(r"\bh(?:o|ồ)\s+ch[ií]\s+minh\b", re.IGNORECASE), "Ho Chi Minh"),
+    ("place_name", re.compile(r"\bhcmc\b", re.IGNORECASE), "Ho Chi Minh"),
     ("place_name", re.compile(r"\bs(?:ai|ài)\s+g(?:o|ò)n\b", re.IGNORECASE), "Saigon"),
     # DevOps / infra normalization — k8s variants commonly misrecognized by ASR
     ("infra_term", re.compile(r"\bk\s*8\s*s\b", re.IGNORECASE), "k8s"),
@@ -165,6 +166,11 @@ _CANONICAL_REPLACEMENTS: tuple[tuple[str, Pattern[str], str], ...] = (
     ("infra_term", re.compile(r"\bmicro[\s-]*service\b", re.IGNORECASE), "microservice"),
     ("infra_term", re.compile(r"\bpull[\s-]*request\b", re.IGNORECASE), "pull request"),
     ("infra_term", re.compile(r"\bhot[\s-]*fix\b", re.IGNORECASE), "hotfix"),
+    ("infra_term", re.compile(r"\bkey\s*eight\s*s\b", re.IGNORECASE), "k8s"),
+    ("infra_term", re.compile(r"\bk\s+eight\s+s\b", re.IGNORECASE), "k8s"),
+    ("tech_stack", re.compile(r"\bred\s*dis\b", re.IGNORECASE), "Redis"),
+    ("tech_stack", re.compile(r"\bdock\s+er\b", re.IGNORECASE), "Docker"),
+    ("tech_stack", re.compile(r"\bsoftware\s+in\s+geneer\b", re.IGNORECASE), "software engineer"),
 )
 
 _CONTEXTUAL_ASR_CORRECTIONS: tuple[tuple[str, Pattern[str], str], ...] = (
@@ -207,23 +213,42 @@ class TechnicalTermNormalizationResult:
 
 
 def build_technical_transcription_prompt() -> str:
-    terms = ", ".join(PROTECTED_TECH_TERMS)
+    # Keep the prompt focused — the per-turn term injection in interpreter_client
+    # handles specific terms; this sets the ASR context for the session.
+    core_examples = (
+        "software engineer, frontend engineer, backend engineer, DevOps engineer, "
+        "k8s, Kubernetes, kubectl, Docker, Redis, MongoDB, PostgreSQL, Node.js, "
+        "React, TypeScript, JavaScript, LiveKit, OpenAI, CI/CD, Helm, "
+        "deploy, deployment, pipeline, git, merge, commit, staging, production, "
+        "button, dropdown, input, screen, API, Ho Chi Minh"
+    )
     return (
-        "Meeting audio may contain Vietnamese mixed with English IT, product, UI, and company terms. "
-        "Preserve intended English technical terms and proper nouns exactly when spoken. "
-        f"Expected vocabulary includes: {terms}. "
-        "If a short sound is unclear, do not invent a random technical word."
+        "Transcribe meeting audio accurately before any translation. The room often contains "
+        "Vietnamese mixed with English IT, product, UI, DevOps, and company terms. Do not force "
+        "a whole utterance into one language. Preserve code-switching exactly: Vietnamese words "
+        "can be followed by English terms in the same sentence. Preserve English technical terms, "
+        "proper nouns, company names, person names, and place names with their natural casing when spoken. "
+        f"Expected vocabulary includes: {core_examples}. "
+        "Examples of valid mixed speech: 'tôi là software engineer ở Ho Chi Minh', "
+        "'em sửa cái button này', 'bên anh đang deploy service lên k8s', "
+        "'bên em dùng Docker với Redis'. "
+        "Keep tokens like k8s, CI/CD, Docker, Redis, deploy, button, software engineer, and Ho Chi Minh "
+        "as source transcript tokens when that is what was said. "
+        "If a short sound is unclear, transcribe what you hear and do not invent a technical word."
     )
 
 
 def build_technical_translation_policy() -> str:
-    terms = ", ".join(PROTECTED_TECH_TERMS)
+    # This is the base session-level policy. Per-turn specific term preservation
+    # is injected dynamically by interpreter_client using term_detector.detect_terms().
+    # Keep this short and principle-based to reduce instruction noise.
     return (
-        "Technical-term policy: meeting speech may mix Vietnamese with English IT/product terms. "
-        "Preserve common English technical terms, product names, library names, code terms, and place names when that is the natural meeting usage. "
-        "Do not over-translate UI/dev words into awkward wording, and do not turn a short unclear token into a random technical expansion. "
-        "For job titles like software engineer, frontend engineer, backend engineer, and DevOps engineer, preserve the role meaning accurately and naturally. "
-        f"Protected examples: {terms}. "
+        "Technical-term policy: meeting speech often mixes Vietnamese with English technical terms, "
+        "product names, tool names, job titles, and code terms. "
+        "Preserve English technical tokens in their natural form when that is the speaker's intent. "
+        "Do not invent translations for unclear short tokens. "
+        "For job titles, preserve the technical role accurately. "
+        "Specific terms that must be preserved in this turn will be listed in the request. "
     )
 
 

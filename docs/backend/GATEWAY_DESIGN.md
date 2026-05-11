@@ -2,6 +2,8 @@
 
 > Update note (2026-05-03): Gateway remains the HTTP/WS transport and room ingress boundary, and its canonical module path is now `server.service.gateway`. AI/model-facing code lives under `server.brain`; backend application/orchestration code lives under `server.service`. See `docs/backend/FILE_STRUCTURE.md` for the current layout.
 >
+> Update note (2026-05-10): `RoomState.room_languages` is now the canonical room-level language configuration. It is a 1+ item distinct list from `SUPPORTED_LANGUAGES`; `meeting_languages` is kept as a persisted/API alias for existing clients and old room snapshots. `ParticipantState.language` is separate and represents the participant-selected language.
+>
 > Update note (2026-05-01): Gateway room state now has explicit `brse_enabled`. Create-room can set it, REST/WS snapshots expose it, and live toggle uses `room.brse_updated` plus BRSE participant join/left events. `brse_enabled=false` is normal human-only meeting mode with no BRSE runtime or virtual participant.
 >
 > Update note (2026-04-30): Gateway runtime now exposes BRSE relay mode by default. Snapshot and websocket payloads may include room-level BRSE mode fields, a virtual participant `brse_ai`, and room-wide relay transcript events. Legacy per-listener routing details below remain as historical design context only.
@@ -218,7 +220,8 @@ class RoomState(TypedDict):
     brse_enabled: bool
     participant_limit: int | None  # None = no backend participant cap
     supported_languages: list[str]
-    meeting_languages: list[str]  # exact 2, distinct, subset of supported_languages
+    room_languages: list[str]     # 1+ distinct, subset of supported_languages
+    meeting_languages: list[str]  # legacy alias mirroring room_languages
     audio_routing: dict[str, str]
     participant_count: int
     transcript_count: int
@@ -259,6 +262,8 @@ class TranscriptState(TypedDict):
     "expires_at": "2026-04-29T13:30:00Z",
     "participant_limit": null,
     "supported_languages": ["vi", "en", "ja", "zh", "ko", "fr", "es"],
+    "room_languages": ["vi", "ja"],
+    "meeting_languages": ["vi", "ja"],
     "participant_count": 2,
     "transcript_count": 14,
     "last_event_at": "2026-04-29T13:12:54Z"
@@ -362,18 +367,21 @@ Tạo room trống. Không auto-join host.
 
 ```json
 {
-  "meeting_languages": ["vi", "ja"],
+  "room_languages": ["vi", "ja"],
   "brse_enabled": true
 }
 ```
 
 Validation:
 
-1. `meeting_languages` bắt buộc có đúng 2 phần tử.
-2. 2 ngôn ngữ trong pair phải khác nhau.
+1. `room_languages` là canonical và phải có ít nhất 1 phần tử.
+2. Các ngôn ngữ trong list phải khác nhau.
 3. Mỗi ngôn ngữ phải thuộc `supported_languages` (`vi|en|ja|zh|ko|fr|es`).
-4. Nếu omitted, backend hiện default `meeting_languages=["vi", "ja"]` để giữ tương thích create-room flow cũ.
-5. Nếu `brse_enabled` omitted, backend default `true` để giữ tương thích BRSE-first flow hiện tại.
+4. `meeting_languages` vẫn được nhận như alias legacy; `language_a` / `language_b` cũng được map khi gặp request hoặc snapshot cũ.
+5. Nếu omitted, backend hiện default `room_languages=["vi", "ja"]` để giữ tương thích create-room flow cũ.
+6. Nếu `brse_enabled` omitted, backend default `true` để giữ tương thích BRSE-first flow hiện tại.
+
+Room một ngôn ngữ là hợp lệ. Gateway vẫn cho create/join/chat/summary/transcript bình thường; BRSE relay runtime sẽ degrade thành source transcript / same-language assist thay vì ép target "ngôn ngữ còn lại".
 
 #### Success Response `201 Created`
 
@@ -387,6 +395,7 @@ Validation:
     "brse_enabled": true,
     "participant_limit": null,
     "supported_languages": ["vi", "en", "ja", "zh", "ko", "fr", "es"],
+    "room_languages": ["vi", "ja"],
     "meeting_languages": ["vi", "ja"]
   },
   "join": {
@@ -422,6 +431,7 @@ Không cần auth cho MVP. Room id đủ khó đoán và không có room listing
     "expires_at": "2026-04-30T13:12:54Z",
     "participant_limit": null,
     "supported_languages": ["vi", "en", "ja", "zh", "ko", "fr", "es"],
+    "room_languages": ["vi", "ja"],
     "meeting_languages": ["vi", "ja"],
     "participant_count": 2
   },
@@ -486,7 +496,7 @@ Sinh participant session, room JWT, LiveKit token, và snapshot ban đầu.
 #### Validation
 
 1. `display_name` trimmed length `1..40`
-2. `language` phải thuộc đúng `room.meeting_languages` của room
+2. `language` phải thuộc đúng `room.room_languages` của room
 3. room phải tồn tại và chưa `deleted`
 4. room phải chưa expired (meeting duration 30 phút)
 5. nếu `ROOM_MAX_PARTICIPANTS > 0`: `participant_count < ROOM_MAX_PARTICIPANTS`
@@ -500,6 +510,7 @@ Sinh participant session, room JWT, LiveKit token, và snapshot ban đầu.
     "state": "active",
     "participant_limit": null,
     "supported_languages": ["vi", "en", "ja", "zh", "ko", "fr", "es"],
+    "room_languages": ["vi", "ja"],
     "meeting_languages": ["vi", "ja"]
   },
   "participant": {
@@ -544,7 +555,7 @@ Sinh participant session, room JWT, LiveKit token, và snapshot ban đầu.
 | `410` | `room_expired` | Room meeting duration đã hết (30 phút). |
 | `409` | `room_full` | Room đã đủ participants (chỉ khi ROOM_MAX_PARTICIPANTS > 0). |
 | `422` | `invalid_display_name` | Tên rỗng hoặc quá dài. |
-| `422` | `invalid_language` | Language không thuộc room `meeting_languages`. |
+| `422` | `invalid_language` | Language không thuộc room `room_languages`. |
 | `503` | `redis_unavailable` | Không lưu được participant state. |
 | `503` | `livekit_unavailable` | Không generate được LiveKit token. |
 
@@ -691,7 +702,7 @@ Cho phép participant đổi ngôn ngữ nghe/nói trong room. Đây là tín hi
 
 #### Validation
 
-- `language` phải thuộc `room.meeting_languages` và mọi room pair hợp lệ phải là subset của `vi|en|ja|zh|ko|fr|es`
+- `language` phải thuộc `room.room_languages`; `meeting_languages` chỉ là alias legacy. Mọi room language config phải là subset của `vi|en|ja|zh|ko|fr|es`.
 - participant phải chưa `left`
 
 #### Side Effects

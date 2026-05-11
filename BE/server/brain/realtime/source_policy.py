@@ -4,6 +4,7 @@ import re
 from typing import Any, Dict, Optional
 
 from server.brain.prompts.technical_terms import normalize_technical_terms
+from server.brain.realtime.term_detector import detect_terms, is_short_but_valid_technical
 
 
 SOURCE_MIN_FINAL_MEANINGFUL_CHARS = 5
@@ -12,6 +13,14 @@ SOURCE_MIN_PARTIAL_MEANINGFUL_CHARS = 10
 SOURCE_MIN_PARTIAL_MEANINGFUL_TOKENS = 2
 SOURCE_MIN_SPEECH_DURATION_MS = 650
 SOURCE_MIN_SHORT_MEANINGFUL_DURATION_MS = 320
+SOURCE_QUALITY_HOLD_REASONS = frozenset(
+    {
+        "incomplete_fragment",
+        "hanging_fragment",
+        "low_confidence_technical_fragment",
+        "too_few_meaningful_tokens",
+    }
+)
 PUBLIC_RELAY_MIN_MEANINGFUL_CHARS = SOURCE_MIN_FINAL_MEANINGFUL_CHARS
 PUBLIC_RELAY_MIN_MEANINGFUL_TOKENS = SOURCE_MIN_FINAL_MEANINGFUL_TOKENS
 PUBLIC_RELAY_MIN_SPEECH_DURATION_MS = SOURCE_MIN_SPEECH_DURATION_MS
@@ -166,6 +175,20 @@ _SOURCE_HANGING_FRAGMENT_RE = re.compile(
     r"|\b(?:bởi\s+vì|tại\s+vì|cho\s+nên|vì|nên|thì|là|và|nhưng)\s*$"
     r"|(?:けど|ので|えっと|あの)\s*$"
     r")",
+    re.IGNORECASE,
+)
+_SOURCE_DANGLING_VI_RE = re.compile(
+    r"(?:"
+    r"\b(?:cái|con|bên|ở|với|cho|trên|lên|vào|ra|qua|từ|để|khi|nếu|mà|là|thì|và|nhưng|nên)\s*$"
+    r"|(?:em|anh|chị|tôi|mình|chúng\s+ta|bọn\s+em|bên\s+em|bên\s+anh)\s*$"
+    r")",
+    re.IGNORECASE,
+)
+_SOURCE_ASR_UNCERTAIN_PHRASE_RE = re.compile(
+    r"\b(?:"
+    r"inaudible|unintelligible|unclear|không nghe rõ|nghe không rõ|không rõ|"
+    r"tiếng ồn|tạp âm|âm thanh"
+    r")\b",
     re.IGNORECASE,
 )
 _RELAY_META_OR_UNCLEAR_RE = re.compile(
@@ -356,8 +379,14 @@ def assess_source_transcript(
     duration_ms: Optional[int],
     final: bool,
 ) -> tuple[bool, str, str, Dict[str, Any]]:
+    # Step 1: canonical normalization (ASR corrections, canonical form)
     technical = normalize_technical_terms(text)
     normalized = normalize_source_text(technical.text)
+
+    # Step 2: rule-based term detection on normalized text
+    # Provides richer signal than the flat protected_terms list alone
+    term_analysis = detect_terms(normalized)
+
     tokens = _SOURCE_TOKEN_RE.findall(normalized)
     meaningful_tokens = [
         token
@@ -367,7 +396,7 @@ def assess_source_transcript(
     meaningful_chars = sum(1 for char in normalized if char.isalnum())
     normalized_phrase = normalize_phrase_key(normalized)
     short_meaningful = normalized_phrase in _SOURCE_SHORT_MEANINGFUL_PHRASES
-    signal = {
+    signal: Dict[str, Any] = {
         "chars": len(normalized),
         "meaningful_chars": meaningful_chars,
         "tokens": len(tokens),
@@ -376,12 +405,15 @@ def assess_source_transcript(
         "final": final,
         "short_meaningful_turn": short_meaningful,
         "technical_terms": technical.as_signal(),
+        "detected_terms": term_analysis.as_signal(),
     }
 
     if not normalized:
         return False, "empty_transcript", normalized, signal
     if _SOURCE_NOISE_ONLY_RE.match(normalized):
         return False, "noise_only_transcript", normalized, signal
+    if _SOURCE_ASR_UNCERTAIN_PHRASE_RE.search(normalized):
+        return False, "asr_uncertain_phrase", normalized, signal
     if meaningful_chars == 0:
         return False, "punctuation_only_transcript", normalized, signal
 
@@ -396,7 +428,10 @@ def assess_source_transcript(
     if not meaningful_tokens and not short_meaningful:
         return False, "filler_only_transcript", normalized, signal
 
-    if final and technical.ambiguous_fragments:
+    # Ambiguous fragment gate: reject when normalization found garbled ASR tech fragments
+    # AND the rule-based detector did NOT find any confirmed technical terms in the same text.
+    # This rejects "xem cái bg" (bg = unresolved) while passing "deploy k8s" (k8s = confirmed).
+    if final and technical.ambiguous_fragments and not term_analysis.preserve_tokens:
         return False, "low_confidence_technical_fragment", normalized, signal
 
     if final and not short_meaningful:
@@ -404,6 +439,8 @@ def assess_source_transcript(
             return False, "incomplete_fragment", normalized, signal
         if _SOURCE_HANGING_FRAGMENT_RE.search(normalized):
             return False, "hanging_fragment", normalized, signal
+        if _SOURCE_DANGLING_VI_RE.search(normalized):
+            return False, "hanging_vietnamese_fragment", normalized, signal
 
     if final and short_meaningful:
         if (
@@ -423,23 +460,46 @@ def assess_source_transcript(
         if final
         else SOURCE_MIN_PARTIAL_MEANINGFUL_TOKENS
     )
-    # Short text with known protected technical terms passes length check.
-    # Handles standalone terms like "k8s", "kubectl", "CI/CD" as valid short turns.
-    has_protected_terms = bool(technical.protected_terms and not technical.ambiguous_fragments)
+
+    # Short-but-valid technical bypass: allow confirmed technical terms through
+    # even when they're short by alnum character count.
+    # Uses rule-based detection (term_detector) rather than the flat curated list.
+    has_confirmed_tech = is_short_but_valid_technical(normalized, term_analysis)
     if meaningful_chars < min_chars:
-        if not has_protected_terms:
+        if not has_confirmed_tech:
             return False, "too_short_transcript", normalized, signal
-        signal["short_protected_term_bypass"] = True
+        signal["short_tech_term_bypass"] = True
+
     if len(meaningful_tokens) < min_tokens:
         longest_token = max((len(token) for token in meaningful_tokens), default=0)
-        if longest_token < min_chars and not has_protected_terms:
+        if longest_token < min_chars and not has_confirmed_tech:
             return False, "too_few_meaningful_tokens", normalized, signal
 
     if final and duration_ms is not None and duration_ms < SOURCE_MIN_SPEECH_DURATION_MS:
-        if not has_protected_terms:
+        if not has_confirmed_tech:
             return False, "speech_too_short", normalized, signal
 
     return True, "ok", normalized, signal
+
+
+def source_transcript_needs_quality_hold(
+    text: str,
+    *,
+    duration_ms: Optional[int],
+) -> tuple[bool, str, str, Dict[str, Any]]:
+    accepted, reason, normalized, signal = assess_source_transcript(
+        text,
+        duration_ms=duration_ms,
+        final=True,
+    )
+    if accepted:
+        term_signal = signal.get("detected_terms")
+        if isinstance(term_signal, dict) and term_signal.get("ambiguous"):
+            return True, "ambiguous_detected_terms", normalized, signal
+        return False, "accepted_fast_path", normalized, signal
+    if reason in SOURCE_QUALITY_HOLD_REASONS or reason == "hanging_vietnamese_fragment":
+        return True, reason, normalized, signal
+    return False, reason, normalized, signal
 
 
 def normalize_source_text(text: str) -> str:

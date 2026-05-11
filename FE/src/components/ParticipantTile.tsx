@@ -1,7 +1,9 @@
+import { Pin, PinOff } from "lucide-react";
 import type { VideoFeed } from "../types/livekit";
 import type { BrseRoomMode } from "../lib/brseModes";
 import { getLanguageLabel } from "../lib/languages";
 import { VideoTrackView } from "./MediaElements";
+import { MotionButton } from "./MotionButton";
 
 interface ParticipantTileProps {
   feed: VideoFeed;
@@ -13,6 +15,9 @@ interface ParticipantTileProps {
   brseRoomMode?: BrseRoomMode;
   brseAudioExpected?: boolean;
   relayStatusLabel?: string;
+  isPinned?: boolean;
+  onPin?: () => void;
+  onUnpin?: () => void;
 }
 
 export function ParticipantTile({
@@ -25,6 +30,9 @@ export function ParticipantTile({
   brseRoomMode = "voice_text",
   brseAudioExpected = true,
   relayStatusLabel = "Relay idle",
+  isPinned = false,
+  onPin,
+  onUnpin,
 }: ParticipantTileProps) {
   const isBrse = feed.kind === "virtual_brse" || feed.isVirtual;
   const brseCaption =
@@ -59,14 +67,35 @@ export function ParticipantTile({
           ? "participant-tile-brse-text-only"
           : "",
         feed.isSpeaking ? "is-speaking" : "",
+        isPinned ? "is-pinned" : "",
       ].filter(Boolean).join(" ")}
     >
+      {onPin || onUnpin ? (
+        <div className="participant-tile-actions">
+          <MotionButton
+            className={isPinned ? "tile-action-button is-active" : "tile-action-button"}
+            type="button"
+            aria-label={isPinned ? `Unpin ${feed.displayName}` : `Pin ${feed.displayName}`}
+            aria-pressed={isPinned}
+            title={isPinned ? "Unpin video" : "Pin video"}
+            onClick={isPinned ? onUnpin : onPin}
+          >
+            {isPinned ? <PinOff size={14} /> : <Pin size={14} />}
+            <span>{isPinned ? "Unpin" : "Pin"}</span>
+          </MotionButton>
+        </div>
+      ) : null}
       <div className="participant-media-frame">
         {feed.track && !feed.isCameraOff ? (
           <VideoTrackView track={feed.track} mirrored={feed.isLocal} />
         ) : isBrse ? (
           <div className="participant-fallback participant-fallback-brse">
-            <img src="/cat.jpg" alt="AI relay avatar" className="brse-avatar-img" />
+            <div className="brse-avatar" aria-hidden="true">
+              <span>AI</span>
+              <i />
+              <i />
+              <i />
+            </div>
             <strong>{isBrseEnabled ? relayStatusLabel : "Relay off"}</strong>
             <p>{brseCaption}</p>
           </div>

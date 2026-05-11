@@ -3,6 +3,7 @@ import { Link, useLocation, useNavigate } from "react-router-dom";
 import { motion, AnimatePresence } from "motion/react";
 import { Zap, Mic2, CheckCircle2, Globe2 } from "lucide-react";
 import { api, ApiError } from "../lib/api";
+import { useAmbientFloat, useRevealMotion } from "../lib/motion";
 import {
   BRSE_CREATE_MODE_OPTIONS,
   buildCreateBrsePayload,
@@ -16,6 +17,7 @@ import {
 import { extractRoomId } from "../lib/rooms";
 import type { MeetingLanguage } from "../types/api";
 import { CustomSelect, type CustomSelectOption } from "../components/CustomSelect";
+import { MotionButton } from "../components/MotionButton";
 
 // ─── Intro slideshow ─────────────────────────────────────────────────────────
 
@@ -280,6 +282,10 @@ function GlobalSlide() {
 
 function IntroShowcase() {
   const [slideIdx, setSlideIdx] = useState(0);
+  const showcaseMotionRef = useAmbientFloat<HTMLDivElement>({
+    distance: 4,
+    rotate: 0.12,
+  });
 
   useEffect(() => {
     const id = setInterval(
@@ -292,7 +298,7 @@ function IntroShowcase() {
   const slide = SLIDES[slideIdx];
 
   return (
-    <div className="intro-showcase">
+    <div className="intro-showcase" ref={showcaseMotionRef}>
       <AnimatePresence mode="wait">
         {slide === "chaos" && <ChaosSlide />}
         {slide === "clarity" && <ClaritySlide />}
@@ -321,6 +327,13 @@ function IntroShowcase() {
 export function HomePage() {
   const navigate = useNavigate();
   const location = useLocation();
+  const pageMotionRef = useRevealMotion<HTMLElement>({
+    selector: "[data-home-motion]",
+    distance: 18,
+    duration: 560,
+    stagger: 72,
+    scaleFrom: 0.992,
+  });
   const [roomInput, setRoomInput] = useState("");
   const [langA, setLangA] = useState<MeetingLanguage | "">("");
   const [langB, setLangB] = useState<MeetingLanguage | "">("");
@@ -388,20 +401,29 @@ export function HomePage() {
   ];
 
   const canCreate = !!langA && !!langB && langA !== langB;
-  const selectedBrseOption =
-    BRSE_CREATE_MODE_OPTIONS.find((option) => option.value === brseCreateMode) ??
-    BRSE_CREATE_MODE_OPTIONS[0];
+  const createAttentionKey = canCreate
+    ? `${langA}-${langB}-${brseCreateMode}`
+    : null;
 
   return (
-    <main className="hp-root">
-      {/* Showcase fills entire background */}
-      <IntroShowcase />
+    <main className="hp-root" ref={pageMotionRef}>
+      <section className="hp-showcase-hero" aria-label="MeetQ AI meeting platform" data-home-motion>
+        <div className="hp-hero-copyline">
+          <span>AI multilingual meetings</span>
+          <h1>Understand every meeting in real time.</h1>
+          <p>
+            MeetQ combines live interpretation, AI relay, and room summaries for teams
+            working across Vietnamese, English, and Japanese.
+          </p>
+        </div>
+        <IntroShowcase />
+      </section>
 
       {/* Gradient fade from transparent → dark, covering right half */}
       <div className="hp-fade" aria-hidden="true" />
 
       {/* Nav — absolute top */}
-      <nav className="hp-nav">
+      <nav className="hp-nav" data-home-motion>
         <div className="hp-nav-brand">
           <span className="hp-nav-name">MeetQ</span>
         </div>
@@ -415,77 +437,90 @@ export function HomePage() {
         )}
 
         {/* Create card */}
-        <section className="hp-card hp-card-create">
+        <section className="hp-card hp-card-create" data-home-motion>
           <div className="hp-card-header">
             <div>
               <p className="hp-card-label">New room</p>
-              <h2 className="hp-card-title">Create room</h2>
-            </div>
-            <div className="hp-card-meta">
-              <span>60 min</span>
-              <span>{selectedBrseOption.label}</span>
-            </div>
-          </div>
-
-          <div className="hp-lang-row">
-            <div className="hp-lang-slot">
-              <label className="hp-lang-label">Language A</label>
-              <CustomSelect
-                value={langA}
-                options={langOptions}
-                onChange={handleLangAChange}
-                placeholder="Choose language"
-                ariaLabel="Language A"
-              />
-            </div>
-            <div className="hp-lang-divider" aria-hidden="true">↔</div>
-            <div className="hp-lang-slot">
-              <label className="hp-lang-label">Language B</label>
-              <CustomSelect
-                value={langB}
-                options={langOptions}
-                onChange={handleLangBChange}
-                placeholder="Choose language"
-                ariaLabel="Language B"
-              />
+              <h2 className="hp-card-title">Start a multilingual AI meeting</h2>
+              <p className="hp-card-subtitle">
+                Set the conversation pair, choose how AI participates, and open the room.
+              </p>
             </div>
           </div>
 
-          <div className="hp-brse-mode" role="group" aria-label="BRSE output mode">
-            {BRSE_CREATE_MODE_OPTIONS.map((option) => (
-              <button
-                key={option.value}
-                type="button"
-                className={[
-                  "hp-brse-mode-option",
-                  option.value === brseCreateMode ? "is-active" : "",
-                ].filter(Boolean).join(" ")}
-                aria-pressed={option.value === brseCreateMode}
-                onClick={() => setBrseCreateMode(option.value)}
-              >
-                <strong>{option.label}</strong>
-                <span>{option.detail}</span>
-              </button>
-            ))}
-          </div>
+          <section className="hp-create-section hp-language-section">
+            <div className="hp-section-heading">
+              <span>Languages</span>
+            </div>
+            <div className="hp-lang-row">
+              <div className="hp-lang-slot">
+                <label className="hp-lang-label">From</label>
+                <CustomSelect
+                  value={langA}
+                  options={langOptions}
+                  onChange={handleLangAChange}
+                  placeholder="Choose language"
+                  ariaLabel="Language A"
+                />
+              </div>
+              <div className="hp-lang-divider" aria-hidden="true">↔</div>
+              <div className="hp-lang-slot">
+                <label className="hp-lang-label">To</label>
+                <CustomSelect
+                  value={langB}
+                  options={langOptions}
+                  onChange={handleLangBChange}
+                  placeholder="Choose language"
+                  ariaLabel="Language B"
+                />
+              </div>
+            </div>
+          </section>
+
+          <section className="hp-create-section hp-option-section">
+            <div className="hp-section-heading">
+              <span>AI relay</span>
+            </div>
+            <div className="hp-brse-mode" role="group" aria-label="BRSE output mode">
+              {BRSE_CREATE_MODE_OPTIONS.map((option) => (
+                <MotionButton
+                  key={option.value}
+                  type="button"
+                  className={[
+                    "hp-brse-mode-option",
+                    option.value === brseCreateMode ? "is-active" : "",
+                  ].filter(Boolean).join(" ")}
+                  aria-pressed={option.value === brseCreateMode}
+                  onClick={() => setBrseCreateMode(option.value)}
+                >
+                  <strong>{option.label}</strong>
+                  {option.value === brseCreateMode ? <span>{option.detail}</span> : null}
+                </MotionButton>
+              ))}
+            </div>
+          </section>
 
           {(validationError ?? createError) && (
             <p className="hp-error" role="alert">{validationError ?? createError}</p>
           )}
 
-          <button
-            className="hp-btn-primary"
-            type="button"
-            onClick={() => { void handleCreateRoom(); }}
-            disabled={creating || !canCreate}
-          >
-            {creating ? "Creating…" : "Create Room"}
-          </button>
+          <div className="hp-cta-section">
+            <MotionButton
+              className="hp-btn-primary"
+              type="button"
+              onClick={() => { void handleCreateRoom(); }}
+              disabled={creating || !canCreate}
+              attentionKey={createAttentionKey}
+            >
+              {creating ? "Creating…" : "Start speaking globally"}
+            </MotionButton>
+            <p>60-minute room. No account required.</p>
+          </div>
         </section>
 
         {/* Join row */}
-        <section className="hp-card hp-card-join">
-          <p className="hp-card-label">Already have a room?</p>
+        <section className="hp-card hp-card-join" data-home-motion>
+          <p className="hp-card-label">Join existing room</p>
           <div className="hp-join-row">
             <input
               className="hp-join-input"
@@ -495,20 +530,14 @@ export function HomePage() {
               placeholder="rm_… or room link"
               aria-label="Room ID or link"
             />
-            <button className="hp-btn-secondary" type="button" onClick={handleJoin}>
+            <MotionButton className="hp-btn-secondary" type="button" onClick={handleJoin}>
               Open
-            </button>
+            </MotionButton>
           </div>
           {joinError && <p className="hp-error" role="alert">{joinError}</p>}
         </section>
 
-        <ul className="hp-pills" aria-label="Room defaults">
-          <li>60-min rooms</li>
-          <li>{selectedBrseOption.detail}</li>
-          <li>No account</li>
-        </ul>
-
-        <footer className="hp-footer">
+        <footer className="hp-footer" data-home-motion>
           <a className="hp-footer-icon" href="mailto:johnnynguyen882@gmail.com" aria-label="Email" title="Email">
             <svg viewBox="0 0 24 24" aria-hidden="true">
               <path d="M3 6.75A1.75 1.75 0 0 1 4.75 5h14.5A1.75 1.75 0 0 1 21 6.75v10.5A1.75 1.75 0 0 1 19.25 19H4.75A1.75 1.75 0 0 1 3 17.25V6.75Zm2.09-.25 6.5 4.94a.75.75 0 0 0 .91 0l6.5-4.94H5.09Zm14.41 1.88-6.1 4.64a2.25 2.25 0 0 1-2.8 0L4.5 8.38v8.87c0 .14.11.25.25.25h14.5a.25.25 0 0 0 .25-.25V8.38Z" />

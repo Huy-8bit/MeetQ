@@ -1,7 +1,18 @@
-import type { RoomPanelTab } from "./RoomSidePanel";
+import {
+  DoorOpen,
+  Mic,
+  MicOff,
+  MonitorUp,
+  PanelRightClose,
+  PanelRightOpen,
+  Settings,
+  Video,
+  VideoOff,
+} from "lucide-react";
+import type { ReactNode } from "react";
+import { MotionButton } from "./MotionButton";
 
 interface RoomControlBarProps {
-  activePanel: RoomPanelTab;
   sidePanelOpen: boolean;
   isMicMuted: boolean;
   isTogglingMic: boolean;
@@ -11,20 +22,16 @@ interface RoomControlBarProps {
   isScreenSharing: boolean;
   isStartingScreenShare: boolean;
   isStoppingScreenShare: boolean;
-  stageFocusActive: boolean;
   isLeaving: boolean;
   onToggleMic: () => void;
   onToggleCamera: () => void;
   onToggleScreenShare: () => void;
-  onToggleStageFocus: () => void;
-  onOpenPanel: (tab: RoomPanelTab) => void;
   onToggleSidePanel: () => void;
   onOpenSettings: () => void;
   onLeave: () => void;
 }
 
 export function RoomControlBar({
-  activePanel,
   sidePanelOpen,
   isMicMuted,
   isTogglingMic,
@@ -34,13 +41,10 @@ export function RoomControlBar({
   isScreenSharing,
   isStartingScreenShare,
   isStoppingScreenShare,
-  stageFocusActive,
   isLeaving,
   onToggleMic,
   onToggleCamera,
   onToggleScreenShare,
-  onToggleStageFocus,
-  onOpenPanel,
   onToggleSidePanel,
   onOpenSettings,
   onLeave,
@@ -50,14 +54,14 @@ export function RoomControlBar({
 
   return (
     <footer className="room-control-bar">
-      {/* Left: media controls */}
-      <div className="room-control-group">
+      <div className="room-control-group room-control-media">
         <ControlButton
           active={!isMicMuted}
           muted={isMicMuted}
           disabled={micDisabled}
           onClick={onToggleMic}
           label={isMutedByHost && isMicMuted ? "Muted by host" : isMicMuted ? "Unmute" : "Mute"}
+          icon={isMicMuted ? <MicOff size={18} /> : <Mic size={18} />}
         />
         <ControlButton
           active={!isCameraOff}
@@ -65,6 +69,7 @@ export function RoomControlBar({
           disabled={isTogglingCamera || isLeaving}
           onClick={onToggleCamera}
           label={isCameraOff ? "Start video" : "Stop video"}
+          icon={isCameraOff ? <VideoOff size={18} /> : <Video size={18} />}
         />
         <ControlButton
           active={isScreenSharing}
@@ -75,73 +80,42 @@ export function RoomControlBar({
             isStoppingScreenShare ? "Stopping…" :
             isScreenSharing ? "Stop share" : "Share"
           }
+          icon={<MonitorUp size={18} />}
         />
       </div>
 
-      {/* Right side: panel tabs + secondary actions */}
-      <div className="room-control-right-cluster">
-        {/* Center: panel tabs */}
-        <div className="room-control-tabs" aria-label="Open room panel">
-          {(["relay", "chat", "summary", "people"] as RoomPanelTab[]).map((tab) => (
-            <button
-              key={tab}
-              className={activePanel === tab && sidePanelOpen ? "panel-shortcut is-active" : "panel-shortcut"}
-              type="button"
-              onClick={() => onOpenPanel(tab)}
-            >
-              {formatPanelTabLabel(tab)}
-            </button>
-          ))}
-        </div>
-
-        {/* Right: secondary actions */}
-        <div className="room-control-secondary">
-          <button
-            className={stageFocusActive ? "control-icon-btn control-text-btn is-active" : "control-icon-btn control-text-btn"}
-            type="button"
-            aria-label={stageFocusActive ? "Exit stage focus" : "Focus stage"}
-            title={stageFocusActive ? "Exit stage focus" : "Focus stage"}
-            onClick={onToggleStageFocus}
-          >
-            {stageFocusActive ? "Exit" : "Focus"}
-          </button>
-          <button
-            className="control-icon-btn"
-            type="button"
-            aria-label={sidePanelOpen ? "Hide panel" : "Show panel"}
-            title={sidePanelOpen ? "Hide panel" : "Show panel"}
-            onClick={onToggleSidePanel}
-          >
-            {sidePanelOpen ? "⇥" : "⇤"}
-          </button>
-          <button
-            className="control-icon-btn"
-            type="button"
-            aria-label="Settings"
-            title="Settings"
-            onClick={onOpenSettings}
-          >
-            ⚙
-          </button>
-          <button
-            className="leave-button"
-            type="button"
-            onClick={onLeave}
-            disabled={isLeaving}
-          >
-            {isLeaving ? "Leaving…" : "Leave"}
-          </button>
-        </div>
+      <div className="room-control-secondary">
+        <MotionButton
+          className={sidePanelOpen ? "control-icon-btn control-text-btn context-toggle-btn is-active" : "control-icon-btn control-text-btn context-toggle-btn"}
+          type="button"
+          aria-label={sidePanelOpen ? "Hide context panel" : "Show context panel"}
+          title={sidePanelOpen ? "Hide context panel" : "Show context panel"}
+          onClick={onToggleSidePanel}
+        >
+          {sidePanelOpen ? <PanelRightClose size={18} /> : <PanelRightOpen size={18} />}
+          <span>{sidePanelOpen ? "Hide" : "Context"}</span>
+        </MotionButton>
+        <MotionButton
+          className="control-icon-btn"
+          type="button"
+          aria-label="Settings"
+          title="Settings"
+          onClick={onOpenSettings}
+        >
+          <Settings size={18} />
+        </MotionButton>
+        <MotionButton
+          className="leave-button"
+          type="button"
+          onClick={onLeave}
+          disabled={isLeaving}
+        >
+          <DoorOpen size={17} />
+          {isLeaving ? "Leaving…" : "Leave"}
+        </MotionButton>
       </div>
     </footer>
   );
-}
-
-function formatPanelTabLabel(tab: RoomPanelTab): string {
-  if (tab === "relay") return "Relay";
-  if (tab === "chat") return "Chat";
-  if (tab === "summary") return "Summary";
-  return "People";
 }
 
 function ControlButton({
@@ -150,15 +124,17 @@ function ControlButton({
   disabled = false,
   onClick,
   label,
+  icon,
 }: {
   active: boolean;
   muted?: boolean;
   disabled?: boolean;
   onClick: () => void;
   label: string;
+  icon: ReactNode;
 }) {
   return (
-    <button
+    <MotionButton
       className={[
         "meeting-control-button",
         active ? "is-live" : "",
@@ -170,7 +146,8 @@ function ControlButton({
       aria-label={label}
       title={label}
     >
+      <span className="control-btn-icon" aria-hidden="true">{icon}</span>
       <span className="control-btn-label">{label}</span>
-    </button>
+    </MotionButton>
   );
 }

@@ -11,8 +11,10 @@ import {
 } from "../lib/brseModes";
 import { formatExpiresAtHuman, useRoomExpiry } from "../features/room/useRoomExpiry";
 import { loadUserPrefs, saveUserPrefs } from "../lib/userPrefs";
+import { useRevealMotion } from "../lib/motion";
 import type { MeetingLanguage, ParticipantSnapshot, RoomSnapshotResponse } from "../types/api";
 import { CustomSelect, type CustomSelectOption } from "./CustomSelect";
+import { MotionButton } from "./MotionButton";
 
 interface JoinRoomCardProps {
   room: RoomSnapshotResponse["room"];
@@ -34,6 +36,13 @@ export function JoinRoomCard({
   error,
 }: JoinRoomCardProps) {
   const prefs = loadUserPrefs();
+  const joinMotionRef = useRevealMotion<HTMLDivElement>({
+    selector: "[data-join-motion]",
+    distance: 14,
+    duration: 460,
+    stagger: 54,
+    scaleFrom: 0.992,
+  });
   const savedLang = meetingLanguages.includes(prefs.language as MeetingLanguage)
     ? (prefs.language as MeetingLanguage)
     : "";
@@ -80,6 +89,8 @@ export function JoinRoomCard({
     isExpired,
     remainingLabel,
   });
+  const joinAttentionKey =
+    !isExpired && displayName.trim() && language ? `${displayName.trim()}-${language}` : null;
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -122,8 +133,8 @@ export function JoinRoomCard({
 
   return (
     <section className="join-room-shell">
-      <div className="join-room-card join-room-card-minimal">
-        <div className="join-room-topline">
+      <div className="join-room-card join-room-card-minimal" ref={joinMotionRef}>
+        <div className="join-room-topline" data-join-motion>
           <div>
             <span className="product-kicker">Join</span>
             <h1>Enter room</h1>
@@ -135,21 +146,21 @@ export function JoinRoomCard({
           </div>
         </div>
 
-        <div className="join-room-context-strip">
+        <div className="join-room-context-strip" data-join-motion>
           <CompactMeta label="Languages" value={formatLanguageBridge(meetingLanguages)} />
           <RoomModeBadge mode={brseRoomMode} />
           {expirySummary ? <CompactMeta label="Time" value={expirySummary} danger={isExpired} /> : null}
         </div>
 
         {isExpired ? (
-          <div className="room-expired-state">
+          <div className="room-expired-state" data-join-motion>
             <span className="room-expired-icon" aria-hidden="true">⏱</span>
             <strong>Meeting ended</strong>
             <p>Room expired.</p>
           </div>
         ) : (
           <>
-            <div className="join-room-form-card">
+            <div className="join-room-form-card" data-join-motion>
               <div className="join-form-header">
                 <h2>Join as</h2>
               </div>
@@ -189,13 +200,14 @@ export function JoinRoomCard({
                   />
                 </label>
 
-                <button
+                <MotionButton
                   className="join-room-cta"
                   type="submit"
                   disabled={isSubmitting || languagePairUnavailable}
+                  attentionKey={joinAttentionKey}
                 >
                   {isSubmitting ? "Joining..." : "Join Meeting"}
-                </button>
+                </MotionButton>
               </form>
 
               {languagePairUnavailable ? (
@@ -231,7 +243,10 @@ function CompactMeta({
   danger?: boolean;
 }) {
   return (
-    <div className={danger ? "join-room-quick-stat is-expired" : "join-room-quick-stat"}>
+    <div
+      className={danger ? "join-room-quick-stat is-expired" : "join-room-quick-stat"}
+      data-join-motion
+    >
       <span>{label}</span>
       <strong>{value}</strong>
     </div>
@@ -249,6 +264,7 @@ function RoomModeBadge({ mode }: { mode: BrseRoomMode }) {
         isBrse ? "is-brse" : "",
         isTextOnly ? "is-text-only" : "",
       ].filter(Boolean).join(" ")}
+      data-join-motion
     >
       <span>Mode</span>
       <strong>{getBrseModeLabel(mode)}</strong>
@@ -267,6 +283,14 @@ function ParticipantPreviewList({
   brseRoomMode: BrseRoomMode;
   brseAudioExpected: boolean;
 }) {
+  const previewMotionRef = useRevealMotion<HTMLElement>({
+    selector: "[data-preview-motion]",
+    distance: 8,
+    duration: 320,
+    stagger: 36,
+    scaleFrom: 0.996,
+    dependencies: [humanParticipants.length, virtualParticipants.length, brseRoomMode, brseAudioExpected],
+  });
   const visibleHumans = humanParticipants.slice(0, 5);
   const hiddenHumanCount = Math.max(0, humanParticipants.length - visibleHumans.length);
   const brseParticipant = virtualParticipants.find(
@@ -274,14 +298,14 @@ function ParticipantPreviewList({
   );
 
   return (
-    <section className="join-participant-preview">
-      <div className="join-panel-header">
+    <section className="join-participant-preview" ref={previewMotionRef} data-join-motion>
+      <div className="join-panel-header" data-preview-motion>
         <span>Already inside</span>
         <strong>{humanParticipants.length}</strong>
       </div>
 
       {humanParticipants.length === 0 ? (
-        <div className="participant-empty-compact">
+        <div className="participant-empty-compact" data-preview-motion>
           <strong>No one yet</strong>
           {brseParticipant ? (
             <span className="virtual-participant-chip">
@@ -292,7 +316,11 @@ function ParticipantPreviewList({
       ) : (
         <div className="participant-preview-list">
           {visibleHumans.map((participant) => (
-            <div className="participant-preview" key={participant.participant_id}>
+            <div
+              className="participant-preview"
+              key={participant.participant_id}
+              data-preview-motion
+            >
               <div>
                 <strong>{participant.display_name}</strong>
                 <p>{formatParticipantStatus(participant.status)}</p>
@@ -307,13 +335,13 @@ function ParticipantPreviewList({
           ))}
 
           {hiddenHumanCount > 0 ? (
-            <div className="participant-preview participant-preview-more">
+            <div className="participant-preview participant-preview-more" data-preview-motion>
               <strong>{hiddenHumanCount} more participant{hiddenHumanCount === 1 ? "" : "s"}</strong>
             </div>
           ) : null}
 
           {brseParticipant ? (
-            <div className="participant-preview virtual-participant-preview">
+            <div className="participant-preview virtual-participant-preview" data-preview-motion>
               <div>
                 <strong>{brseParticipant.display_name || "AI Relay"}</strong>
                 <p>{getVirtualParticipantCopy(brseRoomMode, brseAudioExpected)}</p>

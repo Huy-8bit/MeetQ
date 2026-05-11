@@ -1,5 +1,6 @@
 import type { AudioDeviceOption } from "../types/livekit";
 import { CustomSelect, type CustomSelectOption } from "./CustomSelect";
+import { MotionButton } from "./MotionButton";
 
 interface AudioDevicePanelProps {
   isMicMuted: boolean;
@@ -60,7 +61,7 @@ export function AudioDevicePanel({
       <div className="audio-settings-grid">
         <div className="audio-setting-row">
           <span className="audio-setting-label">Microphone</span>
-          <button
+          <MotionButton
             className={isMicMuted ? "button-secondary" : "button-primary"}
             onClick={onToggleMic}
             disabled={isTogglingMic || (isMutedByHost && isMicMuted)}
@@ -72,7 +73,7 @@ export function AudioDevicePanel({
                 : isMicMuted
                   ? "Unmute mic"
                   : "Mute mic"}
-          </button>
+          </MotionButton>
         </div>
 
         {micToggleError ? (

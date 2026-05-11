@@ -57,10 +57,14 @@ class RoomAudioRouting(BaseModel):
     same_language_policy: SameLanguageAudioPolicy = "human_passthrough"
     ai_relay_audio: AiRelayAudioPolicy = "virtual_participant_track"
     interpreter_mode: InterpreterMode = INTERPRETER_MODE_BRSE_PARTICIPANT
-    bridge_strategy: Literal["speaker_language_map"] = "speaker_language_map"
+    bridge_strategy: Literal[
+        "speaker_language_map",
+        "participant_language_preference",
+    ] = "participant_language_preference"
     relay_language_map: Dict[str, str] = Field(
         default_factory=lambda: dict(DEFAULT_RELAY_LANGUAGE_MAP)
     )
+    relay_language_targets: Dict[str, List[str]] = Field(default_factory=dict)
     virtual_participant_id: str = BRSE_PARTICIPANT_ID
     brse_mode: BrseMode = BRSE_MODE_RELAY
     brse_output_mode: BrseOutputMode = BRSE_OUTPUT_MODE_VOICE_TEXT
@@ -128,6 +132,9 @@ class RoomState(BaseModel):
     supported_languages: List[MeetingLanguage] = Field(
         default_factory=lambda: list(SUPPORTED_MEETING_LANGUAGES)
     )
+    room_languages: List[MeetingLanguage] = Field(
+        default_factory=lambda: list(DEFAULT_ROOM_MEETING_LANGUAGES)
+    )
     meeting_languages: List[MeetingLanguage] = Field(
         default_factory=lambda: list(DEFAULT_ROOM_MEETING_LANGUAGES)
     )
@@ -135,6 +142,33 @@ class RoomState(BaseModel):
     interpreter_mode: InterpreterMode = INTERPRETER_MODE_BRSE_PARTICIPANT
     audio_routing: RoomAudioRouting = Field(default_factory=RoomAudioRouting)
     virtual_participants: List[ParticipantSnapshot] = Field(default_factory=list)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_language_aliases(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        normalized = dict(data)
+        legacy_pair = []
+        if isinstance(normalized.get("language_a"), str):
+            legacy_pair.append(normalized.get("language_a"))
+        if isinstance(normalized.get("language_b"), str):
+            legacy_pair.append(normalized.get("language_b"))
+
+        if not normalized.get("room_languages"):
+            if normalized.get("meeting_languages"):
+                normalized["room_languages"] = normalized.get("meeting_languages")
+            elif legacy_pair:
+                normalized["room_languages"] = legacy_pair
+            else:
+                normalized["room_languages"] = list(DEFAULT_ROOM_MEETING_LANGUAGES)
+        if not normalized.get("meeting_languages"):
+            normalized["meeting_languages"] = (
+                normalized.get("room_languages")
+                or legacy_pair
+                or list(DEFAULT_ROOM_MEETING_LANGUAGES)
+            )
+        return normalized
 
 
 class TranscriptParticipantRef(BaseModel):
@@ -213,6 +247,7 @@ class CreateRoomResponseRoom(BaseModel):
     brse_output_mode: BrseOutputMode = DEFAULT_BRSE_OUTPUT_MODE
     participant_limit: Optional[int] = None
     supported_languages: List[MeetingLanguage]
+    room_languages: List[MeetingLanguage]
     meeting_languages: List[MeetingLanguage]
     meeting_mode: MeetingMode
     interpreter_mode: InterpreterMode
@@ -230,12 +265,27 @@ class CreateRoomResponse(BaseModel):
 
 
 class CreateRoomRequest(BaseModel):
-    meeting_languages: List[str] = Field(
-        default_factory=lambda: list(DEFAULT_ROOM_MEETING_LANGUAGES)
-    )
+    room_languages: Optional[List[str]] = None
+    meeting_languages: Optional[List[str]] = None
+    language_a: Optional[str] = None
+    language_b: Optional[str] = None
     brse_enabled: bool = DEFAULT_BRSE_ENABLED
     brse_mode: BrseMode = DEFAULT_BRSE_MODE
     brse_output_mode: BrseOutputMode = DEFAULT_BRSE_OUTPUT_MODE
+
+    def requested_room_languages(self) -> List[str]:
+        if self.room_languages is not None:
+            return list(self.room_languages)
+        if self.meeting_languages is not None:
+            return list(self.meeting_languages)
+        legacy_pair = [
+            lang
+            for lang in (self.language_a, self.language_b)
+            if isinstance(lang, str) and lang
+        ]
+        if legacy_pair:
+            return legacy_pair
+        return list(DEFAULT_ROOM_MEETING_LANGUAGES)
 
 
 class JoinRoomRequestClient(BaseModel):

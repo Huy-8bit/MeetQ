@@ -2,6 +2,8 @@
 
 > Update note (2026-05-01): room policy changed. Meeting duration is now 30 minutes (was 24h). `expires_at` reflects this. `participant_limit` is now `null` (no backend participant cap). Joining an expired room returns `410 room_expired`. New event `room.expired` can be broadcast to connected clients.
 >
+> Update note (2026-05-10): room language config is now list-based. `room_languages` is the canonical room-level supported language list and may contain 1 or more distinct supported languages. `meeting_languages` remains a backward-compatible alias for existing clients; legacy `language_a` / `language_b` request or persisted fields are mapped into `room_languages`. `participant.language` remains the participant's selected language and must be one of the room languages.
+>
 > Update note (2026-05-01): rooms now expose explicit `brse_enabled`. Create-room can set it, snapshots/events expose it, and `brse_enabled=false` means a normal human-only meeting: no `brse_ai` virtual participant, no BRSE interpreter runtime, no BRSE transcript/audio output.
 >
 > Update note (2026-05-05): create-room also accepts additive `brse_mode="relay" | "silent_summary"`. `brse_enabled=true` with `relay` preserves existing BRSE audio relay behavior. `brse_enabled=true` with `silent_summary` starts BRSE as a silent listener: it subscribes to human audio and archives source transcripts for post-meeting summary, but suppresses relay audio and realtime relay transcript fan-out.
@@ -235,7 +237,7 @@ Tạo room trống.
 
 ```json
 {
-  "meeting_languages": ["vi", "ja"],
+  "room_languages": ["vi", "ja"],
   "brse_enabled": true,
   "brse_mode": "relay",
   "brse_output_mode": "voice_text"
@@ -244,14 +246,18 @@ Tạo room trống.
 
 Rules:
 
-1. `meeting_languages` bắt buộc có đúng 2 phần tử.
-2. 2 ngôn ngữ phải khác nhau.
+1. `room_languages` là canonical và có thể có 1 hoặc nhiều phần tử.
+2. Các ngôn ngữ phải distinct.
 3. Chỉ nhận `vi | en | ja | zh | ko | fr | es`.
-4. Nếu omitted, backend mặc định `meeting_languages=["vi", "ja"]` để giữ tương thích flow cũ.
-5. `brse_enabled` optional; nếu omitted, backend mặc định `true`.
-6. `brse_mode` optional; nếu omitted, backend mặc định `relay`. Chỉ có hiệu lực khi `brse_enabled=true`.
-7. `brse_output_mode` optional; nếu omitted, backend mặc định `voice_text`. Chỉ tách audio/text khi `brse_enabled=true` và `brse_mode="relay"`.
-8. `brse_output_mode="text_only"` nghĩa là BRSE vẫn nghe, vẫn publish source/relay text realtime, nhưng không publish BRSE audio track.
+4. `meeting_languages` vẫn được nhận như legacy alias; nếu cả hai cùng có thì `room_languages` được ưu tiên.
+5. Legacy `language_a` + `language_b` vẫn được map vào `room_languages` khi client cũ gửi payload dạng pair.
+6. Nếu omitted, backend mặc định `room_languages=["vi", "ja"]` để giữ tương thích flow cũ.
+7. `brse_enabled` optional; nếu omitted, backend mặc định `true`.
+8. `brse_mode` optional; nếu omitted, backend mặc định `relay`. Chỉ có hiệu lực khi `brse_enabled=true`.
+9. `brse_output_mode` optional; nếu omitted, backend mặc định `voice_text`. Chỉ tách audio/text khi `brse_enabled=true` và `brse_mode="relay"`.
+10. `brse_output_mode="text_only"` nghĩa là BRSE vẫn nghe, vẫn publish source/relay text realtime khi có cross-language route, nhưng không publish BRSE audio track.
+
+One-language rooms are valid. In that case create/join/chat/transcript/summary remain usable; translation relay degrades to source transcript / same-language assist with no cross-language relay target.
 
 ### Response JSON Schema
 
@@ -267,6 +273,7 @@ Rules:
     "brse_output_mode": "voice_text",
     "participant_limit": null,
     "supported_languages": ["vi", "en", "ja", "zh", "ko", "fr", "es"],
+    "room_languages": ["vi", "ja"],
     "meeting_languages": ["vi", "ja"]
   },
   "join": {
@@ -290,6 +297,7 @@ Rules:
     "brse_output_mode": "voice_text",
     "participant_limit": null,
     "supported_languages": ["vi", "en", "ja", "zh", "ko", "fr", "es"],
+    "room_languages": ["vi", "ja"],
     "meeting_languages": ["vi", "ja"]
   },
   "join": {
@@ -323,11 +331,12 @@ Lấy snapshot room khi FE load room page hoặc reconnect.
     "brse_output_mode": "voice_text",
     "participant_limit": null,
     "supported_languages": ["vi", "en", "ja", "zh", "ko", "fr", "es"],
+    "room_languages": ["vi", "ja"],
     "meeting_languages": ["vi", "ja"],
     "audio_routing": {
-      "model": "translated_audio_first",
-      "cross_language_remote_audio": "interpreter_track",
-      "canonical_remote_audio": "interpreter_track_for_cross_language",
+      "model": "brse_participant_audio",
+      "cross_language_remote_audio": "human_original_plus_brse",
+      "canonical_remote_audio": "human_original_track",
       "same_language_policy": "human_passthrough"
     },
     "participant_count": 0
@@ -387,11 +396,12 @@ Lấy snapshot room khi FE load room page hoặc reconnect.
     "brse_output_mode": "voice_text",
     "participant_limit": null,
     "supported_languages": ["vi", "en", "ja", "zh", "ko", "fr", "es"],
+    "room_languages": ["vi", "ja"],
     "meeting_languages": ["vi", "ja"],
     "audio_routing": {
-      "model": "translated_audio_first",
-      "cross_language_remote_audio": "interpreter_track",
-      "canonical_remote_audio": "interpreter_track_for_cross_language",
+      "model": "brse_participant_audio",
+      "cross_language_remote_audio": "human_original_plus_brse",
+      "canonical_remote_audio": "human_original_track",
       "same_language_policy": "human_passthrough"
     },
     "participant_count": 2
@@ -574,11 +584,12 @@ Join room và nhận đủ credentials cho Gateway WS + LiveKit.
     "brse_output_mode": "voice_text",
     "participant_limit": null,
     "supported_languages": ["vi", "en", "ja", "zh", "ko", "fr", "es"],
+    "room_languages": ["vi", "ja"],
     "meeting_languages": ["vi", "ja"],
     "audio_routing": {
-      "model": "translated_audio_first",
-      "cross_language_remote_audio": "interpreter_track",
-      "canonical_remote_audio": "interpreter_track_for_cross_language",
+      "model": "brse_participant_audio",
+      "cross_language_remote_audio": "human_original_plus_brse",
+      "canonical_remote_audio": "human_original_track",
       "same_language_policy": "human_passthrough"
     }
   },
@@ -621,11 +632,12 @@ Join room và nhận đủ credentials cho Gateway WS + LiveKit.
     "brse_output_mode": "voice_text",
     "participant_limit": null,
     "supported_languages": ["vi", "en", "ja", "zh", "ko", "fr", "es"],
+    "room_languages": ["vi", "ja"],
     "meeting_languages": ["vi", "ja"],
     "audio_routing": {
-      "model": "translated_audio_first",
-      "cross_language_remote_audio": "interpreter_track",
-      "canonical_remote_audio": "interpreter_track_for_cross_language",
+      "model": "brse_participant_audio",
+      "cross_language_remote_audio": "human_original_plus_brse",
+      "canonical_remote_audio": "human_original_track",
       "same_language_policy": "human_passthrough"
     }
   },
@@ -710,6 +722,7 @@ Response là room summary đã cập nhật:
   "brse_output_mode": "voice_text",
   "participant_limit": null,
   "supported_languages": ["vi", "en", "ja", "zh", "ko", "fr", "es"],
+  "room_languages": ["vi", "ja"],
   "meeting_languages": ["vi", "ja"],
   "meeting_mode": "brse_relay",
   "interpreter_mode": "brse_participant",
@@ -838,7 +851,7 @@ Gửi message này khi user đổi language selector trong room. FE phải updat
 
 Validation:
 
-- `payload.language` phải thuộc `room.meeting_languages` của room hiện tại (không dùng global supported set).
+- `payload.language` phải thuộc `room.room_languages` của room hiện tại (không dùng global supported set). `meeting_languages` chỉ là alias legacy.
 
 ## `room.brse.enable`
 
@@ -906,11 +919,12 @@ Validation:
       "brse_output_mode": "voice_text",
       "participant_limit": null,
       "supported_languages": ["vi", "en", "ja", "zh", "ko", "fr", "es"],
+      "room_languages": ["vi", "ja"],
       "meeting_languages": ["vi", "ja"],
       "audio_routing": {
-        "model": "translated_audio_first",
-        "cross_language_remote_audio": "interpreter_track",
-        "canonical_remote_audio": "interpreter_track_for_cross_language",
+        "model": "brse_participant_audio",
+        "cross_language_remote_audio": "human_original_plus_brse",
+        "canonical_remote_audio": "human_original_track",
         "same_language_policy": "human_passthrough"
       }
     },
@@ -942,11 +956,12 @@ Validation:
       "brse_output_mode": "voice_text",
       "participant_limit": null,
       "supported_languages": ["vi", "en", "ja", "zh", "ko", "fr", "es"],
+      "room_languages": ["vi", "ja"],
       "meeting_languages": ["vi", "ja"],
       "audio_routing": {
-        "model": "translated_audio_first",
-        "cross_language_remote_audio": "interpreter_track",
-        "canonical_remote_audio": "interpreter_track_for_cross_language",
+        "model": "brse_participant_audio",
+        "cross_language_remote_audio": "human_original_plus_brse",
+        "canonical_remote_audio": "human_original_track",
         "same_language_policy": "human_passthrough"
       }
     },

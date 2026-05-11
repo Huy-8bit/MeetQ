@@ -17,6 +17,14 @@ from server.meeting_modes import DEFAULT_BRSE_OUTPUT_MODE, active_human_particip
 logger = logging.getLogger(__name__)
 
 
+def _snapshot_room_languages(snapshot) -> list[str]:
+    return list(
+        getattr(snapshot.room, "room_languages", None)
+        or getattr(snapshot.room, "meeting_languages", None)
+        or []
+    )
+
+
 def _is_room_expired(snapshot) -> bool:
     """Check if the room meeting duration has elapsed."""
     from datetime import datetime, timezone
@@ -63,7 +71,7 @@ class InterpreterDaemon:
                 return
             manager = await self._spawn_manager(room_id, snapshot=snapshot)
             if manager is not None:
-                await manager.sync_room_context(snapshot.room.meeting_languages)
+                await manager.sync_room_context(_snapshot_room_languages(snapshot))
                 await manager.sync_participant(payload)
             return
 
@@ -79,7 +87,7 @@ class InterpreterDaemon:
 
             manager = await self._spawn_manager(room_id, snapshot=snapshot)
             if manager is not None:
-                await manager.sync_room_context(snapshot.room.meeting_languages)
+                await manager.sync_room_context(_snapshot_room_languages(snapshot))
             return
 
         manager = self.managers.get(room_id)
@@ -91,7 +99,7 @@ class InterpreterDaemon:
             if snapshot is None or not snapshot.room.brse_enabled:
                 await self._terminate_manager(room_id)
                 return
-            await manager.sync_room_context(snapshot.room.meeting_languages)
+            await manager.sync_room_context(_snapshot_room_languages(snapshot))
             await manager.sync_participant(payload)
             return
 
@@ -148,7 +156,7 @@ class InterpreterDaemon:
             await manager.start()
             manager.bootstrap_participants(
                 snapshot.participants,
-                meeting_languages=snapshot.room.meeting_languages,
+                meeting_languages=_snapshot_room_languages(snapshot),
             )
             return manager
         except Exception:

@@ -1,5 +1,825 @@
 # Frontend Implementation State
 
+## Turn Update: 2026-05-10 Meeting Controls Cleanup and Stage Pinning
+
+- Time: 2026-05-10T00:00:00+07:00
+- Mode: CODE-ONLY
+- Status: implemented
+- Testing deferred: yes, per instruction
+
+### Objective
+
+Clean up the in-meeting bottom controls by removing duplicate panel navigation
+and the `Focus` feature, then add practical stage pinning for participant video
+and active screen share content without changing backend, LiveKit, relay, chat,
+summary, or people runtime flows.
+
+### Planned Strategy
+
+- Keep right-side panel tabs as the only navigation source for `Relay`, `Chat`,
+  `Summary`, and `People`.
+- Remove the bottom `Relay / Chat / Summary / People` shortcut cluster with no
+  empty wrapper or dead spacing left behind.
+- Remove the `Focus` button and the transient stage-focus UI state.
+- Keep the persisted layout option value for compatibility, but remove visible
+  focus wording from view settings.
+- Add a single deterministic pinned stage target:
+  - participant pin keeps that participant primary on stage
+  - screen-share pin keeps that share primary while active
+  - unpin returns to the existing automatic screen-share/grid behavior
+- Add compact tile/share pin actions and rebalance bottom controls around media,
+  context toggle, settings, and leave.
+
+### Initial Read Status
+
+- Read `docs/frontend/IMPLEMENTATION_STATE.md`.
+- Read `FE/src/pages/RoomPage.tsx`.
+- Read `FE/src/features/room/useMeetingRoom.ts`.
+- Read `FE/src/lib/livekit.ts`.
+- Read meeting UI components:
+  - `RoomControlBar.tsx`
+  - `MeetingStage.tsx`
+  - `ParticipantTile.tsx`
+  - `RoomSidePanel.tsx`
+  - `MeetingViewPanel.tsx`
+- Read `FE/src/types/livekit.ts`.
+- Read relevant `FE/src/index.css` layout, stage, controls, responsive, and
+  motion sections.
+- Confirmed this change stays in frontend UI/runtime presentation paths.
+
+### Implemented Control Cleanup
+
+- Removed the bottom `Relay / Chat / Summary / People` shortcut cluster from
+  `RoomControlBar`.
+- Removed the bottom `Focus` button and its `stageFocusActive` state path from
+  `RoomPage`.
+- Removed the settings drawer `Stage focus` action and visible focus wording
+  from `MeetingViewPanel`.
+- Removed CSS paths only serving the old transient focus mode:
+  - `.stage-focus-active`
+  - `.focus-toggle`
+  - `.focus-setting-block`
+- Kept `RoomSidePanel` tabs as the only navigation source for `Relay`, `Chat`,
+  `Summary`, and `People`; panel switching props/content are unchanged.
+
+### Pin Strategy
+
+- Added a single local pinned stage target in `RoomPage`:
+  - `participant`: pins one participant video/feed as primary stage content.
+  - `screen`: pins one active shared screen by participant and optional track
+    SID.
+- Pin state is deterministic: one pinned target at a time.
+- Pinning a participant replaces the automatic screen-share-first layout with a
+  primary participant stage and a compact secondary strip.
+- Pinning a screen share keeps that share selected as the primary screen-share
+  stage content while it remains active.
+- Unpin clears the local target and returns to the existing automatic behavior:
+  active screen share first, otherwise participant grid.
+- If a pinned participant disappears or a pinned screen share stops, `RoomPage`
+  clears the pin and falls back to auto layout.
+
+### Stage Interaction
+
+- Added compact participant tile actions in `ParticipantTile`:
+  - `Pin` for unpinned participant tiles.
+  - `Unpin` for the current pinned participant.
+- Added screen-share pin action in `MeetingStage`:
+  - primary share surface can be pinned/unpinned.
+  - when a participant is pinned and share exists, a compact share preview tile
+    in the secondary strip exposes `Pin`.
+- Preserved active speaker highlighting and the existing screen-share quality
+  preference call; pinning only changes presentation priority while active.
+
+### Bottom Bar Rebalance
+
+- Bottom bar now contains only:
+  - microphone/camera/share media controls
+  - context panel show/hide
+  - settings
+  - leave
+- Removed the old bottom navigation wrapper instead of leaving hidden spacing.
+- Added final responsive CSS so the remaining secondary controls align as three
+  compact actions on mobile/tablet.
+
+### Files Changed In This Turn
+
+- `FE/src/pages/RoomPage.tsx`
+- `FE/src/components/RoomControlBar.tsx`
+- `FE/src/components/MeetingStage.tsx`
+- `FE/src/components/ParticipantTile.tsx`
+- `FE/src/components/MeetingViewPanel.tsx`
+- `FE/src/index.css`
+- `docs/frontend/IMPLEMENTATION_STATE.md`
+
+### Testing
+
+- Full test suite not run, per CODE-ONLY instruction.
+- Build/typecheck not run, per CODE-ONLY instruction.
+- New tests not added.
+- Existing tests not modified.
+
+---
+
+## Turn Update: 2026-05-10 Meeting Layout Hierarchy Refactor
+
+- Time: 2026-05-10T00:00:00+07:00
+- Mode: CODE-ONLY
+- Status: implemented
+- Testing deferred: yes, per instruction
+
+### Objective
+
+Refactor the in-meeting UI layout so the stage reads as the primary workspace,
+the right panel reads as secondary context, and controls read as utility actions
+without adding new runtime behavior or touching backend code.
+
+### Planned Strategy
+
+- Keep LiveKit/WebSocket/session/relay/chat/summary/people behavior unchanged.
+- Simplify the right panel header by removing the desktop `X` dismiss affordance.
+- Preserve hide/show capability through the bottom layout control on desktop.
+- Use a mobile-only sheet dismiss pattern instead of a floating `X`, because the
+  bottom control bar is visually covered while the panel is open on small screens.
+- Rebalance room shell columns, spacing, tonal grouping, and panel surfaces so
+  stage, context, and controls have clearer hierarchy.
+- Refine tab grouping, panel empty states, summary/relay/chat/people spacing, and
+  responsive behavior without adding new product features.
+
+### Initial Read Status
+
+- Read `docs/frontend/IMPLEMENTATION_STATE.md`.
+- Read `FE/src/pages/RoomPage.tsx`.
+- Read `FE/src/features/room/useMeetingRoom.ts`.
+- Read meeting shell/layout components:
+  - `RoomTopBar.tsx`
+  - `RoomSidePanel.tsx`
+  - `RoomControlBar.tsx`
+  - `MeetingStage.tsx`
+  - `ParticipantTile.tsx`
+- Read panel/view components:
+  - `BrseRelayPanel.tsx`
+  - `ChatPanel.tsx`
+  - `MeetingSummaryPanel.tsx`
+  - `ParticipantList.tsx`
+  - `TranscriptPanel.tsx`
+  - `InterpreterStatusPanel.tsx`
+- Confirmed `FE/src/styles/` does not exist; meeting layout styles are in
+  `FE/src/index.css`.
+
+### Implemented Layout Strategy
+
+- Kept meeting runtime state, LiveKit/WebSocket wiring, room controls, panel
+  switching, BRSE status, chat/relay/summary/people behavior, and session flow
+  unchanged.
+- Rebalanced the room shell so the stage is the primary workspace and the right
+  panel is a narrower secondary context surface.
+- Added a clearer `room-main-column` accessibility label for the stage/control
+  region without changing layout behavior.
+- Softened meeting surfaces with tonal grouping, lower border intensity, more
+  consistent radii, and subtler depth so the UI reads less like assembled boxes.
+- Improved stage hierarchy with a stronger stage surface, better empty state
+  copy, calmer participant tile treatment, and more intentional screen-share
+  framing.
+
+### Side Panel Simplification
+
+- Removed the right-panel desktop `X` dismiss button from
+  `FE/src/components/RoomSidePanel.tsx`.
+- Decision: the desktop `X` was redundant because the bottom room control bar
+  already owns panel visibility and panel tab navigation.
+- Replaced the old dismiss pattern with:
+  - desktop: no dismiss control inside the panel header
+  - desktop hide/show: integrated `Context` / `Hide` layout control in the
+    bottom control bar
+  - mobile: a compact `Hide` sheet action in the panel header because the open
+    bottom sheet covers the bottom controls
+- Reworked the side panel header into a small context heading plus grouped tabs
+  instead of a utility-heavy header row.
+
+### Tabs / Content / Empty States
+
+- Tabs now sit in a cleaner segmented group with stronger selected state and
+  count badges that stay visually secondary.
+- Relay, Chat, Summary, and People empty states now share a refined
+  `panel-empty-state` structure with kicker/title/body hierarchy.
+- Summary state cards use the same empty-state language so loading/empty/error
+  states feel consistent with the rest of the right panel.
+- People panel now has an explicit empty state for edge cases instead of relying
+  on an empty list region.
+
+### Controls / Responsive Behavior
+
+- Bottom controls now read as:
+  - media controls
+  - context panel navigation
+  - utility actions
+- The context panel toggle is now labeled and integrated with the secondary
+  control cluster instead of being an ambiguous isolated icon.
+- Large desktop keeps stage + context side-by-side with the stage prioritized.
+- Laptop/tablet widths stack the context panel under the stage with constrained
+  panel height.
+- Mobile keeps the right panel as a bottom sheet, with the new mobile-only
+  `Hide` action replacing the old `X` affordance.
+
+### Files Changed In This Turn
+
+- `FE/src/pages/RoomPage.tsx`
+- `FE/src/components/RoomSidePanel.tsx`
+- `FE/src/components/RoomControlBar.tsx`
+- `FE/src/components/MeetingStage.tsx`
+- `FE/src/components/BrseRelayPanel.tsx`
+- `FE/src/components/ChatPanel.tsx`
+- `FE/src/components/MeetingSummaryPanel.tsx`
+- `FE/src/components/ParticipantList.tsx`
+- `FE/src/index.css`
+- `docs/frontend/IMPLEMENTATION_STATE.md`
+
+### Testing
+
+- Full test suite not run.
+- Build/typecheck not run.
+- New tests not added.
+- Existing tests not modified.
+
+---
+
+## Turn Update: 2026-05-10 Anime Motion Layer Product Polish
+
+- Time: 2026-05-10T00:00:00+07:00
+- Mode: CODE-ONLY
+- Status: implemented
+- Testing deferred: yes, per instruction
+
+### Objective
+
+Upgrade the frontend product feel with a restrained anime.js motion layer while
+preserving all existing runtime behavior for create room, join room, room flow,
+LiveKit/WebSocket runtime, relay/chat/summary/people panels, BRSE mode selection,
+and responsive/mobile layouts.
+
+### Planned Strategy
+
+- Add anime.js to the FE package if missing.
+- Create a reusable FE motion layer instead of scattering raw anime calls across
+  components.
+- Define shared motion tokens/presets for page reveal, panel reveal, tab/content
+  switch, list item reveal, and press feedback.
+- Respect `prefers-reduced-motion` from the shared motion utilities and CSS.
+- Apply motion only to hierarchy reveals and state changes:
+  - landing hero/showcase/form/CTA
+  - join room card, metadata strip, form, and participant preview
+  - room side panel open/close and tab content changes
+  - bottom controls and panel shortcuts
+  - relay/chat/summary/people content additions and empty states
+  - settings drawer open and compact UI interactions
+- Keep durations short and non-blocking so meeting UX stays calm and responsive.
+
+### Initial Read Status
+
+- Read `docs/frontend/IMPLEMENTATION_STATE.md`.
+- Read `FE/package.json`.
+- Read `FE/src/App.tsx`.
+- Read `FE/src/pages/HomePage.tsx`, `RoomPage.tsx`, and `TestPage.tsx`.
+- Read all current `FE/src/components/*.tsx`.
+- Read all current `FE/src/features/*` files.
+- Read `FE/src/index.css`.
+- Confirmed `FE/src/styles/` does not exist; styling is centralized in
+  `FE/src/index.css`.
+
+### Implemented Motion Strategy
+
+- Added `animejs@^3.2.2` to the FE package and lockfile.
+- Added a typed local anime module declaration because anime.js v3 does not ship
+  TypeScript declarations.
+- Created a reusable motion layer in `FE/src/lib/motion.ts`:
+  - `motionTokens` for shared durations, distances, stagger cadence, and easing.
+  - `prefersReducedMotion` / `usePrefersReducedMotion`.
+  - `useRevealMotion` for page/card/list hierarchy reveals.
+  - `useAmbientFloat` for the landing visual only.
+  - `usePanelTransition` for side-panel open/close.
+  - `useContentSwitchMotion` for tab/stage content switches.
+  - `useDropdownMotion` for custom select menus.
+  - `useDrawerRevealMotion` for the settings drawer.
+  - `useAnimePress` / `animateAttentionPulse` / `animateLatestItem` for shared
+    micro-interactions and live content reveal.
+- Added `FE/src/components/MotionButton.tsx` so buttons use one shared anime.js
+  press/attention behavior instead of ad-hoc per-component animation code.
+
+### Motion Language
+
+- Page reveal: calm opacity + small vertical movement, staggered at section
+  level.
+- Panel reveal: short directional motion with opacity, used for side panel and
+  drawer surfaces.
+- Tab/content switch: compact fade/translate for active panel content and stage
+  screen-share/grid switches.
+- List updates: latest relay/chat/transcript rows reveal with a small upward
+  settle; existing history is not reanimated aggressively.
+- Press feedback: tiny scale/translate on buttons and controls, with cleanup so
+  hover/focus CSS remains intact.
+- Ambient motion: limited to the landing showcase drift, disabled for reduced
+  motion.
+
+### Landing / Create Room
+
+- `FE/src/pages/HomePage.tsx`
+  - Added page-level reveal for nav, showcase hero, create card, join card, and
+    footer.
+  - Added subtle anime.js ambient drift to `IntroShowcase`.
+  - Converted create CTA, secondary open action, and BRSE mode choices to
+    `MotionButton`.
+  - Added a small CTA attention pulse only when the create form becomes valid.
+  - Preserved create-room, language selection, BRSE mode persistence, join input,
+    and navigation handlers.
+
+### Join Room
+
+- `FE/src/components/JoinRoomCard.tsx`
+  - Added staggered reveal for the join card, top line, metadata strip, form
+    block, expired state, and participant preview.
+  - Added participant preview row reveal with its own shorter rhythm.
+  - Converted the join CTA to `MotionButton` with a light ready-state pulse.
+  - Preserved validation, saved user prefs, room expiry logic, and `onJoin`
+    submit behavior.
+
+### In-Meeting UI
+
+- `FE/src/components/RoomSidePanel.tsx`
+  - Added anime.js side-panel transition and tab-content switch motion.
+  - Converted tab and close buttons to shared motion press controls.
+- `FE/src/components/RoomControlBar.tsx`
+  - Converted media controls, panel shortcuts, focus/panel/settings controls, and
+    leave control to `MotionButton`.
+- `FE/src/components/SettingsDrawer.tsx`
+  - Added drawer/backdrop/content reveal animation through the shared drawer
+    hook.
+- `FE/src/components/MeetingStage.tsx`
+  - Added a short content switch motion for participant-grid vs screen-share
+    stage changes.
+- `FE/src/components/BrseRelayPanel.tsx`
+  - Added empty-state reveal and latest relay row reveal.
+- `FE/src/components/ChatPanel.tsx`
+  - Added latest message reveal and shared motion buttons for mode/send controls.
+- `FE/src/components/MeetingSummaryPanel.tsx`
+  - Added summary state/artifact/action reveal and shared motion buttons for
+    summary actions.
+- `FE/src/components/ParticipantList.tsx`
+  - Added row reveal and shared motion for host mute action.
+- `FE/src/components/TranscriptPanel.tsx`
+  - Added latest transcript row reveal.
+- `FE/src/components/InterpreterStatusPanel.tsx`
+  - Added status/empty-state reveal.
+- `FE/src/components/BrseToggleControl.tsx`, `MeetingViewPanel.tsx`,
+  `AudioDevicePanel.tsx`
+  - Converted compact controls to the shared press motion button.
+
+### CSS / Reduced Motion
+
+- `FE/src/index.css`
+  - Added final motion-integration rules for transform origins, focus-visible
+    rings, hover lift polish, active tab/segmented transitions, latest row
+    emphasis, and mobile-lightened hover shadows.
+  - Added `@media (prefers-reduced-motion: reduce)` to collapse transitions,
+    disable repeated animation, restore scroll behavior, and force motion targets
+    to stable opacity/transform.
+
+### Files Changed In This Turn
+
+- `FE/package.json`
+- `FE/package-lock.json`
+- `FE/src/vite-env.d.ts`
+- `FE/src/lib/motion.ts`
+- `FE/src/components/MotionButton.tsx`
+- `FE/src/pages/HomePage.tsx`
+- `FE/src/components/CustomSelect.tsx`
+- `FE/src/components/JoinRoomCard.tsx`
+- `FE/src/components/RoomSidePanel.tsx`
+- `FE/src/components/RoomControlBar.tsx`
+- `FE/src/components/SettingsDrawer.tsx`
+- `FE/src/components/MeetingStage.tsx`
+- `FE/src/components/BrseRelayPanel.tsx`
+- `FE/src/components/ChatPanel.tsx`
+- `FE/src/components/MeetingSummaryPanel.tsx`
+- `FE/src/components/ParticipantList.tsx`
+- `FE/src/components/TranscriptPanel.tsx`
+- `FE/src/components/InterpreterStatusPanel.tsx`
+- `FE/src/components/BrseToggleControl.tsx`
+- `FE/src/components/MeetingViewPanel.tsx`
+- `FE/src/components/AudioDevicePanel.tsx`
+- `FE/src/index.css`
+- `docs/frontend/IMPLEMENTATION_STATE.md`
+
+### Testing
+
+- Full test suite not run.
+- Build/typecheck not run.
+- New tests not added.
+- Existing tests not modified.
+- `npm install animejs@3.2.2 --save` was run only to add the dependency and
+  update the lockfile; npm audit output reported 2 moderate vulnerabilities that
+  were not remediated in this motion-only turn.
+
+---
+
+## Turn Update: 2026-05-10 Right Panel Interaction Surface Redesign
+
+- Time: 2026-05-10T00:00:00+07:00
+- Mode: CODE-ONLY
+- Status: implemented
+- Testing deferred: yes
+
+### Objective
+
+Reduce the compressed settings-modal feel of the landing right panel by making
+it wider, more sectioned, and more like a premium AI product entry point.
+
+### Planned Strategy
+
+- Preserve create-room and join-room behavior.
+- Widen the right-side interaction surface substantially on desktop.
+- Split language setup, AI relay mode, CTA, and join existing room into clearer
+  visual sections.
+- Reduce tiny supporting text and make relay choices scan more like a segmented
+  product choice.
+- Give the create CTA more space, stronger contrast, and a more confident label.
+- Keep responsive fallback stacked and safe on smaller screens.
+
+### Implemented Changes
+
+- Converted the create-room card into a wider interaction surface instead of a
+  compressed vertical settings card.
+- Split the right panel into explicit sections:
+  - language setup
+  - AI relay segmented choice
+  - dominant create-room CTA
+  - secondary join-existing-room action
+- Changed the create headline to “Start a multilingual AI meeting” to frame the
+  task as an AI product action rather than room configuration.
+- Changed the primary CTA to “Start speaking globally”.
+- Reduced microcopy by hiding relay detail text on inactive choices and removing
+  extra badges/pills from the visible flow.
+- Increased desktop control size, card padding, CTA height, and form width.
+
+### Layout / Responsive Notes
+
+- Desktop right panel now uses up to `760px` and a wider grid allocation:
+  `minmax(0, 1fr) minmax(640px, 760px)`.
+- At medium desktop widths, the right panel steps down to `660px`.
+- Below `1180px`, the landing stacks to avoid a cramped two-column layout.
+- Below mobile/tablet widths, language selectors, relay options, and join action
+  fall back to stacked controls with reduced padding.
+
+### Files Changed
+
+- `FE/src/pages/HomePage.tsx`
+  - Added section wrappers for language setup, AI relay, and CTA.
+  - Converted relay details to show only for the active option.
+  - Updated create headline and CTA copy.
+  - Kept all create/join handlers and state wiring intact.
+- `FE/src/index.css`
+  - Added right-panel interaction-surface overrides: wider panel, section
+    rhythm, horizontal language layout, segmented relay control, stronger CTA,
+    inline join action, and responsive fallbacks.
+- `docs/frontend/IMPLEMENTATION_STATE.md`
+  - Recorded implementation and testing deferral.
+
+### Testing
+
+- Full test suite not run.
+- Build/typecheck not run.
+- New tests not added.
+- Existing tests not modified.
+
+---
+
+## Turn Update: 2026-05-10 Cinematic Landing Scale Pass
+
+- Time: 2026-05-10T00:00:00+07:00
+- Mode: CODE-ONLY
+- Status: implemented
+- Testing deferred: yes
+
+### Objective
+
+Make the landing/create-room screen feel less underutilized and more like a
+premium AI product hero:
+
+- stronger left-side cinematic product value area
+- larger, less cramped create-room panel
+- reduced small-pill/dashboard-widget feel
+- clearer visual flow from left product message to right room creation action
+
+### Read Status
+
+- Read `docs/frontend/IMPLEMENTATION_STATE.md`.
+- Read `FE/src/pages/HomePage.tsx`.
+- Read relevant landing layout sections in `FE/src/index.css`.
+- Confirmed `FE/src/styles/` does not exist; landing styling is in
+  `FE/src/index.css`.
+
+### Implemented Strategy
+
+- Added a left hero copy block above the animated showcase so the page
+  immediately communicates: AI multilingual meetings, live interpretation, AI
+  relay, and summaries.
+- Enlarged the left hero/showcase composition while keeping it contained in the
+  existing landing route and slideshow behavior.
+- Increased the right create-room panel width and padding so controls have more
+  breathing room.
+- Removed small create-room metadata badges and replaced the bottom pill cluster
+  with one quiet room note.
+- Added a simple AI relay section heading so mode choices are grouped with
+  clearer hierarchy.
+- Kept create-room, join-room shortcut, language selection, BRSE mode selection,
+  validation, storage, and navigation behavior unchanged.
+
+### Width / Composition Changes
+
+- `hp-root`
+  - Changed desktop grid to `minmax(0, 1.28fr) minmax(500px, 620px)` so both
+    hero and form use more of the available screen.
+  - Increased composition gap and retained generous outer padding.
+- `hp-showcase-hero`
+  - New left-side wrapper for product message + showcase.
+  - Uses a large product headline, supporting copy, and the existing slideshow.
+- `intro-showcase`
+  - Kept full-width within the left hero column.
+  - Uses cinematic dimensions: `height: min(58vh, 680px)` and `min-height:
+    500px` on desktop.
+- `hp-panel`
+  - Increased max width to `600px`.
+  - Create card now has larger padding and more vertical rhythm.
+
+### UX / Hierarchy Changes
+
+- Added `hp-card-subtitle` under “Create room” for clearer task framing.
+- Removed the small `60 min` / selected-mode badge cluster from the card header.
+- Replaced the three bottom room-default pills with a single quieter
+  `60-minute rooms. No account required.` note.
+- Grouped BRSE options under `AI relay` with concise helper text.
+- Increased control size for selects and option blocks, improving scanability
+  and reducing the compressed settings-panel feel.
+
+### Responsive Considerations
+
+- Laptop breakpoint keeps both sections substantial, lowers showcase height,
+  and stacks BRSE options to protect form readability.
+- Tablet breakpoint stacks the left hero above the form while keeping the visual
+  large enough to preserve product presence.
+- Mobile breakpoint reduces headline/showcase size and card padding to prevent
+  overflow while keeping the landing hierarchy intact.
+
+### Files Changed
+
+- `FE/src/pages/HomePage.tsx`
+  - Added left hero copy wrapper.
+  - Added create-room subtitle.
+  - Added BRSE option section header.
+  - Removed small metadata badges and bottom pill list.
+- `FE/src/index.css`
+  - Added/updated layout, scale, hierarchy, option grouping, panel sizing, and
+    responsive rules for the landing/create-room screen.
+- `docs/frontend/IMPLEMENTATION_STATE.md`
+  - Recorded this scale pass and testing deferral.
+
+### Testing
+
+- Full test suite not run.
+- Build/typecheck not run.
+- New tests not added.
+- Existing tests not modified.
+
+---
+
+## Turn Update: 2026-05-10 Landing Left Visual Rebalance
+
+- Time: 2026-05-10T00:00:00+07:00
+- Mode: CODE-ONLY
+- Status: implemented
+- Testing deferred: yes, per instruction
+
+### Objective
+
+Increase the landing/create-room left visual presence so the landing composition
+feels balanced instead of form-dominant.
+
+### Initial Read Status
+
+- Read required state:
+  - `docs/frontend/IMPLEMENTATION_STATE.md`
+- Read landing/create-room page:
+  - `FE/src/pages/HomePage.tsx`
+- Read relevant style/layout file:
+  - `FE/src/index.css`
+- Styling note:
+  - `FE/src/styles/` does not exist in this repo.
+  - Landing/create-room layout is currently controlled by `hp-*` classes in
+    `FE/src/index.css`.
+
+### Planned Strategy
+
+- Keep `HomePage` create-room and join-room runtime behavior untouched.
+- Increase desktop left-side grid allocation and visual block dimensions
+  materially.
+- Slightly constrain the right create-room column so it stays usable but stops
+  visually dominating.
+- Tune desktop/laptop/tablet/mobile breakpoints so the enlarged visual does not
+  cause overflow or cramped form controls.
+
+### Landing Left / Right Rebalance Strategy
+
+- Shifted desktop landing grid from a near-even split to a left-weighted split:
+  the visual side now receives materially more horizontal allocation while the
+  create-room column is capped tighter.
+- Enlarged the left `IntroShowcase` from the previous constrained max/height to
+  a full-column visual with a larger max width and taller viewport-based height.
+- Kept the right `hp-panel` usable but reduced its max width and create-card
+  padding slightly so it no longer reads as the only dominant block.
+
+### Width / Composition Changes
+
+- `hp-root`
+  - Desktop grid now uses a stronger left ratio:
+    `minmax(0, 1.72fr) minmax(380px, 460px)`.
+  - Reduced desktop gap/padding slightly to give the visual more real estate.
+- `intro-showcase`
+  - Now stretches to the full left grid column.
+  - Increased max width to `1040px`.
+  - Increased height to `min(76vh, 760px)` with `560px` desktop minimum.
+- `hp-panel`
+  - Constrained to `min(100%, 460px)` and aligned to the right side.
+  - Create-room card padding reduced modestly while preserving form clarity.
+- Slide internals
+  - Scaled chaos grid spacing/caption, clarity headline/content, translation
+    card, and global headline/nodes so the larger visual does not feel empty or
+    stretched.
+
+### Responsive Considerations
+
+- Laptop breakpoint keeps a left-heavy ratio but lowers visual min-height and
+  narrows the form to avoid horizontal pressure.
+- At the laptop breakpoint, BRSE mode options stack vertically to protect the
+  narrower right column.
+- Tablet/mobile continue to stack the visual above the form, with larger but
+  bounded visual heights so the hero has presence without pushing the form too
+  far down.
+- Small mobile keeps a compact showcase height and reduced inner slide sizing.
+
+### Files Changed
+
+- `FE/src/index.css`
+  - Updated landing/create-room grid allocation, left visual dimensions,
+    right-panel width, create-card spacing, slide internal scale, and responsive
+    breakpoints.
+- `docs/frontend/IMPLEMENTATION_STATE.md`
+  - Recorded the rebalance strategy, width/composition changes, responsive
+    notes, files changed, and testing deferral.
+
+### Testing
+
+- Full test suite not run, per CODE-ONLY instruction.
+- Build/typecheck not run, per CODE-ONLY instruction.
+- New tests not added.
+- Existing tests not modified.
+
+---
+
+## Turn Update: 2026-05-10 Premium Main UI Redesign
+
+- Time: 2026-05-10T00:00:00+07:00
+- Mode: CODE-ONLY
+- Status: implemented
+- Testing deferred: yes, per instruction
+
+### Objective
+
+Redesign the main frontend UI surfaces without changing backend/runtime
+behavior:
+
+- landing / create-room screen
+- join-room screen
+- in-meeting room shell, stage, side panel, bottom controls
+- typography, spacing, theme tokens, custom select/form controls
+
+### Initial Read Status
+
+- Read required state and routing:
+  - `docs/frontend/IMPLEMENTATION_STATE.md`
+  - `FE/src/App.tsx`
+- Read primary pages:
+  - `FE/src/pages/HomePage.tsx`
+  - `FE/src/pages/RoomPage.tsx`
+  - `FE/src/pages/TestPage.tsx` not targeted for redesign
+- Read core components for the requested UI paths:
+  - `FE/src/components/JoinRoomCard.tsx`
+  - `FE/src/components/RoomTopBar.tsx`
+  - `FE/src/components/RoomControlBar.tsx`
+  - `FE/src/components/RoomSidePanel.tsx`
+  - `FE/src/components/MeetingStage.tsx`
+  - `FE/src/components/ParticipantTile.tsx`
+  - `FE/src/components/BrseRelayPanel.tsx`
+  - `FE/src/components/ChatPanel.tsx`
+  - `FE/src/components/MeetingSummaryPanel.tsx`
+  - `FE/src/components/ParticipantList.tsx`
+  - `FE/src/components/CustomSelect.tsx`
+  - `FE/src/components/AudioDevicePanel.tsx`
+  - `FE/src/components/MeetingViewPanel.tsx`
+  - `FE/src/components/SettingsDrawer.tsx`
+- Read relevant room runtime hook:
+  - `FE/src/features/room/useMeetingRoom.ts`
+- Styling note:
+  - `FE/src/styles/` does not exist in this repo.
+  - Main styling is in `FE/src/index.css`.
+
+### Planned Strategy
+
+- Keep all create/join/LiveKit/WebSocket/BRSE/chat/summary/people behavior and
+  props intact.
+- Replace heavy IDE/dashboard-like chrome with a calmer Apple-like visual
+  system: softer surfaces, fewer hard borders, warmer neutral depth, and clearer
+  hierarchy.
+- Reduce visual clutter by flattening nested cards, simplifying metadata
+  display, and making status/control groups feel productized instead of debug.
+- Update responsive CSS for landing, join, side panel, and room control wrapping.
+
+### Visual Redesign Strategy
+
+- Added a premium UI token layer in `FE/src/index.css` with calmer neutral
+  surfaces, softer borders, lighter depth, and matched light/dark theme
+  variables.
+- Kept behavior and runtime props intact; no backend, API, websocket, LiveKit,
+  BRSE, chat, summary, or people flow changes.
+- Used final CSS overrides to consolidate the existing layered stylesheet
+  without removing unrelated legacy styles.
+
+### Landing / Create Room Notes
+
+- Reworked the `hp-*` landing surface toward a quieter product composition:
+  soft full-screen background, refined showcase framing, lighter right-side
+  create-room panel, less seam/border noise, and cleaner hierarchy.
+- Updated create-room controls visually: larger headline rhythm, softer
+  language selectors, refined BRSE mode selection, calmer metadata pills, and a
+  subtler join-room shortcut.
+- Preserved create-room validation, BRSE mode selection, language selection,
+  room creation payload, local preference storage, and join shortcut behavior.
+
+### Join Room Notes
+
+- Reworked join-room chrome through CSS so the screen reads as a single refined
+  entry surface instead of stacked dashboard cards.
+- Tightened metadata hierarchy for room id, languages, mode, expiry, and
+  participant preview.
+- Preserved display name validation, language validation, room expiry handling,
+  saved user preferences, participant preview logic, and join API behavior.
+
+### In-Meeting Shell Notes
+
+- Softened the meeting shell, top bar, stage, participant tiles, side panel, and
+  bottom controls with premium surfaces and reduced hard IDE-like contrast.
+- Replaced prototype text/emoji control affordances with lucide icons while
+  preserving all control callbacks and disabled states.
+- Reworked AI relay tile visual treatment by replacing the placeholder image
+  with a designed CSS avatar/waveform treatment.
+- Refined side panel tabs, empty states, relay/chat/summary/people surfaces, and
+  drawer controls to reduce admin/sidebar feel.
+
+### Typography / Layout / Controls
+
+- Reduced uppercase-heavy feel in primary labels and metadata.
+- Improved weight rhythm for headlines, labels, metadata, badges, and panel
+  titles.
+- Unified custom select, input, segmented control, bottom control, tab, and
+  button styling across light/dark themes.
+- Added responsive overrides for landing/create, join, meeting controls, side
+  panel, and compact mobile topbar behavior.
+
+### Files Changed
+
+- `FE/src/components/RoomControlBar.tsx`
+  - Added lucide icons for media controls, panel tabs, focus, panel toggle,
+    settings, and leave.
+- `FE/src/components/ParticipantTile.tsx`
+  - Replaced AI placeholder image with a CSS-rendered AI relay avatar.
+- `FE/src/components/ChatPanel.tsx`
+  - Refined empty-state copy.
+- `FE/src/components/ParticipantList.tsx`
+  - Reduced debug-like room-state copy.
+- `FE/src/index.css`
+  - Added premium visual-system overrides for landing/create, join, meeting
+    shell, stage, side panel, bottom controls, forms/selects, empty states,
+    responsive behavior, and light/dark theme consistency.
+- `docs/frontend/IMPLEMENTATION_STATE.md`
+  - Recorded strategy, scope, file changes, and testing deferral.
+
+### Testing
+
+- Full test suite not run, per CODE-ONLY instruction.
+- Build/typecheck not run, per CODE-ONLY instruction.
+- New tests not added.
+- Existing tests not modified.
+
+---
+
 ## Turn Update: 2026-05-09 Frontend Feature Inventory
 
 - Time: 2026-05-09T00:00:00+07:00

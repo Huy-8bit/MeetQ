@@ -120,6 +120,7 @@ class RoomStore:
             brse_output_mode=room_state.brse_output_mode,
             participant_limit=room_state.participant_limit,
             supported_languages=room_state.supported_languages,
+            room_languages=room_state.room_languages,
             meeting_languages=room_state.meeting_languages,
             meeting_mode=room_state.meeting_mode,
             interpreter_mode=room_state.interpreter_mode,

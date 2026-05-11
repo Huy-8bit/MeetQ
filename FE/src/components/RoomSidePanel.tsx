@@ -1,4 +1,10 @@
 import type { ReactNode } from "react";
+import { PanelRightClose } from "lucide-react";
+import {
+  useContentSwitchMotion,
+  usePanelTransition,
+} from "../lib/motion";
+import { MotionButton } from "./MotionButton";
 
 export type RoomPanelTab = "relay" | "chat" | "summary" | "people";
 
@@ -17,11 +23,11 @@ interface RoomSidePanelProps {
   people: ReactNode;
 }
 
-const TABS: { id: RoomPanelTab; label: string }[] = [
-  { id: "relay", label: "Relay" },
-  { id: "chat", label: "Chat" },
-  { id: "summary", label: "Summary" },
-  { id: "people", label: "People" },
+const TABS: { id: RoomPanelTab; label: string; detail: string }[] = [
+  { id: "relay", label: "Relay", detail: "Live transcript and BRSE output" },
+  { id: "chat", label: "Chat", detail: "Room messages" },
+  { id: "summary", label: "Summary", detail: "Meeting notes and actions" },
+  { id: "people", label: "People", detail: "Participants and AI relay presence" },
 ];
 
 export function RoomSidePanel({
@@ -38,6 +44,15 @@ export function RoomSidePanel({
   summary,
   people,
 }: RoomSidePanelProps) {
+  const panelMotionRef = usePanelTransition<HTMLElement>(open, {
+    axis: "x",
+    distance: 20,
+  });
+  const bodyMotionRef = useContentSwitchMotion<HTMLDivElement>(activeTab, {
+    selector: ":scope > *",
+    distance: 8,
+    stagger: 0,
+  });
   const counts: Record<RoomPanelTab, number> = {
     relay: transcriptCount,
     chat: chatCount,
@@ -46,15 +61,39 @@ export function RoomSidePanel({
   };
 
   const content: Record<RoomPanelTab, ReactNode> = { relay, chat, summary, people };
+  const activeTabCopy = TABS.find((tab) => tab.id === activeTab) ?? TABS[0];
 
   return (
-    <aside className={open ? "room-side-panel is-open" : "room-side-panel"} aria-hidden={open ? undefined : true}>
+    <aside
+      ref={panelMotionRef}
+      className={open ? "room-side-panel is-open" : "room-side-panel"}
+      aria-label="Meeting context panel"
+      aria-hidden={open ? undefined : true}
+    >
       <div className="side-panel-header">
+        <div className="side-panel-heading">
+          <span className="side-panel-kicker">Context</span>
+          <div>
+            <strong className="side-panel-title">{activeTabCopy.label}</strong>
+            <p className="side-panel-subtitle">{activeTabCopy.detail}</p>
+          </div>
+        </div>
+
+        <MotionButton
+          className="side-panel-mobile-dismiss"
+          type="button"
+          aria-label="Hide context panel"
+          onClick={onClose}
+        >
+          <PanelRightClose size={16} />
+          <span>Hide</span>
+        </MotionButton>
+
         <nav className="side-panel-tabs" role="tablist" aria-label="Room panels">
           {TABS.map(({ id, label }) => {
             const count = counts[id];
             return (
-              <button
+              <MotionButton
                 key={id}
                 role="tab"
                 type="button"
@@ -62,24 +101,19 @@ export function RoomSidePanel({
                 className={activeTab === id ? "side-tab is-active" : "side-tab"}
                 onClick={() => onTabChange(id)}
               >
-                {label}
+                <span className="side-tab-label">{label}</span>
                 {count > 0 ? <span className="side-tab-badge">{count}</span> : null}
-              </button>
+              </MotionButton>
             );
           })}
         </nav>
-
-        <button
-          className="side-panel-close"
-          type="button"
-          aria-label="Close panel"
-          onClick={onClose}
-        >
-          ✕
-        </button>
       </div>
 
-      <div className={`side-panel-body side-panel-body-${activeTab}`} role="tabpanel">
+      <div
+        ref={bodyMotionRef}
+        className={`side-panel-body side-panel-body-${activeTab}`}
+        role="tabpanel"
+      >
         {content[activeTab]}
       </div>
     </aside>

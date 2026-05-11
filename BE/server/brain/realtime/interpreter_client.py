@@ -16,6 +16,7 @@ from server.brain.realtime.session_config import (
     INTERPRETER_FINAL_TRANSCRIPT_HOLD_MS,
     INTERPRETER_INPUT_TRANSCRIPTION_MODEL,
     INTERPRETER_INPUT_TRANSCRIPTION_PROMPT,
+    INTERPRETER_SOURCE_QUALITY_HOLD_MS,
     INTERPRETER_TEMPERATURE,
     INTERPRETER_VAD_CONFIG,
     INTERPRETER_SEND_QUEUE_MAXSIZE,
@@ -24,6 +25,8 @@ from server.brain.realtime.session_config import (
     build_interpreter_summary_instructions,
     build_interpreter_session_update,
 )
+from server.brain.realtime.source_policy import source_transcript_needs_quality_hold
+from server.brain.realtime.term_detector import detect_terms
 
 logger = logging.getLogger(__name__)
 
@@ -371,6 +374,34 @@ class InterpreterRealtimeClient(RealtimeClient):
                     "input_transcript_completed "
                     + " ".join(latency_bits)
                 )
+                completed_at = time.monotonic()
+                if await self._hold_for_source_quality(
+                    transcript,
+                    item_id=item_id,
+                    completed_at=completed_at,
+                ):
+                    if (
+                        self._speech_started_at is not None
+                        and self._speech_started_at > completed_at
+                    ):
+                        self._log(
+                            "input_transcript_rejected_after_quality_hold "
+                            f"item_id={item_id or 'n/a'} reason=speech_continued_during_hold"
+                        )
+                        await self._handle_input_without_relay(
+                            ws,
+                            item_id=item_id,
+                            reason="speech_continued_during_source_quality_hold",
+                        )
+                        if item_id:
+                            self._accepted_input_item_ids.discard(item_id)
+                        return
+                    if not self._input_transcription_event_is_current(event):
+                        self._log(
+                            "dropping_stale_input_transcript_after_quality_hold "
+                            f"item_id={item_id or 'n/a'} active_item_id={self._active_input_item_id or 'n/a'}"
+                        )
+                        return
                 if not self._deterministic_routing:
                     await self._handle_input_transcript_with_audio(ws, transcript)
                 self.on_transcript_complete(transcript)
@@ -713,17 +744,34 @@ class InterpreterRealtimeClient(RealtimeClient):
                 "Stop immediately after the summary."
             )
         else:
-            instructions = (
-                self._current_instructions()
-                + " Relay the following validated source transcript only. "
+            # Detect technical/mixed-language terms from this specific source text.
+            # Build a per-turn instruction so the model knows EXACTLY which tokens
+            # to preserve in this utterance — more reliable than a static list.
+            term_analysis = detect_terms(source_text)
+            term_instruction = term_analysis.build_preserve_instruction()
+
+            base_relay_instruction = (
+                " Relay the following validated source transcript only. "
                 "Output only the direct interpreted message — nothing else. "
                 "Do not add explanation, qualification, context, or commentary. "
                 "Do not reference who said it. "
-                "Do not infer meaning beyond what the text says. "
-                "Do not use prior audio or conversation context. "
-                "Preserve technical terms, code terms, and product names exactly as they appear. "
+                "Do not infer meaning beyond what the source text says. "
+                "Do not use prior audio or conversation history. "
                 "Stop immediately after the relay."
             )
+            instructions = (
+                self._current_instructions()
+                + base_relay_instruction
+                + (f" {term_instruction}" if term_instruction else "")
+            )
+            if term_analysis.has_technical_content:
+                self._log(
+                    "term_injection "
+                    f"source_id={relay_source_id} "
+                    f"preserve={term_analysis.preserve_tokens[:6]} "
+                    f"conservative={term_analysis.conservative_tokens[:4]} "
+                    f"mixed_lang={term_analysis.is_mixed_language}"
+                )
         payload = {
             "type": "response.create",
             "response": {
@@ -773,6 +821,53 @@ class InterpreterRealtimeClient(RealtimeClient):
             f"remaining_ms={remaining_ms} elapsed_since_speech_stop_ms={elapsed_ms}"
         )
         await asyncio.sleep(remaining_ms / 1000)
+
+    async def _hold_for_source_quality(
+        self,
+        transcript: str,
+        *,
+        item_id: Optional[str],
+        completed_at: float,
+    ) -> bool:
+        if INTERPRETER_SOURCE_QUALITY_HOLD_MS <= 0:
+            return False
+        duration_ms = None
+        if self._speech_started_at is not None and self._speech_stopped_at is not None:
+            duration_ms = int(max(0.0, self._speech_stopped_at - self._speech_started_at) * 1000)
+        needs_hold, reason, normalized, signal = source_transcript_needs_quality_hold(
+            transcript,
+            duration_ms=duration_ms,
+        )
+        if not needs_hold:
+            term_signal = signal.get("detected_terms")
+            if isinstance(term_signal, dict) and (
+                term_signal.get("is_mixed_language")
+                or term_signal.get("preserve")
+                or term_signal.get("conservative")
+            ):
+                self._log(
+                    "source_quality_fast_path_with_terms "
+                    f"item_id={item_id or 'n/a'} reason={reason} "
+                    f"terms={term_signal}"
+                )
+            return False
+        stopped_at = self._speech_stopped_at
+        elapsed_since_stop_ms = (
+            int(max(0.0, completed_at - stopped_at) * 1000)
+            if stopped_at is not None
+            else 0
+        )
+        remaining_ms = max(0, INTERPRETER_SOURCE_QUALITY_HOLD_MS - elapsed_since_stop_ms)
+        if remaining_ms <= 0:
+            return False
+        self._log(
+            "source_quality_hold "
+            f"item_id={item_id or 'n/a'} reason={reason} remaining_ms={remaining_ms} "
+            f"elapsed_since_speech_stop_ms={elapsed_since_stop_ms} "
+            f"normalized={normalized!r} signal={signal}"
+        )
+        await asyncio.sleep(remaining_ms / 1000)
+        return True
 
     async def _start_next_pending_relay(self, ws) -> bool:
         if self._relay_response_busy():

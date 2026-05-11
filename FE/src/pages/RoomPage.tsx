@@ -19,7 +19,7 @@ import { AudioDevicePanel } from "../components/AudioDevicePanel";
 import { ParticipantList } from "../components/ParticipantList";
 import { BrseRelayPanel } from "../components/BrseRelayPanel";
 import { MeetingSummaryPanel } from "../components/MeetingSummaryPanel";
-import { MeetingStage } from "../components/MeetingStage";
+import { MeetingStage, type PinnedStageTarget } from "../components/MeetingStage";
 import { MeetingViewPanel } from "../components/MeetingViewPanel";
 import { RoomControlBar } from "../components/RoomControlBar";
 import { RoomSidePanel, type RoomPanelTab } from "../components/RoomSidePanel";
@@ -55,7 +55,7 @@ export function RoomPage() {
   const [showEndedSummary, setShowEndedSummary] = useState(false);
   const [themeMode, setThemeMode] = useState<AppThemeMode>(() => loadThemePreference());
   const [layoutMode, setLayoutMode] = useState<RoomLayoutMode>(() => loadRoomLayoutPreference());
-  const [stageFocusActive, setStageFocusActive] = useState(false);
+  const [pinnedStageTarget, setPinnedStageTarget] = useState<PinnedStageTarget | null>(null);
   const session = getSession(roomId);
   const handleSessionInvalidated = useCallback(() => {
     clearSession(roomId);
@@ -157,14 +157,33 @@ export function RoomPage() {
   const activeScreenShareParticipants = meeting.participants.filter(
     (participant) => participant.is_screen_sharing,
   );
+  const pinnedScreenShareParticipant =
+    pinnedStageTarget?.type === "screen"
+      ? activeScreenShareParticipants.find(
+          (participant) => participant.participant_id === pinnedStageTarget.participantId,
+        ) || null
+      : null;
   const selectedScreenSharer =
+    pinnedScreenShareParticipant ||
     activeScreenShareParticipants.find(
       (participant) => participant.participant_id === meeting.selfState?.participant_id,
     ) || activeScreenShareParticipants[0] || null;
   const selectedScreenFeed = selectedScreenSharer
-    ? meeting.screenShares.find(
-        (feed) => feed.participantId === selectedScreenSharer.participant_id,
-      ) || null
+    ? (
+        meeting.screenShares.find(
+          (feed) =>
+            feed.participantId === selectedScreenSharer.participant_id
+            && (
+              pinnedStageTarget?.type !== "screen"
+              || !pinnedStageTarget.trackSid
+              || feed.trackSid === pinnedStageTarget.trackSid
+            ),
+        )
+        || meeting.screenShares.find(
+          (feed) => feed.participantId === selectedScreenSharer.participant_id,
+        )
+        || null
+      )
     : null;
   const roomMeetingLanguages = meeting.meetingLanguages;
   const brseModeDescription = getBrseModeDescription(meeting.brseRoomMode);
@@ -203,6 +222,29 @@ export function RoomPage() {
     />
   );
 
+  useEffect(() => {
+    if (!pinnedStageTarget) {
+      return;
+    }
+
+    if (pinnedStageTarget.type === "participant") {
+      const participantStillVisible = meeting.videos.some(
+        (feed) => feed.participantId === pinnedStageTarget.participantId,
+      );
+      if (!participantStillVisible) {
+        setPinnedStageTarget(null);
+      }
+      return;
+    }
+
+    const screenShareStillActive = activeScreenShareParticipants.some(
+      (participant) => participant.participant_id === pinnedStageTarget.participantId,
+    );
+    if (!screenShareStillActive) {
+      setPinnedStageTarget(null);
+    }
+  }, [activeScreenShareParticipants, meeting.videos, pinnedStageTarget]);
+
   const handleThemeChange = useCallback((nextTheme: AppThemeMode) => {
     setThemeMode(nextTheme);
   }, []);
@@ -211,26 +253,20 @@ export function RoomPage() {
     setLayoutMode(nextLayout);
   }, []);
 
-  const handleToggleStageFocus = useCallback(() => {
-    if (stageFocusActive) {
-      setStageFocusActive(false);
-      return;
-    }
-
-    setSidePanelOpen(false);
-    setSettingsOpen(false);
-    setStageFocusActive(true);
-  }, [stageFocusActive]);
-
-  const handleToggleSidePanel = useCallback(() => {
-    setStageFocusActive(false);
-    setSidePanelOpen((prev) => !prev);
+  const handlePinParticipant = useCallback((participantId: string) => {
+    setPinnedStageTarget({ type: "participant", participantId });
   }, []);
 
-  const handleOpenPanel = useCallback((tab: RoomPanelTab) => {
-    setStageFocusActive(false);
-    setActivePanel(tab);
-    setSidePanelOpen(true);
+  const handlePinScreenShare = useCallback((participantId: string, trackSid?: string) => {
+    setPinnedStageTarget({ type: "screen", participantId, trackSid });
+  }, []);
+
+  const handleUnpinStage = useCallback(() => {
+    setPinnedStageTarget(null);
+  }, []);
+
+  const handleToggleSidePanel = useCallback(() => {
+    setSidePanelOpen((prev) => !prev);
   }, []);
 
   async function handleJoin(payload: {
@@ -370,7 +406,6 @@ export function RoomPage() {
       `layout-${layoutMode}`,
       meeting.brseEnabled ? "brse-on" : "brse-off",
       sidePanelOpen ? "panel-open" : "panel-closed",
-      stageFocusActive ? "stage-focus-active" : "",
     ].join(" ")}>
       <RoomTopBar
         roomId={roomId}
@@ -423,7 +458,7 @@ export function RoomPage() {
       </div>
 
       <div className="room-shell">
-        <section className="room-main-column">
+        <section className="room-main-column" aria-label="Meeting stage and controls">
           <MeetingStage
             sidePanelOpen={sidePanelOpen}
             videos={meeting.videos}
@@ -435,10 +470,13 @@ export function RoomPage() {
             brseRoomMode={meeting.brseRoomMode}
             brseAudioExpected={meeting.brseAudioExpected}
             relayStatusLabel={relayStatusLabel}
+            pinnedTarget={pinnedStageTarget}
+            onPinParticipant={handlePinParticipant}
+            onPinScreenShare={handlePinScreenShare}
+            onUnpinStage={handleUnpinStage}
           />
 
           <RoomControlBar
-            activePanel={activePanel}
             isMicMuted={meeting.isMicMuted}
             isTogglingMic={meeting.isTogglingMic}
             isMutedByHost={meeting.isMutedByHost}
@@ -447,7 +485,6 @@ export function RoomPage() {
             isScreenSharing={meeting.isScreenSharing}
             isStartingScreenShare={meeting.isStartingScreenShare}
             isStoppingScreenShare={meeting.isStoppingScreenShare}
-            stageFocusActive={stageFocusActive}
             isLeaving={meeting.isLeaving}
             onToggleMic={() => {
               void meeting.toggleMicrophoneMuted();
@@ -463,12 +500,9 @@ export function RoomPage() {
               }
               void meeting.startScreenShare();
             }}
-            onToggleStageFocus={handleToggleStageFocus}
             sidePanelOpen={sidePanelOpen}
             onToggleSidePanel={handleToggleSidePanel}
-            onOpenPanel={handleOpenPanel}
             onOpenSettings={() => {
-              setStageFocusActive(false);
               setSettingsOpen(true);
             }}
             onLeave={() => {
@@ -547,10 +581,8 @@ export function RoomPage() {
         <MeetingViewPanel
           themeMode={themeMode}
           layoutMode={layoutMode}
-          stageFocusActive={stageFocusActive}
           onThemeChange={handleThemeChange}
           onLayoutChange={handleLayoutChange}
-          onToggleStageFocus={handleToggleStageFocus}
         />
         <AudioDevicePanel
           isMicMuted={meeting.isMicMuted}

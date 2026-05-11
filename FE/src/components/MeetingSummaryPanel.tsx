@@ -4,6 +4,8 @@ import type {
   MeetingSummaryResponse,
   MeetingSummaryType,
 } from "../types/api";
+import { useRevealMotion } from "../lib/motion";
+import { MotionButton } from "./MotionButton";
 
 interface MeetingSummaryPanelProps {
   summary: MeetingSummaryResponse | null;
@@ -62,9 +64,29 @@ export function MeetingSummaryPanel({
   const showFinalCheckAction = roomEnded && !isGenerating;
   const generatedLabel = formatGeneratedTime(visibleSummary);
   const summaryLanguage = formatSummaryLanguage(visibleSummary?.summary_language);
+  const summaryMotionRef = useRevealMotion<HTMLElement>({
+    selector: "[data-summary-motion]",
+    distance: 8,
+    duration: 300,
+    stagger: 34,
+    scaleFrom: 0.996,
+    dependencies: [
+      visibleType,
+      status,
+      hasCompletedContent,
+      isLoading,
+      isGenerating,
+      error,
+      visibleSummary?.generated_at,
+      visibleSummary?.created_at,
+    ],
+  });
 
   return (
-    <section className={embedded ? "meeting-summary-panel panel-section" : "panel meeting-summary-panel"}>
+    <section
+      className={embedded ? "meeting-summary-panel panel-section" : "panel meeting-summary-panel"}
+      ref={summaryMotionRef}
+    >
       <div className="panel-header summary-panel-header">
         <div>
           <h3>Summary</h3>
@@ -79,11 +101,11 @@ export function MeetingSummaryPanel({
         </span>
       </div>
 
-      <div className="summary-action-row">
+      <div className="summary-action-row" data-summary-motion>
         {roomEnded ? (
           <>
             {showFinalGenerateAction ? (
-              <button
+              <MotionButton
                 type="button"
                 className="button-primary summary-primary-action"
                 onClick={onPrepareFinal}
@@ -94,22 +116,22 @@ export function MeetingSummaryPanel({
                   : isFailed || errorSource === "generate"
                     ? "Retry final"
                     : "Prepare final"}
-              </button>
+              </MotionButton>
             ) : null}
             {showFinalCheckAction ? (
-              <button
+              <MotionButton
                 type="button"
                 className="button-secondary summary-secondary-action"
                 onClick={onCheckFinal}
                 disabled={isLoading || isGenerating}
               >
                 {isLoading ? "Checking..." : "Check latest"}
-              </button>
+              </MotionButton>
             ) : null}
           </>
         ) : (
           <>
-            <button
+            <MotionButton
               type="button"
               className="button-primary summary-primary-action"
               onClick={onRefreshInterim}
@@ -120,21 +142,21 @@ export function MeetingSummaryPanel({
                 : visibleSummary?.summary_type === "interim"
                   ? "Refresh summary"
                   : "Generate summary"}
-            </button>
-            <button
+            </MotionButton>
+            <MotionButton
               type="button"
               className="button-secondary summary-secondary-action"
               onClick={onCheckInterim}
               disabled={isLoading || isGenerating}
             >
               {isLoading ? "Checking..." : "Check latest"}
-            </button>
+            </MotionButton>
           </>
         )}
       </div>
 
       {error ? (
-        <div className="summary-alert summary-alert-error" role="status">
+        <div className="summary-alert summary-alert-error" role="status" data-summary-motion>
           {error}
         </div>
       ) : null}
@@ -191,7 +213,7 @@ export function MeetingSummaryPanel({
         ) : null}
 
         {hasCompletedContent ? (
-          <article className="summary-artifact">
+          <article className="summary-artifact" data-summary-motion>
             <div className="summary-artifact-meta">
               <span>{visibleType === "final" ? "Final summary" : "Current summary"}</span>
               <div className="summary-artifact-meta-tail">
@@ -232,7 +254,8 @@ export function MeetingSummaryPanel({
 
 function SummaryState({ title, text }: { title: string; text: string }) {
   return (
-    <div className="summary-state-card">
+    <div className="summary-state-card panel-empty-state" data-summary-motion>
+      <span className="panel-empty-kicker">Summary</span>
       <strong>{title}</strong>
       <p>{text}</p>
     </div>

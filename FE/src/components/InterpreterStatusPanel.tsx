@@ -1,5 +1,6 @@
 import type { InterpreterStatusEntry } from "../features/room/interpreter";
 import { formatLanguageFlow, getLanguageLabel } from "../lib/languages";
+import { useRevealMotion } from "../lib/motion";
 
 interface InterpreterStatusPanelProps {
   statuses: InterpreterStatusEntry[];
@@ -8,8 +9,16 @@ interface InterpreterStatusPanelProps {
 export function InterpreterStatusPanel({
   statuses,
 }: InterpreterStatusPanelProps) {
+  const statusMotionRef = useRevealMotion<HTMLElement>({
+    selector: "[data-status-motion]",
+    distance: 8,
+    duration: 300,
+    stagger: 30,
+    dependencies: [statuses.length],
+  });
+
   return (
-    <section className="panel interpreter-panel">
+    <section className="panel interpreter-panel" ref={statusMotionRef}>
       <div className="panel-header">
         <div>
           <h3>AI Relay Status</h3>
@@ -19,14 +28,14 @@ export function InterpreterStatusPanel({
 
       <div className="status-list">
         {statuses.length === 0 ? (
-          <div className="empty-state small">
+          <div className="empty-state small" data-status-motion>
             <strong>No BRSE relay activity yet</strong>
             <p>Status updates appear once AI relay begins listening or relaying speech.</p>
           </div>
         ) : null}
 
         {statuses.map((item) => (
-          <div className="status-item" key={item.key}>
+          <div className="status-item" key={item.key} data-status-motion>
             <div>
               <strong>{item.brseParticipantName}</strong>
               <p>

@@ -6,6 +6,7 @@ import {
   useState,
   type KeyboardEvent,
 } from "react";
+import { useDropdownMotion } from "../lib/motion";
 
 export interface CustomSelectOption<TValue extends string = string> {
   value: TValue;
@@ -38,6 +39,7 @@ export function CustomSelect<TValue extends string = string>({
   const listboxId = useId();
   const rootRef = useRef<HTMLDivElement | null>(null);
   const [open, setOpen] = useState(false);
+  const menuMotionRef = useDropdownMotion<HTMLDivElement>(open);
   const [activeIndex, setActiveIndex] = useState(-1);
 
   const selectedOption = useMemo(
@@ -210,6 +212,7 @@ export function CustomSelect<TValue extends string = string>({
       {open ? (
         <div
           id={listboxId}
+          ref={menuMotionRef}
           className="custom-select-menu"
           role="listbox"
           aria-label={ariaLabel}

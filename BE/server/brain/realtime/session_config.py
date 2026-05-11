@@ -1,16 +1,12 @@
 from __future__ import annotations
 
-from typing import Dict, Iterable, Optional
+from typing import Iterable, Optional
 
 from server.brain.prompts.language import LANG_NAMES
 from server.brain.prompts.technical_terms import (
     build_technical_translation_policy,
     build_technical_transcription_prompt,
 )
-from server.meeting_modes import DEFAULT_RELAY_LANGUAGE_MAP
-
-BRSE_RELAY_LANGUAGE_MAP: Dict[str, str] = dict(DEFAULT_RELAY_LANGUAGE_MAP)
-
 INTERPRETER_VAD_CONFIG = {
     "type": "server_vad",
     "threshold": 0.64,
@@ -24,6 +20,7 @@ INTERPRETER_TEMPERATURE = 0.4  # reduced from 0.6 — less drift/hallucination
 INTERPRETER_INPUT_TRANSCRIPTION_MODEL = "gpt-4o-transcribe"
 INTERPRETER_INPUT_TRANSCRIPTION_PROMPT = build_technical_transcription_prompt()
 INTERPRETER_FINAL_TRANSCRIPT_HOLD_MS = 80  # reduced from 240 — fast relay after ASR
+INTERPRETER_SOURCE_QUALITY_HOLD_MS = 260
 INTERPRETER_VOICE = "alloy"
 INTERPRETER_MAX_RESPONSE_OUTPUT_TOKENS = 300  # reduced from 4096 — cap relay length, prevent elaboration
 INTERPRETER_INPUT_QUEUE_MAXSIZE = 420
@@ -33,19 +30,16 @@ INTERPRETER_SEND_QUEUE_MAXSIZE = 420
 _JA_TONE = "Use natural spoken Japanese suitable for business meetings without adding honorific nuance that was not implied."
 _ROLE_POLICY = (
     "You are BRSE AI acting only as a live BRSE/interpreter relay inside a real meeting. "
-    "You listen to one human speaker and relay that speaker's utterance to the other language group. "
+    "You listen to one human speaker and relay that speaker's utterance to target-language listeners when translation is applicable. "
     "Your output is the speaker's message in the target language, not your own message. "
     "You are not a narrator, not a meeting minute bot, not an MC, and not a transcript reader. "
 )
 _PRAGMATIC_SPEAKING_POLICY = (
-    "A real interpreter does not need to speak for every captured sound. "
-    "When a speaker clearly finishes a meaningful turn, provide the relay normally and promptly. "
-    "Clear short turns such as confirmations, answers, refusals, or acknowledgements can be useful and should be relayed when the source transcript is valid. "
-    "Speak only when the relay will help the target-language listeners follow the meeting. "
-    "If the utterance is filler-only, an unfinished fragment, obvious room noise, or too low-value to interrupt the flow, output nothing. "
-    "If the timing is poor or the speaker has not finished a usable thought, wait for a completed validated transcript instead of guessing. "
-    "Translate less, but more correctly: a brief delay or silence is better than a confident relay from weak source text. "
-    "Do not default to silence for normal completed speech; default to a concise direct relay when the meaning is clear enough. "
+    "When the source transcript is complete and meaningful, relay it directly and promptly. "
+    "Short turns — confirmations, refusals, answers, acknowledgements — should be relayed when the source is valid. "
+    "If the source is filler-only, noise, or too fragmented to relay faithfully, output nothing. "
+    "Relay less but relay correctly. A concise relay is better than a padded one. "
+    "Do not stay silent for completed, meaningful speech. "
 )
 _OVERLAP_DISCIPLINE_POLICY = (
     "This runtime is assigned to exactly one speaker microphone track. "
@@ -123,24 +117,44 @@ _SILENT_LISTENER_POLICY = (
 )
 
 
+def _room_language_context(meeting_languages: Optional[Iterable[str]], src: str, tgt: str) -> str:
+    room_languages: list[str] = []
+    for lang in meeting_languages or []:
+        if isinstance(lang, str) and lang not in room_languages:
+            room_languages.append(lang)
+
+    if not room_languages:
+        return ""
+
+    language_names = ", ".join(LANG_NAMES.get(lang, lang) for lang in room_languages)
+    if len(room_languages) == 1:
+        return (
+            f"Room language configuration has one supported language: {language_names}. "
+            "The backend may run this as source-transcript or same-language assist mode; do not infer a cross-language target. "
+        )
+
+    context = (
+        f"Room supported languages are: {language_names}. "
+        "The backend chooses the current target language for this response; do not infer a generic 'other language'. "
+    )
+    if src == tgt:
+        context += (
+            "The current route has the same source and target language, so treat it as source-capture or same-language assist unless the backend explicitly requests relay output. "
+        )
+    return context
+
+
 def build_interpreter_instructions(
     src: str,
     tgt: str,
     meeting_languages: Optional[Iterable[str]] = None,
 ) -> str:
-    pair = [lang for lang in (meeting_languages or []) if isinstance(lang, str)]
-    pair_context = ""
-    if len(pair) == 2 and pair[0] != pair[1]:
-        pair_context = (
-            f"Room meeting language pair is fixed to {LANG_NAMES.get(pair[0], pair[0])} "
-            f"and {LANG_NAMES.get(pair[1], pair[1])}. "
-            "Use this fixed room pair as authoritative context; do not infer a different target language. "
-        )
+    room_context = _room_language_context(meeting_languages, src, tgt)
 
     if src == "auto" or tgt == "auto":
         return (
             _ROLE_POLICY
-            + pair_context
+            + room_context
             + _PRAGMATIC_SPEAKING_POLICY
             + _OVERLAP_DISCIPLINE_POLICY
             + _SOURCE_TRANSCRIPT_POLICY
@@ -157,7 +171,7 @@ def build_interpreter_instructions(
     tone = f" { _JA_TONE }" if tgt == "ja" else ""
     return (
         _ROLE_POLICY
-        + pair_context
+        + room_context
         + _PRAGMATIC_SPEAKING_POLICY
         + _OVERLAP_DISCIPLINE_POLICY
         + _SOURCE_TRANSCRIPT_POLICY
@@ -180,19 +194,12 @@ def build_interpreter_summary_instructions(
     tgt: str,
     meeting_languages: Optional[Iterable[str]] = None,
 ) -> str:
-    pair = [lang for lang in (meeting_languages or []) if isinstance(lang, str)]
-    pair_context = ""
-    if len(pair) == 2 and pair[0] != pair[1]:
-        pair_context = (
-            f"Room meeting language pair is fixed to {LANG_NAMES.get(pair[0], pair[0])} "
-            f"and {LANG_NAMES.get(pair[1], pair[1])}. "
-            "Use this fixed room pair as authoritative context; do not infer a different target language. "
-        )
+    room_context = _room_language_context(meeting_languages, src, tgt)
     tgt_name = LANG_NAMES.get(tgt, tgt)
     tone = f" { _JA_TONE }" if tgt == "ja" else ""
     return (
         _SUMMARY_ROLE_POLICY
-        + pair_context
+        + room_context
         + _SUMMARY_FALLBACK_POLICY
         + _BOUNDARY_POLICY
         + _TECHNICAL_TERM_POLICY

@@ -9,6 +9,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "animejs": "^3.2.2",
     "livekit-client": "^2.15.4",
     "lucide-react": "^1.14.0",
     "motion": "^12.38.0",

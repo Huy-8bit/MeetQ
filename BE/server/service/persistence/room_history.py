@@ -945,6 +945,17 @@ class MongoRoomHistoryRepository:
         room_id = self._value(room, "room_id")
         created_at = self._value(room, "created_at")
         expires_at = self._value(room, "expires_at")
+        room_languages = list(
+            self._value(
+                room,
+                "room_languages",
+                self._value(room, "meeting_languages", []),
+            )
+            or []
+        )
+        meeting_languages = list(
+            self._value(room, "meeting_languages", room_languages) or room_languages
+        )
         return {
             "room_id": room_id,
             "state": self._value(room, "state"),
@@ -958,7 +969,8 @@ class MongoRoomHistoryRepository:
             "expires_at_dt": self._parse_dt(expires_at),
             "ended_at": self._value(room, "ended_at"),
             "ended_at_dt": self._parse_dt(self._value(room, "ended_at")),
-            "meeting_languages": list(self._value(room, "meeting_languages", []) or []),
+            "room_languages": room_languages,
+            "meeting_languages": meeting_languages,
             "brse_enabled": bool(self._value(room, "brse_enabled", False)),
             "brse_mode": self._value(room, "brse_mode"),
             "brse_output_mode": self._value(room, "brse_output_mode"),
@@ -1138,7 +1150,8 @@ class MongoRoomHistoryRepository:
             "ended_at": room_doc.get("ended_at"),
             "expires_at": room_doc.get("expires_at"),
             "duration_seconds": duration_seconds,
-            "meeting_languages": room_doc.get("meeting_languages") or [],
+            "room_languages": room_doc.get("room_languages") or room_doc.get("meeting_languages") or [],
+            "meeting_languages": room_doc.get("meeting_languages") or room_doc.get("room_languages") or [],
             "brse_enabled": room_doc.get("brse_enabled"),
             "brse_mode": room_doc.get("brse_mode"),
             "brse_output_mode": room_doc.get("brse_output_mode"),

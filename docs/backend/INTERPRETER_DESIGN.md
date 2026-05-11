@@ -7,6 +7,13 @@
 > understanding windows, relay policy decisions, and delivery-mode semantics now
 > live in dedicated runtime components.
 >
+> Update note (2026-05-10): room language routing is list-based. The runtime
+> consumes canonical `room_languages` through the legacy `meeting_languages`
+> parameter path for compatibility. One-language rooms are valid and run as
+> source transcript / same-language assist with relay translation disabled.
+> Multi-language rooms choose a relay target from active listener language
+> context first, then from room language ordering as a deterministic fallback.
+>
 > Update note (2026-05-03): backend AI/model-facing code lives under `server.brain`; backend orchestration around room lifecycle, Redis control, and LiveKit media lives under `server.service`. Historical references below may describe the pre-refactor `server/interpreter` layout; active runtime modules are documented in `docs/backend/FILE_STRUCTURE.md`.
 >
 > Update note (2026-05-01): interpreter runtime is gated by room `brse_enabled`. When false, the daemon does not spawn a room runtime, does not join LiveKit as `BRSE AI`, and ignores stale interpreter output for that room. Live toggle uses `room.brse_updated`: OFF terminates the manager and disconnects BRSE runtime; ON spawns a fresh manager from the current room snapshot.
@@ -20,7 +27,7 @@ Nó chịu trách nhiệm:
 1. Join từng LiveKit room như một programmatic participant.
 2. Subscribe microphone audio track của human participants.
 3. Reuse core engine hiện có trong `BE/server/brain/realtime/client.py`.
-4. Publish translated audio trở lại LiveKit thành track riêng cho từng listener.
+4. Publish BRSE relay text/audio trở lại LiveKit/Redis when a cross-language route exists.
 5. Gửi transcript và interpreter status về Gateway qua Redis pub/sub.
 6. Degrade sang fallback Whisper + GPT nếu realtime path lỗi.
 
@@ -131,6 +138,15 @@ REDIS_CHANNEL_INTERPRETER_EVENTS=brseai:v1:interpreter:events
 ## Room-Level Topology
 
 Interpreter không kết nối trực tiếp tới browser. Mỗi room active có đúng một `RoomRuntime`.
+
+`RoomRuntime` nhận `room_languages` từ Gateway room snapshot. `ParticipantState.language`
+là ngôn ngữ của từng user; runtime không dùng nó như room-level config.
+Route resolution hiện tại là conservative:
+
+1. Nếu speaker language không thuộc `room_languages`, room runtime tạm dừng route cho speaker đó.
+2. Nếu room chỉ có một language, runtime capture source transcript và không tạo relay translation/audio vô nghĩa.
+3. Nếu room có nhiều languages, target được chọn theo ngôn ngữ listener active khác speaker trước; nếu chưa có listener, backend dùng thứ tự `room_languages` làm fallback để giữ behavior deterministic cho room 2 ngôn ngữ cũ.
+4. Full personalized many-to-many voice fanout cho mọi participant/language chưa là mục tiêu của runtime hiện tại.
 
 ### Interpreter Participant
 
@@ -926,6 +942,8 @@ If reconnect fails:
 
 1. `meeting_mode` của `RealtimeClient` trong platform luôn là `locked`, vì participant đã chọn language trước khi join.
 2. `src_lang` của session lấy từ participant language hiện tại, không dùng heuristic detect trong platform path.
-3. Room-level `meeting_languages` (exact pair) là context chính cho routing. `tgt_lang` được tính theo "ngôn ngữ còn lại" trong pair.
-4. Nếu speaker language không thuộc room pair thì không tạo relay route và publish lỗi runtime rõ ràng.
-5. `OutputRouter` phải tolerate multiple listeners cùng target language mà không duplicate OpenAI sessions.
+3. Room-level `room_languages` là context chính cho routing; `meeting_languages` chỉ là alias legacy truyền vào realtime client.
+4. `tgt_lang` được resolve từ active listener language context trước, rồi fallback theo thứ tự `room_languages` khi cần deterministic behavior.
+5. Nếu room chỉ có một language, runtime capture source transcript và không ép relay translation/audio.
+6. Nếu speaker language không thuộc `room_languages` thì không tạo relay route và publish lỗi runtime rõ ràng.
+7. `OutputRouter` phải tolerate multiple listeners cùng target language mà không duplicate OpenAI sessions.

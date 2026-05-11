@@ -50,7 +50,7 @@ async def create_room(
     try:
         payload = req or CreateRoomRequest()
         return await service.create_room(
-            payload.meeting_languages,
+            payload.requested_room_languages(),
             payload.brse_enabled,
             payload.brse_mode,
             payload.brse_output_mode,

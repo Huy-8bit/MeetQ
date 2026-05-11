@@ -1,4 +1,6 @@
 import type { ReactNode } from "react";
+import { useDrawerRevealMotion } from "../lib/motion";
+import { MotionButton } from "./MotionButton";
 
 interface SettingsDrawerProps {
   open: boolean;
@@ -15,12 +17,14 @@ export function SettingsDrawer({
   eyebrow = "Settings",
   title = "Devices",
 }: SettingsDrawerProps) {
+  const drawerMotionRef = useDrawerRevealMotion<HTMLDivElement>(open);
+
   if (!open) {
     return null;
   }
 
   return (
-    <div className="settings-drawer-layer" role="presentation">
+    <div className="settings-drawer-layer" role="presentation" ref={drawerMotionRef}>
       <button
         className="settings-drawer-backdrop"
         type="button"
@@ -38,14 +42,14 @@ export function SettingsDrawer({
             <span>{eyebrow}</span>
             <h2 id="settings-drawer-title">{title}</h2>
           </div>
-          <button
+          <MotionButton
             className="settings-drawer-close"
             type="button"
             onClick={onClose}
             aria-label="Close settings"
           >
             Close
-          </button>
+          </MotionButton>
         </header>
         <div className="settings-drawer-content">{children}</div>
       </aside>

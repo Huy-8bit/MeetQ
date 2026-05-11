@@ -80,7 +80,7 @@ class ConversationPolicyEngine:
             event_label = "source_final" if final else "source_rejected_partial"
             logger.info(
                 "BRSE perception %s room=%s speaker=%s target=%s accepted=%s "
-                "reason=%s chars=%d tokens=%s technical=%s",
+                "reason=%s chars=%d tokens=%s technical=%s detected_terms=%s",
                 event_label,
                 self.room_id,
                 speaker_id,
@@ -90,6 +90,7 @@ class ConversationPolicyEngine:
                 len(normalized_text),
                 signal.get("meaningful_tokens"),
                 signal.get("technical_terms"),
+                signal.get("detected_terms"),
             )
         return SourceAssessment(
             accepted=accepted,

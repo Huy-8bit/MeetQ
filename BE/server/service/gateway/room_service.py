@@ -55,7 +55,7 @@ from server.models import (
     TranscriptEvent,
 )
 from server.service.gateway.chat_translator import (
-    resolve_chat_target_language,
+    resolve_chat_target_languages,
     translate_chat_message,
 )
 from server.service.gateway.meeting_summary_service import (
@@ -408,41 +408,65 @@ class RoomService:
                 room_id,
             )
 
-    def _normalize_meeting_languages(self, meeting_languages: List[str]) -> List[MeetingLanguage]:
-        if not meeting_languages:
+    def _normalize_room_languages(self, room_languages: Optional[List[str]]) -> List[MeetingLanguage]:
+        if room_languages is None:
             return list(DEFAULT_ROOM_MEETING_LANGUAGES)
 
-        if len(meeting_languages) != 2:
+        if not room_languages:
             raise InvalidMeetingLanguagesError(
-                "meeting_languages must contain exactly 2 languages",
-                details={"field": "meeting_languages", "expected": 2},
-            )
-
-        if meeting_languages[0] == meeting_languages[1]:
-            raise InvalidMeetingLanguagesError(
-                "meeting_languages must contain 2 distinct languages",
-                details={"field": "meeting_languages", "unique": True},
+                "room_languages must contain at least 1 language",
+                details={"field": "room_languages", "min_items": 1},
             )
 
         supported = set(SUPPORTED_MEETING_LANGUAGES)
-        invalid = [lang for lang in meeting_languages if lang not in supported]
+        invalid = [lang for lang in room_languages if lang not in supported]
         if invalid:
             raise InvalidMeetingLanguagesError(
-                "meeting_languages contains unsupported language",
+                "room_languages contains unsupported language",
                 details={
-                    "field": "meeting_languages",
+                    "field": "room_languages",
                     "unsupported": invalid,
                     "supported": list(SUPPORTED_MEETING_LANGUAGES),
                 },
             )
 
-        return [meeting_languages[0], meeting_languages[1]]
+        normalized: List[MeetingLanguage] = []
+        duplicates: List[str] = []
+        for language in room_languages:
+            if language in normalized:
+                duplicates.append(language)
+                continue
+            normalized.append(language)
+
+        if duplicates:
+            raise InvalidMeetingLanguagesError(
+                "room_languages must contain distinct languages",
+                details={"field": "room_languages", "duplicates": duplicates},
+            )
+
+        if not normalized:
+            raise InvalidMeetingLanguagesError(
+                "room_languages must contain at least 1 language",
+                details={"field": "room_languages", "min_items": 1},
+            )
+
+        return normalized
+
+    def _normalize_meeting_languages(self, meeting_languages: Optional[List[str]]) -> List[MeetingLanguage]:
+        return self._normalize_room_languages(meeting_languages)
+
+    def _room_languages_from_snapshot(self, snapshot: RoomSnapshotResponse) -> List[MeetingLanguage]:
+        return list(
+            getattr(snapshot.room, "room_languages", None)
+            or getattr(snapshot.room, "meeting_languages", None)
+            or DEFAULT_ROOM_MEETING_LANGUAGES
+        )
 
     def _build_brse_virtual_participants(
         self,
         room_id: str,
         timestamp: str,
-        meeting_languages: List[MeetingLanguage],
+        room_languages: List[MeetingLanguage],
         brse_mode: str,
         brse_output_mode: str,
     ) -> List[Dict[str, Any]]:
@@ -450,7 +474,7 @@ class RoomService:
             build_brse_virtual_participant(
                 room_id,
                 timestamp,
-                meeting_languages,
+                room_languages,
                 brse_mode,
                 brse_output_mode,
             )
@@ -458,7 +482,7 @@ class RoomService:
 
     async def create_room(
         self,
-        meeting_languages: List[str],
+        room_languages: List[str],
         brse_enabled: bool = DEFAULT_BRSE_ENABLED,
         brse_mode: str = DEFAULT_BRSE_MODE,
         brse_output_mode: str = DEFAULT_BRSE_OUTPUT_MODE,
@@ -466,9 +490,15 @@ class RoomService:
         room_id = self._generate_id("rm")
         now = self._now_str()
         exp = self._exp_str()
-        normalized_meeting_languages = self._normalize_meeting_languages(meeting_languages)
+        normalized_room_languages = self._normalize_room_languages(room_languages)
         normalized_brse_mode = normalize_brse_mode(brse_mode)
         normalized_brse_output_mode = normalize_brse_output_mode(brse_output_mode)
+        logger.info(
+            "room language config resolved: room_id=%s room_languages=%s legacy_meeting_languages=%s",
+            room_id,
+            normalized_room_languages,
+            normalized_room_languages,
+        )
 
         room = RoomState(
             room_id=room_id,
@@ -480,11 +510,12 @@ class RoomService:
             brse_output_mode=normalized_brse_output_mode,
             participant_limit=None,  # No backend participant cap
             supported_languages=list(SUPPORTED_MEETING_LANGUAGES),
-            meeting_languages=normalized_meeting_languages,
+            room_languages=normalized_room_languages,
+            meeting_languages=normalized_room_languages,
             meeting_mode=meeting_mode_for_brse_mode(normalized_brse_mode),
             interpreter_mode=INTERPRETER_MODE_BRSE_PARTICIPANT,
             audio_routing=build_brse_audio_routing(
-                normalized_meeting_languages,
+                normalized_room_languages,
                 normalized_brse_mode,
                 normalized_brse_output_mode,
             ),
@@ -492,7 +523,7 @@ class RoomService:
                 self._build_brse_virtual_participants(
                     room_id,
                     now,
-                    normalized_meeting_languages,
+                    normalized_room_languages,
                     normalized_brse_mode,
                     normalized_brse_output_mode,
                 )
@@ -556,7 +587,7 @@ class RoomService:
             return self._room_response_from_state(fresh_snapshot.room)
 
         now = self._now_str()
-        meeting_languages = list(snapshot.room.meeting_languages)
+        room_languages = self._room_languages_from_snapshot(snapshot)
         brse_mode = normalize_brse_mode(getattr(snapshot.room, "brse_mode", DEFAULT_BRSE_MODE))
         brse_output_mode = normalize_brse_output_mode(
             getattr(snapshot.room, "brse_output_mode", DEFAULT_BRSE_OUTPUT_MODE)
@@ -567,12 +598,14 @@ class RoomService:
             "brse_output_mode": brse_output_mode,
             "meeting_mode": meeting_mode_for_brse_mode(brse_mode),
             "interpreter_mode": INTERPRETER_MODE_BRSE_PARTICIPANT,
-            "audio_routing": build_brse_audio_routing(meeting_languages, brse_mode, brse_output_mode),
+            "room_languages": room_languages,
+            "meeting_languages": room_languages,
+            "audio_routing": build_brse_audio_routing(room_languages, brse_mode, brse_output_mode),
             "virtual_participants": (
                 self._build_brse_virtual_participants(
                     room_id,
                     now,
-                    meeting_languages,
+                    room_languages,
                     brse_mode,
                     brse_output_mode,
                 )
@@ -824,7 +857,16 @@ class RoomService:
                 "ended_at": None,
                 "expires_at": room.expires_at,
                 "duration_seconds": duration_seconds,
-                "meeting_languages": list(room.meeting_languages),
+                "room_languages": list(
+                    getattr(room, "room_languages", None)
+                    or getattr(room, "meeting_languages", None)
+                    or DEFAULT_ROOM_MEETING_LANGUAGES
+                ),
+                "meeting_languages": list(
+                    getattr(room, "meeting_languages", None)
+                    or getattr(room, "room_languages", None)
+                    or DEFAULT_ROOM_MEETING_LANGUAGES
+                ),
                 "brse_enabled": room.brse_enabled,
                 "brse_mode": room.brse_mode,
                 "brse_output_mode": room.brse_output_mode,
@@ -1004,11 +1046,15 @@ class RoomService:
             )
             raise RoomExpiredError()
 
-        meeting_pair = list(snapshot.room.meeting_languages)
-        if language == "auto" or language not in meeting_pair:
+        room_languages = self._room_languages_from_snapshot(snapshot)
+        if language == "auto" or language not in room_languages:
             raise InvalidLanguageError(
-                f"language must be one of room meeting_languages: {', '.join(meeting_pair)}",
-                details={"field": "language", "meeting_languages": meeting_pair},
+                f"language must be one of room_languages: {', '.join(room_languages)}",
+                details={
+                    "field": "language",
+                    "room_languages": room_languages,
+                    "meeting_languages": room_languages,
+                },
             )
 
         now = self._now_str()
@@ -1166,45 +1212,46 @@ class RoomService:
 
         now = self._now_str()
         src_lang = participant.language
-        meeting_languages = list(snapshot.room.meeting_languages)
+        room_languages = self._room_languages_from_snapshot(snapshot)
         translations: List[Any] = []
 
         if translation_mode == "translate":
-            tgt_lang = resolve_chat_target_language(src_lang, meeting_languages)
-            if tgt_lang:
+            target_languages = resolve_chat_target_languages(src_lang, room_languages)
+            if target_languages:
                 logger.info(
-                    "chat translation: room=%s src=%s tgt=%s mode=translate",
+                    "chat translation targets resolved: room=%s src=%s targets=%s mode=translate",
                     room_id,
                     src_lang,
-                    tgt_lang,
+                    target_languages,
                 )
-                translated_text = await translate_chat_message(
-                    text=normalized_text,
-                    src_lang=src_lang,
-                    tgt_lang=tgt_lang,
-                    api_key=self.settings.openai_api_key,
-                )
-                if translated_text is not None:
-                    translations = [ChatTranslation(language=tgt_lang, text=translated_text)]
-                    logger.info(
-                        "chat translation success: room=%s src=%s tgt=%s",
-                        room_id,
-                        src_lang,
-                        tgt_lang,
+                for tgt_lang in target_languages:
+                    translated_text = await translate_chat_message(
+                        text=normalized_text,
+                        src_lang=src_lang,
+                        tgt_lang=tgt_lang,
+                        api_key=self.settings.openai_api_key,
                     )
-                else:
-                    logger.warning(
-                        "chat translation failed (graceful degradation): room=%s src=%s tgt=%s",
-                        room_id,
-                        src_lang,
-                        tgt_lang,
-                    )
+                    if translated_text is not None:
+                        translations.append(ChatTranslation(language=tgt_lang, text=translated_text))
+                        logger.info(
+                            "chat translation success: room=%s src=%s tgt=%s",
+                            room_id,
+                            src_lang,
+                            tgt_lang,
+                        )
+                    else:
+                        logger.warning(
+                            "chat translation failed (graceful degradation): room=%s src=%s tgt=%s",
+                            room_id,
+                            src_lang,
+                            tgt_lang,
+                        )
             else:
-                logger.warning(
-                    "chat translation: could not resolve target language: room=%s src=%s meeting_languages=%s",
+                logger.info(
+                    "chat translation skipped: room=%s src=%s room_languages=%s reason=no_cross_language_target",
                     room_id,
                     src_lang,
-                    meeting_languages,
+                    room_languages,
                 )
 
         message = ChatMessage(
@@ -1470,11 +1517,15 @@ class RoomService:
         if not snapshot:
             raise RoomNotFoundError()
 
-        meeting_pair = list(snapshot.room.meeting_languages)
-        if language == "auto" or language not in meeting_pair:
+        room_languages = self._room_languages_from_snapshot(snapshot)
+        if language == "auto" or language not in room_languages:
             raise InvalidLanguageError(
-                f"language must be one of room meeting_languages: {', '.join(meeting_pair)}",
-                details={"field": "language", "meeting_languages": meeting_pair},
+                f"language must be one of room_languages: {', '.join(room_languages)}",
+                details={
+                    "field": "language",
+                    "room_languages": room_languages,
+                    "meeting_languages": room_languages,
+                },
             )
 
         p_json = await self.store.client.hget(self.store._parts_key(room_id), participant_id)
@@ -1494,6 +1545,11 @@ class RoomService:
         else:
             payload = dict(room)
 
+        room_languages = list(
+            payload.get("room_languages")
+            or payload.get("meeting_languages")
+            or DEFAULT_ROOM_MEETING_LANGUAGES
+        )
         return CreateRoomResponseRoom(
             room_id=payload["room_id"],
             state=payload["state"],
@@ -1504,7 +1560,8 @@ class RoomService:
             brse_output_mode=payload.get("brse_output_mode", DEFAULT_BRSE_OUTPUT_MODE),
             participant_limit=payload.get("participant_limit"),  # None = no cap
             supported_languages=payload["supported_languages"],
-            meeting_languages=payload.get("meeting_languages", list(DEFAULT_ROOM_MEETING_LANGUAGES)),
+            room_languages=room_languages,
+            meeting_languages=payload.get("meeting_languages") or room_languages,
             meeting_mode=payload.get(
                 "meeting_mode",
                 meeting_mode_for_brse_mode(payload.get("brse_mode", DEFAULT_BRSE_MODE)),

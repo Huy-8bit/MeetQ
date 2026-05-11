@@ -89,7 +89,7 @@ def build_brse_virtual_participant(
     brse_mode: Optional[str] = DEFAULT_BRSE_MODE,
     brse_output_mode: Optional[str] = DEFAULT_BRSE_OUTPUT_MODE,
 ) -> Dict[str, Any]:
-    pair = list(meeting_languages or [])[:2]
+    room_languages = normalize_room_languages_for_runtime(meeting_languages)
     normalized_mode = normalize_brse_mode(brse_mode)
     normalized_output_mode = normalize_brse_output_mode(brse_output_mode)
     relay_text_enabled = brse_relay_text_enabled(True, normalized_mode)
@@ -108,7 +108,8 @@ def build_brse_virtual_participant(
             "brse_mode": normalized_mode,
             "brse_output_mode": normalized_output_mode,
             "interpreter_mode": INTERPRETER_MODE_BRSE_PARTICIPANT,
-            "meeting_languages": pair,
+            "room_languages": room_languages,
+            "meeting_languages": room_languages,
             "publishes_audio": audio_enabled,
             "publishes_text": relay_text_enabled,
             "publishes_video": False,
@@ -119,14 +120,67 @@ def build_brse_virtual_participant(
     }
 
 
+def normalize_room_languages_for_runtime(meeting_languages: Optional[Iterable[str]]) -> list[str]:
+    normalized: list[str] = []
+    supported = set(SUPPORTED_MEETING_LANGUAGES)
+    for lang in meeting_languages or []:
+        if not isinstance(lang, str) or lang not in supported or lang in normalized:
+            continue
+        normalized.append(lang)
+    return normalized or list(DEFAULT_ROOM_MEETING_LANGUAGES)
+
+
+def build_relay_language_targets(meeting_languages: Iterable[str]) -> Dict[str, list[str]]:
+    room_languages = normalize_room_languages_for_runtime(meeting_languages)
+    return {
+        source_language: [
+            target_language
+            for target_language in room_languages
+            if target_language != source_language
+        ]
+        for source_language in room_languages
+    }
+
+
 def build_relay_language_map(meeting_languages: Iterable[str]) -> Dict[str, str]:
-    pair = [lang for lang in meeting_languages if isinstance(lang, str)]
+    pair = normalize_room_languages_for_runtime(meeting_languages)
     if len(pair) != 2 or pair[0] == pair[1]:
-        return dict(DEFAULT_RELAY_LANGUAGE_MAP)
+        return {}
     return {
         pair[0]: pair[1],
         pair[1]: pair[0],
     }
+
+
+def resolve_relay_target_language(
+    source_language: Optional[str],
+    meeting_languages: Iterable[str],
+    *,
+    audience_languages: Optional[Iterable[str]] = None,
+) -> Optional[str]:
+    if source_language is None:
+        return None
+    room_languages = normalize_room_languages_for_runtime(meeting_languages)
+    if source_language not in room_languages:
+        return None
+
+    cross_language_targets = [
+        language for language in room_languages if language != source_language
+    ]
+    if not cross_language_targets:
+        return None
+
+    if audience_languages is not None:
+        audience_language_set = {
+            language
+            for language in audience_languages
+            if isinstance(language, str) and language != source_language
+        }
+        for language in cross_language_targets:
+            if language in audience_language_set:
+                return language
+
+    return cross_language_targets[0]
 
 
 def build_brse_audio_routing(
@@ -134,7 +188,9 @@ def build_brse_audio_routing(
     brse_mode: Optional[str] = DEFAULT_BRSE_MODE,
     brse_output_mode: Optional[str] = DEFAULT_BRSE_OUTPUT_MODE,
 ) -> Dict[str, Any]:
-    relay_map = build_relay_language_map(meeting_languages)
+    room_languages = normalize_room_languages_for_runtime(meeting_languages)
+    relay_map = build_relay_language_map(room_languages)
+    relay_targets = build_relay_language_targets(room_languages)
     normalized_mode = normalize_brse_mode(brse_mode)
     normalized_output_mode = normalize_brse_output_mode(brse_output_mode)
     relay_text_enabled = brse_relay_text_enabled(True, normalized_mode)
@@ -157,8 +213,9 @@ def build_brse_audio_routing(
         "same_language_policy": "human_passthrough",
         "ai_relay_audio": "virtual_participant_track" if audio_enabled else "disabled",
         "interpreter_mode": INTERPRETER_MODE_BRSE_PARTICIPANT,
-        "bridge_strategy": "speaker_language_map",
+        "bridge_strategy": "participant_language_preference",
         "relay_language_map": relay_map,
+        "relay_language_targets": relay_targets,
         "virtual_participant_id": BRSE_PARTICIPANT_ID,
         "brse_mode": normalized_mode,
         "brse_output_mode": normalized_output_mode,

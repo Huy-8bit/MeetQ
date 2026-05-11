@@ -3,6 +3,7 @@ import {
   getBrseModeLabel,
   type BrseRoomMode,
 } from "../lib/brseModes";
+import { MotionButton } from "./MotionButton";
 
 interface BrseToggleControlProps {
   enabled: boolean;
@@ -23,7 +24,7 @@ export function BrseToggleControl({
   const description = getBrseModeDescription(mode);
 
   return (
-    <button
+    <MotionButton
       className={[
         "brse-toggle-control",
         enabled ? "is-on" : "is-off",
@@ -42,6 +43,6 @@ export function BrseToggleControl({
       <span className="brse-toggle-track" aria-hidden="true">
         <span className="brse-toggle-thumb" />
       </span>
-    </button>
+    </MotionButton>
   );
 }

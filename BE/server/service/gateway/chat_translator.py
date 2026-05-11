@@ -4,9 +4,11 @@ Chat message translation helper.
 Translates a single text string from src_lang to tgt_lang using the OpenAI
 chat completions API (not realtime — deterministic, text-only, per-message).
 
-Strategy: given a room language pair (e.g. ["vi", "en"]) and the sender's
-language, derive the single target language as the other language in the pair.
-For a vi-en room with a vi sender -> translate to en, and vice versa.
+Strategy: given the room language configuration and the sender's language,
+derive zero or more cross-language targets. A one-language room returns no
+translation targets; a two-language room preserves the legacy single "other
+language" behavior; a multi-language room translates to each configured
+non-source language.
 
 This is intentionally separate from the audio relay path (realtime API).
 """
@@ -15,7 +17,7 @@ from __future__ import annotations
 import logging
 from typing import List, Optional
 
-from server.brain.prompts.language import LANG_NAMES, build_instructions
+from server.brain.prompts.language import LANG_NAMES
 from server.brain.prompts.technical_terms import build_technical_translation_policy
 
 logger = logging.getLogger(__name__)
@@ -29,16 +31,32 @@ def resolve_chat_target_language(
     meeting_languages: List[str],
 ) -> Optional[str]:
     """
-    Return the target language for a chat translation given the room pair.
+    Return the first target language for legacy callers.
 
-    For a 2-language room, the target is the language in meeting_languages that
-    is NOT the sender's language.  Returns None if sender language is not in the
-    pair or the pair has fewer than 2 elements.
+    Prefer resolve_chat_target_languages for new room-language-aware paths.
     """
-    if len(meeting_languages) < 2:
-        return None
-    others = [lang for lang in meeting_languages if lang != sender_language]
-    return others[0] if others else None
+    targets = resolve_chat_target_languages(sender_language, meeting_languages)
+    return targets[0] if targets else None
+
+
+def resolve_chat_target_languages(
+    sender_language: str,
+    room_languages: List[str],
+) -> List[str]:
+    """
+    Return cross-language chat translation targets for the configured room.
+
+    Participant.language is the source language for the message. room_languages
+    is the room-level supported language list. Same-language rooms return an
+    empty target list because no translation is needed.
+    """
+    normalized: List[str] = []
+    for language in room_languages:
+        if language not in normalized:
+            normalized.append(language)
+    if sender_language not in normalized:
+        return []
+    return [language for language in normalized if language != sender_language]
 
 
 async def translate_chat_message(

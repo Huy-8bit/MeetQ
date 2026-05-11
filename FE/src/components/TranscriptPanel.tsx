@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import type { TranscriptEntry } from "../features/room/transcripts";
 import { formatLanguageFlow, getLanguageLabel } from "../lib/languages";
+import { animateLatestItem } from "../lib/motion";
 
 /**
  * Max items rendered in the transcript list at the render layer.
@@ -62,6 +63,11 @@ export function TranscriptPanel({
     }
   }, [visibleEntries]);
 
+  useEffect(() => {
+    const animation = animateLatestItem(listRef.current);
+    return () => animation?.pause?.();
+  }, [latestTranscriptId]);
+
   return (
     <section className={embedded ? "transcript-panel panel-section" : "panel transcript-panel"}>
       <div className="panel-header">
@@ -94,6 +100,7 @@ export function TranscriptPanel({
           <article
             className={`transcript-item ${entry.isFinal ? "" : "is-partial"} ${latestTranscriptId === entry.transcriptId ? "is-latest" : ""}`}
             key={entry.transcriptId}
+            data-motion-latest={latestTranscriptId === entry.transcriptId ? "true" : undefined}
           >
             <header className="transcript-item-header">
               <div>
