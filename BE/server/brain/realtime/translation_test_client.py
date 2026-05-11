@@ -28,6 +28,7 @@ from server.brain.realtime.session_config import (
     build_interpreter_instructions,
     INTERPRETER_TEMPERATURE,
     INTERPRETER_VAD_CONFIG,
+    prepare_input_audio_transcription_prompt,
 )
 
 logger = logging.getLogger(__name__)
@@ -112,7 +113,10 @@ def _build_test_session_update(src_lang: str, tgt_lang: str) -> dict:
             "input_audio_format": "pcm16",
             "input_audio_transcription": {
                 "model": INTERPRETER_INPUT_TRANSCRIPTION_MODEL,
-                "prompt": INTERPRETER_INPUT_TRANSCRIPTION_PROMPT,
+                "prompt": prepare_input_audio_transcription_prompt(
+                    INTERPRETER_INPUT_TRANSCRIPTION_PROMPT,
+                    context="translation_test_session_update",
+                ),
                 "language": src_lang,
             },
             "turn_detection": dict(_TEST_VAD_CONFIG),

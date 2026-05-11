@@ -1,5 +1,61 @@
 # Backend Implementation State
 
+## Turn Update: 2026-05-11 OpenAI Realtime ASR Prompt Hotfix
+
+- Time: 2026-05-11T(current session)
+- Mode: CODE-ONLY
+- Status: implemented
+- Testing deferred: yes, per instruction
+
+### Production Failure Root Cause
+
+- OpenAI Realtime WebSocket connected successfully, but `session.update` was
+  rejected before runtime became ready.
+- Provider error: `invalid_request_error` / `string_above_max_length` for
+  `session.input_audio_transcription.prompt`.
+- OpenAI limit for that field is 1024 chars; the production prompt reached
+  1212 chars.
+- Because `input_audio_transcription` config was rejected, ASR/source transcript
+  never applied and the downstream translation/relay path had no validated
+  source text to process.
+
+### Hotfix Strategy
+
+- Refactor `build_technical_transcription_prompt()` back to a short ASR hint:
+  mixed Vietnamese + English speech, technical/proper noun preservation,
+  natural casing, and shorthand preservation such as `k8s` / `CI/CD`.
+- New default ASR prompt is 526 chars, well below the OpenAI 1024-char limit.
+- Keep long interpreter behavior/policy in the interpreter instruction layer,
+  not in `session.input_audio_transcription.prompt`.
+- Added `prepare_input_audio_transcription_prompt()` in session config:
+  whitespace compaction, prompt length logging, warning near the provider limit,
+  and clamp-with-warning if any future override exceeds 1024 chars.
+- Interpreter startup and routing-update logs now include effective
+  transcription prompt length, raw prompt length where applicable, and provider
+  max length, so config rejection root causes are visible in production logs.
+
+### Files Modified
+
+- `BE/server/brain/prompts/technical_terms.py`
+- `BE/server/brain/realtime/session_config.py`
+- `BE/server/brain/realtime/interpreter_client.py`
+- `BE/server/brain/realtime/client.py`
+- `BE/server/brain/realtime/translation_test_client.py`
+- `docs/backend/IMPLEMENTATION_STATE.md`
+
+### Verification
+
+- Full test suite not run, per CODE-ONLY instruction.
+- New tests not added.
+- Existing tests not modified.
+- Lightweight prompt-length smoke check: default and effective
+  `input_audio_transcription.prompt` are 526 chars, max is 1024.
+- Guard smoke check: an intentionally long 2040-char prompt clamps to 1019
+  chars and logs `transcription_prompt_clamped`.
+- Lightweight import/compile checks passed for touched backend runtime files.
+
+---
+
 ## Turn Update: 2026-05-10 Room Languages List Model — Pair-Only Refactor
 
 - Time: 2026-05-10T(current session)

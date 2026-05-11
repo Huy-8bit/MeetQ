@@ -166,6 +166,7 @@ export function MeetingSummaryPanel({
           <SummaryState
             title="Checking summary"
             text="Looking for the latest saved meeting summary."
+            isLoading
           />
         ) : null}
 
@@ -177,6 +178,7 @@ export function MeetingSummaryPanel({
                 ? "The final summary can take a moment after the meeting closes."
                 : "The live checkpoint is being generated from recent room activity."
             }
+            isLoading
           />
         ) : null}
 
@@ -195,6 +197,7 @@ export function MeetingSummaryPanel({
           <SummaryState
             title={roomEnded ? "Final summary is being prepared" : "Summary is being prepared"}
             text="This view will update when the backend finishes generating the summary."
+            isLoading
           />
         ) : null}
 
@@ -252,7 +255,36 @@ export function MeetingSummaryPanel({
   );
 }
 
-function SummaryState({ title, text }: { title: string; text: string }) {
+function SummaryState({
+  title,
+  text,
+  isLoading = false,
+}: {
+  title: string;
+  text: string;
+  isLoading?: boolean;
+}) {
+  if (isLoading) {
+    return (
+      <div className="summary-state-card" data-summary-motion>
+        <div className="summary-state-loading">
+          <span className="loading-spinner" aria-hidden="true" />
+          <div className="summary-state-loading-text">
+            <strong>{title}</strong>
+            <p>{text}</p>
+          </div>
+        </div>
+        <div className="summary-loading-rows summary-loading-rows-spaced">
+          <div className="skeleton-line" />
+          <div className="skeleton-line" />
+          <div className="skeleton-line" />
+          <div className="skeleton-line" />
+          <div className="skeleton-line" />
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="summary-state-card panel-empty-state" data-summary-motion>
       <span className="panel-empty-kicker">Summary</span>

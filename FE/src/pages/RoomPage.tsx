@@ -333,7 +333,8 @@ export function RoomPage() {
   if (loadingSnapshot && !roomSnapshot && !session) {
     return (
       <main className="room-boot">
-        <div className="empty-state">
+        <div className="empty-state room-boot-loading">
+          <span className="loading-spinner loading-spinner-lg" aria-hidden="true" />
           <strong>Loading room</strong>
           <p>Fetching room snapshot from the gateway.</p>
         </div>

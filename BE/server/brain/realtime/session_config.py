@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from typing import Iterable, Optional
 
 from server.brain.prompts.language import LANG_NAMES
@@ -7,6 +8,81 @@ from server.brain.prompts.technical_terms import (
     build_technical_translation_policy,
     build_technical_transcription_prompt,
 )
+
+logger = logging.getLogger(__name__)
+
+OPENAI_INPUT_AUDIO_TRANSCRIPTION_PROMPT_MAX_CHARS = 1024
+INPUT_AUDIO_TRANSCRIPTION_PROMPT_WARN_CHARS = 900
+
+
+def _compact_prompt_whitespace(prompt: str) -> str:
+    return " ".join(str(prompt or "").split())
+
+
+def _clamp_transcription_prompt(prompt: str, max_chars: int) -> str:
+    if len(prompt) <= max_chars:
+        return prompt
+
+    suffix = " Preserve technical/proper nouns and shorthand; do not invent terms."
+    budget = max_chars - len(suffix)
+    if budget <= 0:
+        return prompt[:max_chars]
+
+    candidate = prompt[:budget].rstrip()
+    boundary = max(candidate.rfind(". "), candidate.rfind("; "), candidate.rfind(", "))
+    if boundary >= max(160, budget // 2):
+        candidate = candidate[: boundary + 1].rstrip()
+
+    return (candidate + suffix)[:max_chars]
+
+
+def prepare_input_audio_transcription_prompt(
+    prompt: str,
+    *,
+    context: str = "interpreter_session_update",
+) -> str:
+    raw = str(prompt or "")
+    compact = _compact_prompt_whitespace(raw)
+    if not compact:
+        logger.warning(
+            "transcription_prompt_empty context=%s max_chars=%s",
+            context,
+            OPENAI_INPUT_AUDIO_TRANSCRIPTION_PROMPT_MAX_CHARS,
+        )
+        return compact
+
+    if len(compact) > OPENAI_INPUT_AUDIO_TRANSCRIPTION_PROMPT_MAX_CHARS:
+        clamped = _clamp_transcription_prompt(
+            compact,
+            OPENAI_INPUT_AUDIO_TRANSCRIPTION_PROMPT_MAX_CHARS,
+        )
+        logger.warning(
+            "transcription_prompt_clamped context=%s raw_chars=%s compact_chars=%s "
+            "clamped_chars=%s max_chars=%s reason=provider_limit",
+            context,
+            len(raw),
+            len(compact),
+            len(clamped),
+            OPENAI_INPUT_AUDIO_TRANSCRIPTION_PROMPT_MAX_CHARS,
+        )
+        return clamped
+
+    log = (
+        logger.warning
+        if len(compact) >= INPUT_AUDIO_TRANSCRIPTION_PROMPT_WARN_CHARS
+        else logger.info
+    )
+    log(
+        "transcription_prompt_ready context=%s raw_chars=%s effective_chars=%s "
+        "max_chars=%s",
+        context,
+        len(raw),
+        len(compact),
+        OPENAI_INPUT_AUDIO_TRANSCRIPTION_PROMPT_MAX_CHARS,
+    )
+    return compact
+
+
 INTERPRETER_VAD_CONFIG = {
     "type": "server_vad",
     "threshold": 0.64,
@@ -235,13 +311,17 @@ def build_interpreter_session_update(
     input_language: Optional[str] = None,
 ) -> dict:
     modalities = ["text", "audio"] if enable_audio else ["text"]
+    safe_transcription_prompt = prepare_input_audio_transcription_prompt(
+        input_transcription_prompt,
+        context="build_interpreter_session_update",
+    )
     session: dict = {
         "modalities": modalities,
         "instructions": instructions,
         "input_audio_format": "pcm16",
         "input_audio_transcription": {
             "model": input_transcription_model,
-            "prompt": input_transcription_prompt,
+            "prompt": safe_transcription_prompt,
             **({"language": input_language} if input_language and input_language != "auto" else {}),
         },
         "turn_detection": dict(INTERPRETER_VAD_CONFIG),

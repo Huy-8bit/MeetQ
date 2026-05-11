@@ -213,28 +213,16 @@ class TechnicalTermNormalizationResult:
 
 
 def build_technical_transcription_prompt() -> str:
-    # Keep the prompt focused — the per-turn term injection in interpreter_client
-    # handles specific terms; this sets the ASR context for the session.
-    core_examples = (
-        "software engineer, frontend engineer, backend engineer, DevOps engineer, "
-        "k8s, Kubernetes, kubectl, Docker, Redis, MongoDB, PostgreSQL, Node.js, "
-        "React, TypeScript, JavaScript, LiveKit, OpenAI, CI/CD, Helm, "
-        "deploy, deployment, pipeline, git, merge, commit, staging, production, "
-        "button, dropdown, input, screen, API, Ho Chi Minh"
-    )
+    # ASR-only hint. Interpreter/relay policies live in session_config and
+    # per-turn term injection; do not grow this into a translation policy.
     return (
-        "Transcribe meeting audio accurately before any translation. The room often contains "
-        "Vietnamese mixed with English IT, product, UI, DevOps, and company terms. Do not force "
-        "a whole utterance into one language. Preserve code-switching exactly: Vietnamese words "
-        "can be followed by English terms in the same sentence. Preserve English technical terms, "
-        "proper nouns, company names, person names, and place names with their natural casing when spoken. "
-        f"Expected vocabulary includes: {core_examples}. "
-        "Examples of valid mixed speech: 'tôi là software engineer ở Ho Chi Minh', "
-        "'em sửa cái button này', 'bên anh đang deploy service lên k8s', "
-        "'bên em dùng Docker với Redis'. "
-        "Keep tokens like k8s, CI/CD, Docker, Redis, deploy, button, software engineer, and Ho Chi Minh "
-        "as source transcript tokens when that is what was said. "
-        "If a short sound is unclear, transcribe what you hear and do not invent a technical word."
+        "ASR hint for live BRSE meetings: transcribe speech as heard before translation. "
+        "Speakers may mix Vietnamese with English IT/product/UI/DevOps terms in one utterance; "
+        "keep that code-switching instead of forcing one language. "
+        "Preserve technical terms, proper nouns, company/person/place names, natural casing, "
+        "and shorthand such as k8s, CI/CD, API, Docker, Redis, Kubernetes, LiveKit, OpenAI, "
+        "BRSE, Ho Chi Minh, button, deploy, and software engineer. "
+        "If unclear, write the closest heard words and do not invent a technical term."
     )
 
 

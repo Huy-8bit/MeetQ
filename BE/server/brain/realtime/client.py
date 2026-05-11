@@ -33,6 +33,7 @@ from server.brain.prompts.language import (
     LANG_NAMES,
 )
 from server.brain.prompts.technical_terms import build_technical_transcription_prompt
+from server.brain.realtime.session_config import prepare_input_audio_transcription_prompt
 from server.shared.logging_utils import get_logger, print_translation
 
 # ---------------------------------------------------------------------------
@@ -60,13 +61,17 @@ def _build_session_update(
     input_language: Optional[str] = None,
 ) -> dict:
     modalities = ["text", "audio"] if enable_audio else ["text"]
+    transcription_prompt = prepare_input_audio_transcription_prompt(
+        build_technical_transcription_prompt(),
+        context="realtime_client_session_update",
+    )
     session: dict = {
         "modalities": modalities,
         "instructions": instructions,
         "input_audio_format": "pcm16",
         "input_audio_transcription": {
             "model": "gpt-4o-transcribe",
-            "prompt": build_technical_transcription_prompt(),
+            "prompt": transcription_prompt,
             **({"language": input_language} if input_language and input_language != "auto" else {}),
         },
         "turn_detection": {

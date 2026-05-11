@@ -20,6 +20,7 @@ from server.brain.realtime.session_config import (
     INTERPRETER_TEMPERATURE,
     INTERPRETER_VAD_CONFIG,
     INTERPRETER_SEND_QUEUE_MAXSIZE,
+    OPENAI_INPUT_AUDIO_TRANSCRIPTION_PROMPT_MAX_CHARS,
     build_interpreter_instructions,
     build_interpreter_silent_listener_instructions,
     build_interpreter_summary_instructions,
@@ -157,14 +158,28 @@ class InterpreterRealtimeClient(RealtimeClient):
             ) as ws:
                 self._ws = ws
                 self._log(f"ws_connected model={self.model}")
-                await ws.send(json.dumps(self._session_update_payload()))
+                session_update_payload = self._session_update_payload()
+                await ws.send(json.dumps(session_update_payload))
+                transcription_config = (
+                    session_update_payload.get("session", {}).get(
+                        "input_audio_transcription",
+                        {},
+                    )
+                )
+                effective_transcription_prompt = str(
+                    transcription_config.get("prompt") or ""
+                )
+                raw_transcription_prompt = str(self.input_transcription_prompt or "")
+                max_prompt_chars = OPENAI_INPUT_AUDIO_TRANSCRIPTION_PROMPT_MAX_CHARS
                 self._log(
                     "interpreter.session_config "
                     f"src={self.src_lang} tgt={self.tgt_lang} "
                     f"meeting_languages={self.meeting_languages} "
                     f"vad={INTERPRETER_VAD_CONFIG} "
                     f"transcription_model={self.input_transcription_model} "
-                    f"transcription_prompt_chars={len(self.input_transcription_prompt)} "
+                    f"transcription_prompt_chars={len(effective_transcription_prompt)} "
+                    f"transcription_prompt_raw_chars={len(raw_transcription_prompt)} "
+                    f"transcription_prompt_max_chars={max_prompt_chars} "
                     f"temp={INTERPRETER_TEMPERATURE}"
                 )
 
@@ -952,10 +967,23 @@ class InterpreterRealtimeClient(RealtimeClient):
             await self._cancel_response(ws)
         elif self._conversation_item_ids:
             await self._prune_conversation(ws)
-        await ws.send(json.dumps(self._session_update_payload()))
+        session_update_payload = self._session_update_payload()
+        await ws.send(json.dumps(session_update_payload))
+        transcription_config = (
+            session_update_payload.get("session", {}).get(
+                "input_audio_transcription",
+                {},
+            )
+        )
+        effective_transcription_prompt = str(
+            transcription_config.get("prompt") or ""
+        )
+        max_prompt_chars = OPENAI_INPUT_AUDIO_TRANSCRIPTION_PROMPT_MAX_CHARS
         self._log(
             "interpreter.routing_updated "
-            f"src={self.src_lang} tgt={self.tgt_lang} meeting_languages={self.meeting_languages}"
+            f"src={self.src_lang} tgt={self.tgt_lang} meeting_languages={self.meeting_languages} "
+            f"transcription_prompt_chars={len(effective_transcription_prompt)} "
+            f"transcription_prompt_max_chars={max_prompt_chars}"
         )
 
     def _session_update_payload(self) -> dict[str, Any]:
