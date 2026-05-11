@@ -1,5 +1,55 @@
 # Backend Implementation State
 
+## Turn Update: 2026-05-11 OpenAI Realtime Temperature Hotfix
+
+- Time: 2026-05-11T(current session)
+- Mode: CODE-ONLY
+- Status: implemented
+- Testing deferred: yes, per instruction
+
+### Production Failure Root Cause
+
+- After the ASR prompt length hotfix, OpenAI Realtime accepted the prompt shape
+  but rejected `session.update` for `session.temperature`.
+- Provider error: `invalid_request_error` / `decimal_below_min_value`.
+- OpenAI Realtime session temperature minimum is `0.6`; interpreter config was
+  still sending `0.4`.
+- Result was the same runtime failure mode: session config never applied, so the
+  room connected to LiveKit/OpenAI but transcript/relay never became ready.
+
+### Hotfix Strategy
+
+- Restored `INTERPRETER_TEMPERATURE` to `0.6`, the provider minimum.
+- Added `prepare_realtime_session_temperature()` in the session config layer to
+  clamp invalid future values below the provider minimum and log the reason.
+- Applied the temperature guard to interpreter, fallback realtime client, and
+  translation test session builders.
+- Interpreter startup and routing-update logs now include effective temperature
+  plus provider minimum.
+
+### Files Modified
+
+- `BE/server/brain/realtime/session_config.py`
+- `BE/server/brain/realtime/interpreter_client.py`
+- `BE/server/brain/realtime/client.py`
+- `BE/server/brain/realtime/translation_test_client.py`
+- `docs/backend/IMPLEMENTATION_STATE.md`
+
+### Verification
+
+- Full test suite not run, per CODE-ONLY instruction.
+- New tests not added.
+- Existing tests not modified.
+- Lightweight runtime config smoke check confirms interpreter session payload
+  now sends `temperature=0.6`.
+- Temperature guard smoke check confirms a requested `0.4` clamps to `0.6` and
+  logs `realtime_temperature_clamped`.
+- Prompt guard remains valid: ASR prompt is 526 chars and under the 1024-char
+  provider limit.
+- Lightweight compile check passed for touched backend runtime files.
+
+---
+
 ## Turn Update: 2026-05-11 OpenAI Realtime ASR Prompt Hotfix
 
 - Time: 2026-05-11T(current session)

@@ -33,7 +33,10 @@ from server.brain.prompts.language import (
     LANG_NAMES,
 )
 from server.brain.prompts.technical_terms import build_technical_transcription_prompt
-from server.brain.realtime.session_config import prepare_input_audio_transcription_prompt
+from server.brain.realtime.session_config import (
+    prepare_input_audio_transcription_prompt,
+    prepare_realtime_session_temperature,
+)
 from server.shared.logging_utils import get_logger, print_translation
 
 # ---------------------------------------------------------------------------
@@ -65,6 +68,10 @@ def _build_session_update(
         build_technical_transcription_prompt(),
         context="realtime_client_session_update",
     )
+    temperature = prepare_realtime_session_temperature(
+        0.8,
+        context="realtime_client_session_update",
+    )
     session: dict = {
         "modalities": modalities,
         "instructions": instructions,
@@ -80,7 +87,7 @@ def _build_session_update(
             "prefix_padding_ms": 300,
             "silence_duration_ms": 700,
         },
-        "temperature": 0.8,  # Realtime API minimum is 0.6
+        "temperature": temperature,
     }
     if enable_audio:
         session["output_audio_format"] = "pcm16"

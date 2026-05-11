@@ -29,6 +29,7 @@ from server.brain.realtime.session_config import (
     INTERPRETER_TEMPERATURE,
     INTERPRETER_VAD_CONFIG,
     prepare_input_audio_transcription_prompt,
+    prepare_realtime_session_temperature,
 )
 
 logger = logging.getLogger(__name__)
@@ -120,7 +121,10 @@ def _build_test_session_update(src_lang: str, tgt_lang: str) -> dict:
                 "language": src_lang,
             },
             "turn_detection": dict(_TEST_VAD_CONFIG),
-            "temperature": INTERPRETER_TEMPERATURE,
+            "temperature": prepare_realtime_session_temperature(
+                INTERPRETER_TEMPERATURE,
+                context="translation_test_session_update",
+            ),
             "max_response_output_tokens": INTERPRETER_MAX_RESPONSE_OUTPUT_TOKENS,
         },
     }

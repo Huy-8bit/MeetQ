@@ -13,6 +13,7 @@ logger = logging.getLogger(__name__)
 
 OPENAI_INPUT_AUDIO_TRANSCRIPTION_PROMPT_MAX_CHARS = 1024
 INPUT_AUDIO_TRANSCRIPTION_PROMPT_WARN_CHARS = 900
+OPENAI_REALTIME_SESSION_TEMPERATURE_MIN = 0.6
 
 
 def _compact_prompt_whitespace(prompt: str) -> str:
@@ -83,6 +84,41 @@ def prepare_input_audio_transcription_prompt(
     return compact
 
 
+def prepare_realtime_session_temperature(
+    temperature: float,
+    *,
+    context: str = "interpreter_session_update",
+) -> float:
+    try:
+        value = float(temperature)
+    except (TypeError, ValueError):
+        logger.warning(
+            "realtime_temperature_invalid context=%s value=%r fallback=%s",
+            context,
+            temperature,
+            OPENAI_REALTIME_SESSION_TEMPERATURE_MIN,
+        )
+        return OPENAI_REALTIME_SESSION_TEMPERATURE_MIN
+
+    if value < OPENAI_REALTIME_SESSION_TEMPERATURE_MIN:
+        logger.warning(
+            "realtime_temperature_clamped context=%s requested=%s effective=%s "
+            "reason=provider_min",
+            context,
+            value,
+            OPENAI_REALTIME_SESSION_TEMPERATURE_MIN,
+        )
+        return OPENAI_REALTIME_SESSION_TEMPERATURE_MIN
+
+    logger.info(
+        "realtime_temperature_ready context=%s effective=%s min=%s",
+        context,
+        value,
+        OPENAI_REALTIME_SESSION_TEMPERATURE_MIN,
+    )
+    return value
+
+
 INTERPRETER_VAD_CONFIG = {
     "type": "server_vad",
     "threshold": 0.64,
@@ -92,7 +128,7 @@ INTERPRETER_VAD_CONFIG = {
     "interrupt_response": False,
 }
 
-INTERPRETER_TEMPERATURE = 0.4  # reduced from 0.6 — less drift/hallucination
+INTERPRETER_TEMPERATURE = 0.6  # OpenAI Realtime session minimum
 INTERPRETER_INPUT_TRANSCRIPTION_MODEL = "gpt-4o-transcribe"
 INTERPRETER_INPUT_TRANSCRIPTION_PROMPT = build_technical_transcription_prompt()
 INTERPRETER_FINAL_TRANSCRIPT_HOLD_MS = 80  # reduced from 240 — fast relay after ASR
@@ -309,10 +345,15 @@ def build_interpreter_session_update(
     input_transcription_model: str = INTERPRETER_INPUT_TRANSCRIPTION_MODEL,
     input_transcription_prompt: str = INTERPRETER_INPUT_TRANSCRIPTION_PROMPT,
     input_language: Optional[str] = None,
+    temperature: float = INTERPRETER_TEMPERATURE,
 ) -> dict:
     modalities = ["text", "audio"] if enable_audio else ["text"]
     safe_transcription_prompt = prepare_input_audio_transcription_prompt(
         input_transcription_prompt,
+        context="build_interpreter_session_update",
+    )
+    safe_temperature = prepare_realtime_session_temperature(
+        temperature,
         context="build_interpreter_session_update",
     )
     session: dict = {
@@ -325,7 +366,7 @@ def build_interpreter_session_update(
             **({"language": input_language} if input_language and input_language != "auto" else {}),
         },
         "turn_detection": dict(INTERPRETER_VAD_CONFIG),
-        "temperature": INTERPRETER_TEMPERATURE,
+        "temperature": safe_temperature,
         "max_response_output_tokens": INTERPRETER_MAX_RESPONSE_OUTPUT_TOKENS,
     }
     if enable_audio:

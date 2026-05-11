@@ -17,10 +17,10 @@ from server.brain.realtime.session_config import (
     INTERPRETER_INPUT_TRANSCRIPTION_MODEL,
     INTERPRETER_INPUT_TRANSCRIPTION_PROMPT,
     INTERPRETER_SOURCE_QUALITY_HOLD_MS,
-    INTERPRETER_TEMPERATURE,
     INTERPRETER_VAD_CONFIG,
     INTERPRETER_SEND_QUEUE_MAXSIZE,
     OPENAI_INPUT_AUDIO_TRANSCRIPTION_PROMPT_MAX_CHARS,
+    OPENAI_REALTIME_SESSION_TEMPERATURE_MIN,
     build_interpreter_instructions,
     build_interpreter_silent_listener_instructions,
     build_interpreter_summary_instructions,
@@ -169,6 +169,9 @@ class InterpreterRealtimeClient(RealtimeClient):
                 effective_transcription_prompt = str(
                     transcription_config.get("prompt") or ""
                 )
+                effective_temperature = session_update_payload.get("session", {}).get(
+                    "temperature"
+                )
                 raw_transcription_prompt = str(self.input_transcription_prompt or "")
                 max_prompt_chars = OPENAI_INPUT_AUDIO_TRANSCRIPTION_PROMPT_MAX_CHARS
                 self._log(
@@ -180,7 +183,8 @@ class InterpreterRealtimeClient(RealtimeClient):
                     f"transcription_prompt_chars={len(effective_transcription_prompt)} "
                     f"transcription_prompt_raw_chars={len(raw_transcription_prompt)} "
                     f"transcription_prompt_max_chars={max_prompt_chars} "
-                    f"temp={INTERPRETER_TEMPERATURE}"
+                    f"temp={effective_temperature} "
+                    f"temp_min={OPENAI_REALTIME_SESSION_TEMPERATURE_MIN}"
                 )
 
                 try:
@@ -978,12 +982,16 @@ class InterpreterRealtimeClient(RealtimeClient):
         effective_transcription_prompt = str(
             transcription_config.get("prompt") or ""
         )
+        effective_temperature = session_update_payload.get("session", {}).get(
+            "temperature"
+        )
         max_prompt_chars = OPENAI_INPUT_AUDIO_TRANSCRIPTION_PROMPT_MAX_CHARS
         self._log(
             "interpreter.routing_updated "
             f"src={self.src_lang} tgt={self.tgt_lang} meeting_languages={self.meeting_languages} "
             f"transcription_prompt_chars={len(effective_transcription_prompt)} "
-            f"transcription_prompt_max_chars={max_prompt_chars}"
+            f"transcription_prompt_max_chars={max_prompt_chars} "
+            f"temp={effective_temperature} temp_min={OPENAI_REALTIME_SESSION_TEMPERATURE_MIN}"
         )
 
     def _session_update_payload(self) -> dict[str, Any]:
