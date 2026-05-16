@@ -60,6 +60,76 @@ const TRANSLATION_STEPS = [
   },
 ];
 
+function HomeRelayVisual() {
+  return (
+    <div className="home-live-animation home-relay-visual" aria-hidden="true">
+      <div className="home-relay-topbar">
+        <span className="home-relay-live">
+          <i />
+          Live interpretation
+        </span>
+        <span className="home-relay-latency">42 ms relay</span>
+      </div>
+
+      <div className="home-relay-stage">
+        <span className="home-relay-path home-relay-path-in" />
+        <span className="home-relay-path home-relay-path-en" />
+        <span className="home-relay-path home-relay-path-ja" />
+
+        <div className="home-relay-node home-relay-node-vi">
+          <span>VI</span>
+          <strong>Speaker</strong>
+          <div className="home-relay-wave" aria-hidden="true">
+            {Array.from({ length: 8 }, (_, index) => (
+              <span key={index} />
+            ))}
+          </div>
+        </div>
+
+        <div className="home-relay-core">
+          <span className="home-relay-core-ring" />
+          <b>AI</b>
+          <strong>Relay</strong>
+          <em>speech + captions</em>
+        </div>
+
+        <div className="home-relay-node home-relay-node-en">
+          <span>EN</span>
+          <strong>Voice</strong>
+          <small>Hello team</small>
+        </div>
+
+        <div className="home-relay-node home-relay-node-ja">
+          <span>JA</span>
+          <strong>Caption</strong>
+          <small>こんにちは</small>
+        </div>
+
+        <div className="home-relay-status-strip">
+          <span className="home-relay-status home-relay-status-1">Listening</span>
+          <span className="home-relay-status home-relay-status-2">Transcribing</span>
+          <span className="home-relay-status home-relay-status-3">Relaying</span>
+        </div>
+      </div>
+
+      <div className="home-relay-feed">
+        <div className="home-relay-feed-row home-relay-feed-row-1">
+          <span>VI</span>
+          <strong>Xin chào team, mình bắt đầu nhé.</strong>
+        </div>
+        <div className="home-relay-feed-row home-relay-feed-row-2">
+          <span>AI</span>
+          <strong>Detecting intent, terms, and timing</strong>
+        </div>
+        <div className="home-relay-feed-row home-relay-feed-row-3">
+          <span>EN</span>
+          <strong>Hello team, we are ready to start.</strong>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function ChaosSlide() {
   const [textIdx, setTextIdx] = useState(0);
 
@@ -408,15 +478,8 @@ export function HomePage() {
   return (
     <main className="hp-root" ref={pageMotionRef}>
       <section className="hp-showcase-hero" aria-label="MeetQ AI meeting platform" data-home-motion>
-        <div className="hp-hero-copyline">
-          <span>AI multilingual meetings</span>
-          <h1>Understand every meeting in real time.</h1>
-          <p>
-            MeetQ combines live interpretation, AI relay, and room summaries for teams
-            working across Vietnamese, English, and Japanese.
-          </p>
-        </div>
-        <IntroShowcase />
+        <h1 className="hp-sr-only">MeetQ AI multilingual meetings</h1>
+        <HomeRelayVisual />
       </section>
 
       {/* Gradient fade from transparent → dark, covering right half */}
@@ -430,27 +493,27 @@ export function HomePage() {
         <Link to="/test" className="hp-nav-link">Mic test</Link>
       </nav>
 
-      {/* Right panel — floating overlay */}
-      <div className="hp-panel">
+      {/* Right panel — room controls */}
+      <div className="hp-panel hp-room-panel">
         {landingNotice && (
           <div className="hp-notice" role="status">{landingNotice}</div>
         )}
 
         {/* Create card */}
-        <section className="hp-card hp-card-create" data-home-motion>
-          <div className="hp-card-header">
+        <section className="hp-card hp-card-create hp-room-card" data-home-motion>
+          <div className="hp-card-header hp-room-card-header">
             <div>
               <p className="hp-card-label">New room</p>
-              <h2 className="hp-card-title">Start a multilingual AI meeting</h2>
+              <h2 className="hp-card-title">Start an AI-assisted meeting</h2>
               <p className="hp-card-subtitle">
-                Set the conversation pair, choose how AI participates, and open the room.
+                Choose the language pair and how MeetQ relays speech, captions, and AI voice.
               </p>
             </div>
           </div>
 
-          <section className="hp-create-section hp-language-section">
+          <section className="hp-create-section hp-language-section hp-form-section">
             <div className="hp-section-heading">
-              <span>Languages</span>
+              <span>Conversation pair</span>
             </div>
             <div className="hp-lang-row">
               <div className="hp-lang-slot">
@@ -477,7 +540,7 @@ export function HomePage() {
             </div>
           </section>
 
-          <section className="hp-create-section hp-option-section">
+          <section className="hp-create-section hp-option-section hp-form-section hp-relay-section">
             <div className="hp-section-heading">
               <span>AI relay</span>
             </div>
@@ -512,15 +575,15 @@ export function HomePage() {
               disabled={creating || !canCreate}
               attentionKey={createAttentionKey}
             >
-              {creating ? "Creating…" : "Start speaking globally"}
+              {creating ? "Creating…" : "Create room"}
             </MotionButton>
             <p>60-minute room. No account required.</p>
           </div>
         </section>
 
         {/* Join row */}
-        <section className="hp-card hp-card-join" data-home-motion>
-          <p className="hp-card-label">Join existing room</p>
+        <section className="hp-card hp-card-join hp-join-card" data-home-motion>
+          <p className="hp-card-label">Join room</p>
           <div className="hp-join-row">
             <input
               className="hp-join-input"
