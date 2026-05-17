@@ -4,6 +4,7 @@ from server.service.gateway.room_service import (
     BrseToggleForbiddenError,
     InvalidLanguageError,
     InvalidMeetingLanguagesError,
+    InvalidMeetingSummaryLanguageError,
     InvalidMeetingSummaryTypeError,
     MeetingSummaryNotFoundError,
     MeetingSummaryNotReadyError,
@@ -14,7 +15,11 @@ from server.service.gateway.room_service import (
     RoomNotFoundError,
     RoomService,
 )
-from server.service.gateway.dependencies import get_room_service, verify_token_dependency
+from server.service.gateway.dependencies import (
+    get_room_service,
+    optional_token_dependency,
+    verify_token_dependency,
+)
 from server.models import (
     CreateRoomRequest,
     CreateRoomResponse,
@@ -84,10 +89,19 @@ async def get_room_summary(
 async def generate_room_summary(
     room_id: str,
     type: Optional[str] = None,
+    language: Optional[str] = None,
+    summary_language: Optional[str] = None,
+    claims: Optional[Dict[str, Any]] = Depends(optional_token_dependency),
     service: RoomService = Depends(get_room_service),
 ):
     try:
-        return await service.generate_meeting_summary(room_id, type)
+        requested_language = language or summary_language
+        return await service.generate_meeting_summary(
+            room_id,
+            type,
+            requested_language=requested_language,
+            requester_claims=claims,
+        )
     except RoomNotFoundError:
         return _error_response("room_not_found", "Room not found", 404)
     except MeetingSummaryUnavailableError:
@@ -98,6 +112,13 @@ async def generate_room_summary(
         return _error_response("meeting_summary_not_found", "Meeting summary not found", 404)
     except InvalidMeetingSummaryTypeError:
         return _error_response("invalid_summary_type", "summary type must be interim or final", 422)
+    except InvalidMeetingSummaryLanguageError as exc:
+        return _error_response(
+            "invalid_summary_language",
+            str(exc) or "summary language is not supported",
+            422,
+            exc.details,
+        )
 
 @router.post("/api/rooms/{room_id}/join", response_model=JoinRoomResponse)
 async def join_room(room_id: str, req: JoinRoomRequest, service: RoomService = Depends(get_room_service)):

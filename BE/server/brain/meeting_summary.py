@@ -26,7 +26,11 @@ async def generate_meeting_summary(
     import openai
 
     summary_language_name = LANG_NAMES.get(summary_language, summary_language)
-    system_prompt = _build_system_prompt(summary_language_name, summary_type=summary_type)
+    system_prompt = _build_system_prompt(
+        summary_language_name,
+        summary_language=summary_language,
+        summary_type=summary_type,
+    )
     user_prompt = _build_user_prompt(source, summary_type=summary_type)
 
     client = openai.AsyncOpenAI(api_key=api_key)
@@ -46,11 +50,25 @@ async def generate_meeting_summary(
     return _normalize_summary_payload(parsed)
 
 
-def _build_system_prompt(summary_language_name: str, *, summary_type: str) -> str:
+def _build_system_prompt(
+    summary_language_name: str,
+    *,
+    summary_language: str,
+    summary_type: str,
+) -> str:
     summary_label = "live checkpoint" if summary_type == "interim" else "post-meeting final"
     return (
         f"You create {summary_label} meeting recap packages for admins and participants. "
-        f"Write the entire output in {summary_language_name}. "
+        f"Target language: {summary_language} ({summary_language_name}). "
+        f"Write the summary in {summary_language_name}. "
+        f"Do not default to English unless target language is English. "
+        "All generated human-readable values must use the same target language, "
+        "including the whole-meeting summary paragraph, key points, decisions, "
+        "action items, risks or issues if present, and participant summaries. "
+        "Keep the JSON keys exactly as requested, but do not use English for "
+        "the generated content unless the target language is English. "
+        "If the source transcript contains multiple languages, still summarize "
+        f"all grounded content in {summary_language_name}. "
         "Use only the provided room metadata, participant records, transcript lines, "
         "BRSE relay lines, translated transcript lines, and chat messages. "
         "Treat source transcript lines as primary evidence; relay and translated lines "

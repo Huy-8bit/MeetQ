@@ -5,9 +5,10 @@ from server.config import Settings
 from server.service.gateway.room_store import RoomStore
 from server.service.gateway.room_service import RoomService
 from server.service.gateway.auth import verify_room_token, InvalidTokenError, ExpiredTokenError, TokenRoomMismatchError
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 
 security = HTTPBearer()
+optional_security = HTTPBearer(auto_error=False)
 
 def get_settings() -> Settings:
     if not app_state.settings:
@@ -39,3 +40,18 @@ def verify_token_dependency(
         raise HTTPException(status_code=401, detail={"error": {"code": "invalid_token", "message": "invalid token"}})
     except TokenRoomMismatchError:
         raise HTTPException(status_code=403, detail={"error": {"code": "token_room_mismatch", "message": "room mismatch"}})
+
+
+def optional_token_dependency(
+    request: Request,
+    credentials: HTTPAuthorizationCredentials = Security(optional_security),
+    settings: Settings = Depends(get_settings)
+) -> Optional[Dict[str, Any]]:
+    if credentials is None:
+        return None
+
+    room_id = request.path_params.get("room_id")
+    try:
+        return verify_room_token(credentials.credentials, settings.room_jwt_secret, room_id)
+    except (ExpiredTokenError, InvalidTokenError, TokenRoomMismatchError):
+        return None

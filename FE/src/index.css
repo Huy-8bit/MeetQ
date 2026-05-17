@@ -15474,3 +15474,14 @@ body {
     opacity: 1 !important;
   }
 }
+
+/* Home right panel: remove the white sweep/highlight effect from the form card. */
+.hp-room-card::before,
+.hp-room-card:hover::before,
+.hp-room-card .hp-btn-primary::before {
+  content: none !important;
+  display: none !important;
+  opacity: 0 !important;
+  animation: none !important;
+  background: none !important;
+}

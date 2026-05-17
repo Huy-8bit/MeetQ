@@ -39,6 +39,8 @@ class MeetingSummaryService:
         room_id: str,
         trigger_reason: str,
         ended_at: Optional[str] = None,
+        summary_language: Optional[str] = None,
+        language_resolution_reason: Optional[str] = None,
     ) -> None:
         if not self.enabled:
             return
@@ -48,6 +50,8 @@ class MeetingSummaryService:
                     room_id=room_id,
                     trigger_reason=trigger_reason,
                     ended_at=ended_at,
+                    summary_language=summary_language,
+                    language_resolution_reason=language_resolution_reason,
                 )
             )
         except RuntimeError:
@@ -67,16 +71,22 @@ class MeetingSummaryService:
         room_id: str,
         trigger_reason: str,
         ended_at: Optional[str] = None,
+        summary_language: Optional[str] = None,
+        language_resolution_reason: Optional[str] = None,
+        refresh: bool = False,
     ) -> Optional[Dict[str, Any]]:
         if not self.enabled or self.room_history is None:
             return None
 
         requested_at = self._now_str()
+        target_language = summary_language or self.settings.meeting_summary_language
         logger.info(
-            "meeting final summary requested: room_id=%s trigger=%s ended_at=%s",
+            "meeting final summary requested: room_id=%s trigger=%s ended_at=%s summary_language=%s language_reason=%s",
             room_id,
             trigger_reason,
             ended_at,
+            target_language,
+            language_resolution_reason or "config_default",
         )
 
         pending = await self.room_history.create_meeting_summary_pending(
@@ -84,9 +94,9 @@ class MeetingSummaryService:
             summary_type=SUMMARY_TYPE_FINAL,
             requested_at=requested_at,
             trigger_reason=trigger_reason,
-            summary_language=self.settings.meeting_summary_language,
+            summary_language=target_language,
             source_window={"source": "mongodb_archive", "ended_at": ended_at},
-            refresh=False,
+            refresh=refresh,
         )
         if pending is None:
             logger.info("meeting final summary already requested or generated: room_id=%s", room_id)
@@ -101,6 +111,8 @@ class MeetingSummaryService:
                 room_id=room_id,
                 summary_type=SUMMARY_TYPE_FINAL,
                 source=source,
+                summary_language=target_language,
+                language_resolution_reason=language_resolution_reason,
             )
         except asyncio.CancelledError:
             raise
@@ -118,22 +130,27 @@ class MeetingSummaryService:
         room_id: str,
         source: Dict[str, Any],
         trigger_reason: str,
+        summary_language: Optional[str] = None,
+        language_resolution_reason: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
         if not self.enabled or self.room_history is None:
             return None
 
         requested_at = self._now_str()
+        target_language = summary_language or self.settings.meeting_summary_language
         logger.info(
-            "meeting interim summary requested: room_id=%s trigger=%s",
+            "meeting interim summary requested: room_id=%s trigger=%s summary_language=%s language_reason=%s",
             room_id,
             trigger_reason,
+            target_language,
+            language_resolution_reason or "config_default",
         )
         await self.room_history.create_meeting_summary_pending(
             room_id=room_id,
             summary_type=SUMMARY_TYPE_INTERIM,
             requested_at=requested_at,
             trigger_reason=trigger_reason,
-            summary_language=self.settings.meeting_summary_language,
+            summary_language=target_language,
             source_window=source.get("source_window") or {},
             refresh=True,
         )
@@ -143,6 +160,8 @@ class MeetingSummaryService:
                 room_id=room_id,
                 summary_type=SUMMARY_TYPE_INTERIM,
                 source=source,
+                summary_language=target_language,
+                language_resolution_reason=language_resolution_reason,
             )
         except asyncio.CancelledError:
             raise
@@ -160,19 +179,23 @@ class MeetingSummaryService:
         room_id: str,
         summary_type: str,
         source: Dict[str, Any],
+        summary_language: str,
+        language_resolution_reason: Optional[str],
     ) -> Optional[Dict[str, Any]]:
         if self.room_history is None:
             return None
 
         source_stats = source.get("source_stats", {})
         logger.info(
-            "meeting %s recap source collected: room_id=%s transcripts=%s relay=%s chat=%s included=%s",
+            "meeting %s recap source collected: room_id=%s transcripts=%s relay=%s chat=%s included=%s summary_language=%s language_reason=%s",
             summary_type,
             room_id,
             source_stats.get("transcript_count", 0),
             source_stats.get("relay_count", 0),
             source_stats.get("chat_count", 0),
             source_stats.get("included_message_count", 0),
+            summary_language,
+            language_resolution_reason or "provided",
         )
 
         generated_at = self._now_str()
@@ -183,11 +206,13 @@ class MeetingSummaryService:
                 generated_at=generated_at,
                 source=source,
                 reason="insufficient_source_content",
+                summary_language=summary_language,
             )
             logger.info(
-                "meeting %s summary skipped: room_id=%s reason=insufficient_source_content",
+                "meeting %s summary skipped: room_id=%s reason=insufficient_source_content summary_language=%s",
                 summary_type,
                 room_id,
+                summary_language,
             )
             return await self.room_history.get_meeting_summary(room_id, summary_type=summary_type)
 
@@ -195,7 +220,7 @@ class MeetingSummaryService:
             source=source,
             api_key=self.settings.openai_api_key,
             model=self.settings.openai_summary_model,
-            summary_language=self.settings.meeting_summary_language,
+            summary_language=summary_language,
             summary_type=summary_type,
         )
         generated_at = self._now_str()
@@ -205,11 +230,13 @@ class MeetingSummaryService:
             generated_at=generated_at,
             summary=summary,
             source=source,
+            summary_language=summary_language,
         )
         logger.info(
-            "meeting %s recap generated: room_id=%s key_points=%s action_items=%s decisions=%s participant_highlights=%s",
+            "meeting %s recap generated: room_id=%s summary_language=%s key_points=%s action_items=%s decisions=%s participant_highlights=%s",
             summary_type,
             room_id,
+            summary_language,
             len(summary.get("key_points") or []),
             len(summary.get("action_items") or []),
             len(summary.get("decisions") or []),

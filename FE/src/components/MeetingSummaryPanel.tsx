@@ -204,7 +204,11 @@ export function MeetingSummaryPanel({
         {visibleSummary && status === "skipped" ? (
           <SummaryState
             title={roomEnded ? "Final summary is not available" : "Not enough content yet"}
-            text={visibleSummary.error || "The meeting does not have enough transcript or chat content to summarize."}
+            text={
+              visibleSummary.summary_text
+              || visibleSummary.error
+              || "The meeting does not have enough transcript or chat content to summarize."
+            }
           />
         ) : null}
 

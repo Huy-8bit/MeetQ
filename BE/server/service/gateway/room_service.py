@@ -120,6 +120,12 @@ class InvalidMeetingSummaryTypeError(Exception):
     pass
 
 
+class InvalidMeetingSummaryLanguageError(Exception):
+    def __init__(self, message: str, details: Optional[Dict[str, Any]] = None):
+        super().__init__(message)
+        self.details = details or {}
+
+
 class InvalidChatMessageError(Exception):
     def __init__(self, message: str, code: str = "invalid_chat_message"):
         super().__init__(message)
@@ -312,10 +318,19 @@ class RoomService:
             current_human_count=current_human_count,
             reason=reason,
         )
+        summary_language, language_reason = self._resolve_summary_language(room=room)
+        self._log_summary_language_resolution(
+            room_id=room_id,
+            summary_type=SUMMARY_TYPE_FINAL,
+            summary_language=summary_language,
+            reason=language_reason,
+        )
         await self.meeting_summary_service.generate_for_room_end(
             room_id=room_id,
             trigger_reason=reason,
             ended_at=expired_at,
+            summary_language=summary_language,
+            language_resolution_reason=language_reason,
         )
 
     async def shutdown_side_effects(self) -> None:
@@ -461,6 +476,173 @@ class RoomService:
             or getattr(snapshot.room, "meeting_languages", None)
             or DEFAULT_ROOM_MEETING_LANGUAGES
         )
+
+    def _normalize_summary_language(
+        self,
+        language: Any,
+        *,
+        field: str = "language",
+        strict: bool = False,
+    ) -> Optional[MeetingLanguage]:
+        if language is None:
+            return None
+        if not isinstance(language, str):
+            if strict:
+                raise InvalidMeetingSummaryLanguageError(
+                    "summary language must be a string",
+                    details={
+                        "field": field,
+                        "supported": list(SUPPORTED_MEETING_LANGUAGES),
+                    },
+                )
+            return None
+
+        normalized = language.strip().lower()
+        if not normalized:
+            return None
+        if normalized == "auto" or normalized not in SUPPORTED_MEETING_LANGUAGES:
+            if strict:
+                raise InvalidMeetingSummaryLanguageError(
+                    "summary language is not supported",
+                    details={
+                        "field": field,
+                        "unsupported": normalized,
+                        "supported": list(SUPPORTED_MEETING_LANGUAGES),
+                    },
+                )
+            return None
+        return normalized  # type: ignore[return-value]
+
+    def _participant_language_from_snapshot(
+        self,
+        snapshot: Optional[RoomSnapshotResponse],
+        participant_id: Optional[str],
+    ) -> Optional[MeetingLanguage]:
+        if snapshot is None or not participant_id:
+            return None
+        for participant in snapshot.participants:
+            if participant.participant_id != participant_id or participant.is_virtual:
+                continue
+            return self._normalize_summary_language(participant.language)
+        return None
+
+    def _single_human_participant_language(
+        self,
+        snapshot: Optional[RoomSnapshotResponse],
+    ) -> Optional[MeetingLanguage]:
+        if snapshot is None:
+            return None
+        languages: List[MeetingLanguage] = []
+        for participant in snapshot.participants:
+            if participant.is_virtual:
+                continue
+            language = self._normalize_summary_language(participant.language)
+            if language and language not in languages:
+                languages.append(language)
+        return languages[0] if len(languages) == 1 else None
+
+    def _summary_room_languages(
+        self,
+        *,
+        snapshot: Optional[RoomSnapshotResponse] = None,
+        room: Any = None,
+    ) -> List[MeetingLanguage]:
+        raw_languages: List[Any] = []
+        if snapshot is not None:
+            raw_languages = self._room_languages_from_snapshot(snapshot)
+        elif room is not None:
+            raw_languages = list(
+                self._room_value(
+                    room,
+                    "room_languages",
+                    self._room_value(room, "meeting_languages", []),
+                )
+                or []
+            )
+
+        normalized: List[MeetingLanguage] = []
+        for language in raw_languages:
+            summary_language = self._normalize_summary_language(language)
+            if summary_language and summary_language not in normalized:
+                normalized.append(summary_language)
+        return normalized
+
+    def _resolve_summary_language(
+        self,
+        *,
+        requested_language: Optional[str] = None,
+        requester_language: Optional[str] = None,
+        requester_claims: Optional[Dict[str, Any]] = None,
+        snapshot: Optional[RoomSnapshotResponse] = None,
+        room: Any = None,
+    ) -> tuple[MeetingLanguage, str]:
+        explicit_language = self._normalize_summary_language(
+            requested_language,
+            field="language",
+            strict=True,
+        )
+        if explicit_language:
+            return explicit_language, "explicit_request"
+
+        participant_language = self._normalize_summary_language(requester_language)
+        if participant_language:
+            return participant_language, "requester_participant_language"
+
+        claims = requester_claims or {}
+        claimed_participant_id = claims.get("participant_id") if isinstance(claims, dict) else None
+        participant_language = self._participant_language_from_snapshot(
+            snapshot,
+            claimed_participant_id if isinstance(claimed_participant_id, str) else None,
+        )
+        if participant_language:
+            return participant_language, "authenticated_participant_language"
+
+        token_language = self._normalize_summary_language(
+            claims.get("language") if isinstance(claims, dict) else None
+        )
+        if token_language:
+            return token_language, "token_language"
+
+        participant_language = self._single_human_participant_language(snapshot)
+        if participant_language:
+            return participant_language, "single_participant_language"
+
+        room_languages = self._summary_room_languages(snapshot=snapshot, room=room)
+        if room_languages:
+            return room_languages[0], "room_language_fallback"
+
+        config_language = self._normalize_summary_language(self.settings.meeting_summary_language)
+        if config_language:
+            return config_language, "config_default_fallback"
+
+        return "en", "safe_default_fallback"
+
+    def _log_summary_language_resolution(
+        self,
+        *,
+        room_id: str,
+        summary_type: str,
+        summary_language: str,
+        reason: str,
+    ) -> None:
+        logger.info(
+            "meeting summary language resolved: room_id=%s type=%s summary_language=%s reason=%s",
+            room_id,
+            summary_type,
+            summary_language,
+            reason,
+        )
+        if reason.endswith("_fallback"):
+            logger.info(
+                "meeting summary language fallback: room_id=%s type=%s summary_language=%s reason=%s",
+                room_id,
+                summary_type,
+                summary_language,
+                reason,
+            )
+
+    def _summary_record_language(self, summary: Dict[str, Any]) -> Optional[MeetingLanguage]:
+        return self._normalize_summary_language(summary.get("summary_language"))
 
     def _build_brse_virtual_participants(
         self,
@@ -706,6 +888,8 @@ class RoomService:
         self,
         room_id: str,
         summary_type: Optional[str] = None,
+        requested_language: Optional[str] = None,
+        requester_claims: Optional[Dict[str, Any]] = None,
     ) -> MeetingSummaryResponse:
         if not self.room_history or not self.room_history.enabled:
             raise MeetingSummaryUnavailableError()
@@ -718,12 +902,26 @@ class RoomService:
         normalized_type = self._resolve_summary_type(summary_type, snapshot)
         if snapshot is None and not await self.room_history.room_exists(room_id):
             raise RoomNotFoundError()
+        summary_language, language_reason = self._resolve_summary_language(
+            requested_language=requested_language,
+            requester_claims=requester_claims,
+            snapshot=snapshot,
+            room=raw_room,
+        )
+        self._log_summary_language_resolution(
+            room_id=room_id,
+            summary_type=normalized_type,
+            summary_language=summary_language,
+            reason=language_reason,
+        )
         logger.info(
-            "meeting summary generate requested: room_id=%s type=%s snapshot_state=%s expired=%s",
+            "meeting summary generate requested: room_id=%s type=%s snapshot_state=%s expired=%s summary_language=%s language_reason=%s",
             room_id,
             normalized_type,
             snapshot.room.state if snapshot is not None else None,
             self._is_room_expired(snapshot) if snapshot is not None else None,
+            summary_language,
+            language_reason,
         )
         if normalized_type == SUMMARY_TYPE_INTERIM:
             if snapshot is None:
@@ -733,6 +931,8 @@ class RoomService:
                 room_id=room_id,
                 source=source,
                 trigger_reason="on_demand_interim_refresh",
+                summary_language=summary_language,
+                language_resolution_reason=language_reason,
             )
         else:
             existing_final = await self.room_history.get_meeting_summary(
@@ -740,12 +940,21 @@ class RoomService:
                 summary_type=SUMMARY_TYPE_FINAL,
             )
             if existing_final is not None:
+                existing_language = self._summary_record_language(existing_final)
+                if existing_language == summary_language:
+                    logger.info(
+                        "meeting final summary generate reused existing: room_id=%s status=%s summary_language=%s",
+                        room_id,
+                        existing_final.get("status"),
+                        existing_language,
+                    )
+                    return MeetingSummaryResponse.model_validate(existing_final)
                 logger.info(
-                    "meeting final summary generate reused existing: room_id=%s status=%s",
+                    "meeting final summary regenerate requested for language mismatch: room_id=%s existing_language=%s requested_language=%s",
                     room_id,
-                    existing_final.get("status"),
+                    existing_language,
+                    summary_language,
                 )
-                return MeetingSummaryResponse.model_validate(existing_final)
 
             lifecycle_room = raw_room or (snapshot.room if snapshot is not None else None)
             room_state = self._room_value(lifecycle_room, "state")
@@ -787,6 +996,9 @@ class RoomService:
                 room_id=room_id,
                 trigger_reason="on_demand_final",
                 ended_at=ended_at,
+                summary_language=summary_language,
+                language_resolution_reason=language_reason,
+                refresh=existing_final is not None,
             )
         if not summary:
             raise MeetingSummaryNotFoundError()
@@ -1349,10 +1561,22 @@ class RoomService:
                 terminal_state=terminal_state,
             )
             if terminal_state:
+                summary_language, language_reason = self._resolve_summary_language(
+                    requester_language=participant.language,
+                    snapshot=fresh_snapshot,
+                )
+                self._log_summary_language_resolution(
+                    room_id=room_id,
+                    summary_type=SUMMARY_TYPE_FINAL,
+                    summary_language=summary_language,
+                    reason=language_reason,
+                )
                 await self.meeting_summary_service.generate_for_room_end(
                     room_id=room_id,
                     trigger_reason=f"{terminal_state}:{reason}",
                     ended_at=now,
+                    summary_language=summary_language,
+                    language_resolution_reason=language_reason,
                 )
 
         self._schedule_history(

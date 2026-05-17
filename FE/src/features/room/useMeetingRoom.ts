@@ -1863,6 +1863,14 @@ export function useMeetingRoom({
 
   // ─── Meeting summary handlers ────────────────────────────────────────────
 
+  function resolveCurrentSummaryLanguage(): MeetingLanguage | null {
+    const currentLanguage = selfRef.current?.language ?? session?.participant.language ?? null;
+    if (!currentLanguage || currentLanguage === "auto") {
+      return null;
+    }
+    return currentLanguage as MeetingLanguage;
+  }
+
   async function fetchMeetingSummary(
     type: MeetingSummaryType,
     options: {
@@ -1957,7 +1965,10 @@ export function useMeetingRoom({
     setSummaryErrorSource(null);
 
     try {
-      const response = await api.generateRoomSummary(roomId, type);
+      const response = await api.generateRoomSummary(roomId, type, {
+        language: resolveCurrentSummaryLanguage(),
+        token: session?.roomToken ?? null,
+      });
       if (requestId !== summaryRequestSeqRef.current) {
         return null;
       }
@@ -1987,7 +1998,11 @@ export function useMeetingRoom({
           || error.code === "meeting_summary_not_found"
         )
       ) {
-        const pending = createPendingMeetingSummary(roomId, "final");
+        const pending = createPendingMeetingSummary(
+          roomId,
+          "final",
+          resolveCurrentSummaryLanguage(),
+        );
         setMeetingSummary(pending);
         setSummaryError(null);
         setSummaryErrorSource(null);
@@ -2558,6 +2573,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function createPendingMeetingSummary(
   roomId: string,
   type: MeetingSummaryType,
+  language: MeetingLanguage | null = null,
 ): MeetingSummaryResponse {
   return {
     room_id: roomId,
@@ -2565,6 +2581,7 @@ function createPendingMeetingSummary(
     status: "pending",
     created_at: new Date().toISOString(),
     generated_at: null,
+    summary_language: language,
     summary_text: null,
     key_points: [],
     highlights: [],

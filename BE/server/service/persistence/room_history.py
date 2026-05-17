@@ -675,6 +675,7 @@ class MongoRoomHistoryRepository:
         generated_at: str,
         summary: Dict[str, Any],
         source: Dict[str, Any],
+        summary_language: Optional[str] = None,
     ) -> None:
         source_stats = source.get("source_stats") or {}
         duration_seconds = source.get("duration_seconds")
@@ -685,6 +686,7 @@ class MongoRoomHistoryRepository:
             "status": "completed",
             "generated_at": generated_at,
             "generated_at_dt": self._parse_dt(generated_at),
+            "summary_language": summary_language,
             "summary_text": recap.get("summary_text") or "",
             "key_points": recap.get("key_points") or [],
             "highlights": recap.get("highlights") or [],
@@ -712,7 +714,7 @@ class MongoRoomHistoryRepository:
             summary_type=summary_type,
             status="completed",
             timestamp=generated_at,
-            summary_language=(result or {}).get("summary_language"),
+            summary_language=summary_language or (result or {}).get("summary_language"),
             source_stats=source_stats,
         )
 
@@ -724,6 +726,7 @@ class MongoRoomHistoryRepository:
         generated_at: str,
         source: Dict[str, Any],
         reason: str,
+        summary_language: Optional[str] = None,
     ) -> None:
         source_stats = source.get("source_stats") or {}
         duration_seconds = source.get("duration_seconds")
@@ -733,7 +736,8 @@ class MongoRoomHistoryRepository:
             "status": "skipped",
             "generated_at": generated_at,
             "generated_at_dt": self._parse_dt(generated_at),
-            "summary_text": "Not enough meeting content was available to generate a grounded summary.",
+            "summary_language": summary_language,
+            "summary_text": self._insufficient_summary_content_text(summary_language),
             "key_points": [],
             "highlights": [],
             "decisions": [],
@@ -760,7 +764,7 @@ class MongoRoomHistoryRepository:
             summary_type=summary_type,
             status="skipped",
             timestamp=generated_at,
-            summary_language=(result or {}).get("summary_language"),
+            summary_language=summary_language or (result or {}).get("summary_language"),
             source_stats=source_stats,
             error=reason,
         )
@@ -1104,6 +1108,18 @@ class MongoRoomHistoryRepository:
             return None
         normalized = value.strip()
         return normalized or None
+
+    def _insufficient_summary_content_text(self, language: Optional[str]) -> str:
+        messages = {
+            "vi": "Không có đủ nội dung cuộc họp để tạo bản tóm tắt có căn cứ.",
+            "en": "Not enough meeting content was available to generate a grounded summary.",
+            "ja": "根拠のある要約を作成するための会議内容が十分にありません。",
+            "zh": "没有足够的会议内容来生成有依据的摘要。",
+            "ko": "근거 있는 요약을 생성할 만큼 회의 내용이 충분하지 않습니다.",
+            "fr": "Le contenu de la réunion est insuffisant pour générer un résumé fondé.",
+            "es": "No hay suficiente contenido de la reunión para generar un resumen fundamentado.",
+        }
+        return messages.get(language or "", messages["en"])
 
     def _summary_source_message(self, message: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         kind = message.get("kind")

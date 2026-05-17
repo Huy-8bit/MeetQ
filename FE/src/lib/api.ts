@@ -173,10 +173,22 @@ export const api = {
     );
   },
 
-  generateRoomSummary(roomId: string, type?: MeetingSummaryType) {
-    const query = type ? `?${new URLSearchParams({ type }).toString()}` : "";
-    return requestJson<GenerateMeetingSummaryResponse>(`/api/rooms/${roomId}/summary${query}`, {
+  generateRoomSummary(
+    roomId: string,
+    type?: MeetingSummaryType,
+    options: { language?: string | null; token?: string | null } = {},
+  ) {
+    const query = new URLSearchParams();
+    if (type) {
+      query.set("type", type);
+    }
+    if (options.language) {
+      query.set("language", options.language);
+    }
+    const suffix = query.toString() ? `?${query.toString()}` : "";
+    return requestJson<GenerateMeetingSummaryResponse>(`/api/rooms/${roomId}/summary${suffix}`, {
       method: "POST",
+      headers: options.token ? buildAuthHeaders(options.token) : undefined,
       body: JSON.stringify({}),
     });
   },

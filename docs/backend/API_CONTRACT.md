@@ -436,9 +436,23 @@ Query:
   snapshot của room, gồm room metadata, participants, recent final transcripts /
   relay lines, và recent chat messages.
 - `type=final`: tạo final summary sau khi room đã kết thúc/expire. Nếu final
-  summary đã tồn tại, backend trả record hiện có và không regenerate.
+  summary đã tồn tại cùng `summary_language`, backend trả record hiện có và
+  không regenerate. Nếu requester yêu cầu language khác record hiện có,
+  backend regenerate/overwrite final summary cho target language đó.
 - omitted: nếu room còn active, backend tạo `interim`; nếu room đã terminal hoặc
   Redis hot state không còn nhưng Mongo archive còn, backend tạo/trả `final`.
+- `language` hoặc legacy alias `summary_language`: target language cho generated
+  summary content. Giá trị phải thuộc supported meeting languages
+  (`vi`, `en`, `ja`, `zh`, `ko`, `fr`, `es`) và không được là `auto`.
+
+Language resolution khi generate:
+
+1. explicit `language` / `summary_language` query.
+2. participant/requester selected language từ bearer token + current participant snapshot.
+3. token language nếu không còn participant snapshot.
+4. language duy nhất của active human participant nếu không ambiguous.
+5. first valid room language.
+6. `MEETING_SUMMARY_LANGUAGE` config default.
 
 Response dùng cùng schema với `GET /summary`.
 
@@ -449,6 +463,7 @@ Error cases:
 | `404` | `room_not_found` | Room không tồn tại trong Redis hoặc Mongo archive. |
 | `409` | `meeting_summary_not_ready` | Client yêu cầu `type=final` khi room vẫn đang active. |
 | `422` | `invalid_summary_type` | `type` không phải `interim` hoặc `final`. |
+| `422` | `invalid_summary_language` | `language` / `summary_language` không thuộc supported language set. |
 | `503` | `meeting_summary_unavailable` | MongoDB summary persistence không khả dụng. |
 
 ## `GET /api/rooms/{room_id}/summary`
