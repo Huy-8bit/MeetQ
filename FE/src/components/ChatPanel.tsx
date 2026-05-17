@@ -208,7 +208,6 @@ export function ChatPanel({
               onClick={() => handleModeChange("original_only")}
               disabled={disabled}
               title="Send without translation"
-              data-text-animate="cta"
             >
               Original
             </MotionButton>
@@ -218,9 +217,8 @@ export function ChatPanel({
               onClick={() => handleModeChange("translate")}
               disabled={disabled}
               title="Send with translation"
-              data-text-animate="cta"
             >
-              + Translate
+              Translate
             </MotionButton>
           </div>
         ) : null}
@@ -242,7 +240,6 @@ export function ChatPanel({
             type="submit"
             disabled={disabled || isSending || !inputText.trim()}
             attentionKey={inputText.trim() ? "chat-ready" : null}
-            data-text-animate="cta"
           >
             {isSending ? "Sending..." : "Send"}
           </MotionButton>

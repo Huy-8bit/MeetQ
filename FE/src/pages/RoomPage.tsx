@@ -363,15 +363,20 @@ export function RoomPage() {
   if ((snapshotExpired || showEndedSummary) && !session) {
     return (
       <main className="room-boot" ref={roomTextMotionRef}>
-        <div className="room-ended-summary-page">
+        <div className="room-ended-summary-page room-ended-summary-page-premium">
           <div className="room-ended-copy">
-            <span className="room-ended-kicker" data-text-animate="highlight">Meeting ended</span>
-            <h1 data-text-animate="line">Final summary</h1>
+            <span className="room-ended-mark" aria-hidden="true">MQ</span>
+            <span className="room-ended-kicker" data-text-animate="fade">Meeting ended</span>
+            <h1 data-text-animate="line">Summary vault</h1>
             <p data-text-animate="fade">
-              This room is closed. The final summary stays available here when the backend
-              finishes preparing it.
+              This room is closed. Review the final notes, decisions, and actions when MeetQ finishes preparing them.
             </p>
-            <button type="button" className="button-secondary" onClick={() => navigate("/")} data-text-animate="cta">
+            <div className="room-ended-meta-grid" aria-hidden="true">
+              <span>Final notes</span>
+              <span>Actions</span>
+              <span>Decisions</span>
+            </div>
+            <button type="button" className="button-secondary room-ended-home-button" onClick={() => navigate("/")} data-text-animate="cta">
               Back Home
             </button>
           </div>

@@ -14,6 +14,9 @@ logger = logging.getLogger(__name__)
 
 SUMMARY_TYPE_INTERIM = "interim"
 SUMMARY_TYPE_FINAL = "final"
+MIN_SUMMARY_SIGNAL_RECORDS = 2
+MIN_SUMMARY_SIGNAL_CHARS = 80
+MIN_RICH_SUMMARY_SIGNAL_CHARS = 140
 
 
 class MeetingSummaryService:
@@ -185,41 +188,58 @@ class MeetingSummaryService:
         if self.room_history is None:
             return None
 
-        source_stats = source.get("source_stats", {})
+        source_stats = dict(source.get("source_stats") or {})
+        source_metrics = _summary_source_metrics(source)
+        source_stats.update(source_metrics)
+        source["source_stats"] = source_stats
+        model = self.settings.openai_summary_model
         logger.info(
-            "meeting %s recap source collected: room_id=%s transcripts=%s relay=%s chat=%s included=%s summary_language=%s language_reason=%s",
+            "meeting %s recap source collected: room_id=%s summary_language=%s language_reason=%s source_records=%s transcripts=%s relay=%s chat=%s source_chars=%s token_estimate=%s model=%s truncated=%s selection_strategy=%s",
             summary_type,
             room_id,
+            summary_language,
+            language_resolution_reason or "provided",
+            source_stats.get("source_record_count", 0),
             source_stats.get("transcript_count", 0),
             source_stats.get("relay_count", 0),
             source_stats.get("chat_count", 0),
-            source_stats.get("included_message_count", 0),
-            summary_language,
-            language_resolution_reason or "provided",
+            source_stats.get("source_char_count", 0),
+            source_stats.get("source_token_estimate", 0),
+            model,
+            source_stats.get("truncated", False),
+            source_stats.get("selection_strategy"),
         )
 
         generated_at = self._now_str()
-        if not _has_summary_content(source):
+        enough_source, not_enough_reason = _has_summary_content(source, source_metrics=source_metrics)
+        if not enough_source:
             await self.room_history.persist_meeting_summary_skipped(
                 room_id=room_id,
                 summary_type=summary_type,
                 generated_at=generated_at,
                 source=source,
-                reason="insufficient_source_content",
+                reason=not_enough_reason,
                 summary_language=summary_language,
             )
             logger.info(
-                "meeting %s summary skipped: room_id=%s reason=insufficient_source_content summary_language=%s",
+                "meeting %s summary skipped: room_id=%s reason=%s summary_language=%s source_records=%s signal_records=%s signal_chars=%s source_chars=%s token_estimate=%s model=%s",
                 summary_type,
                 room_id,
+                not_enough_reason,
                 summary_language,
+                source_stats.get("source_record_count", 0),
+                source_stats.get("signal_record_count", 0),
+                source_stats.get("signal_char_count", 0),
+                source_stats.get("source_char_count", 0),
+                source_stats.get("source_token_estimate", 0),
+                model,
             )
             return await self.room_history.get_meeting_summary(room_id, summary_type=summary_type)
 
         summary = await generate_meeting_summary(
             source=source,
             api_key=self.settings.openai_api_key,
-            model=self.settings.openai_summary_model,
+            model=model,
             summary_language=summary_language,
             summary_type=summary_type,
         )
@@ -233,13 +253,21 @@ class MeetingSummaryService:
             summary_language=summary_language,
         )
         logger.info(
-            "meeting %s recap generated: room_id=%s summary_language=%s key_points=%s action_items=%s decisions=%s participant_highlights=%s",
+            "meeting %s recap generated: room_id=%s summary_language=%s model=%s source_records=%s source_chars=%s token_estimate=%s output_chars=%s key_points=%s action_items=%s decisions=%s risks_blockers=%s open_questions=%s next_steps=%s participant_highlights=%s",
             summary_type,
             room_id,
             summary_language,
+            model,
+            source_stats.get("source_record_count", 0),
+            source_stats.get("source_char_count", 0),
+            source_stats.get("source_token_estimate", 0),
+            _summary_output_char_count(summary),
             len(summary.get("key_points") or []),
             len(summary.get("action_items") or []),
             len(summary.get("decisions") or []),
+            len(summary.get("risks_blockers") or []),
+            len(summary.get("open_questions") or []),
+            len(summary.get("next_steps") or []),
             len(summary.get("participant_highlights") or []),
         )
         return await self.room_history.get_meeting_summary(room_id, summary_type=summary_type)
@@ -290,9 +318,99 @@ class MeetingSummaryService:
         return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
-def _has_summary_content(source: dict) -> bool:
+def _has_summary_content(
+    source: dict,
+    *,
+    source_metrics: Optional[Dict[str, int]] = None,
+) -> tuple[bool, str]:
+    metrics = source_metrics or _summary_source_metrics(source)
+    signal_records = metrics.get("signal_record_count", 0)
+    signal_chars = metrics.get("signal_char_count", 0)
+    if signal_records <= 0:
+        return False, "no_source_content"
+    if signal_chars >= MIN_RICH_SUMMARY_SIGNAL_CHARS:
+        return True, "sufficient_source_content"
+    if signal_records >= MIN_SUMMARY_SIGNAL_RECORDS and signal_chars >= MIN_SUMMARY_SIGNAL_CHARS:
+        return True, "sufficient_source_content"
+    return False, "insufficient_source_content"
+
+
+def _summary_source_metrics(source: dict) -> Dict[str, int]:
     messages = source.get("messages") or []
-    for message in messages:
-        if isinstance(message, dict) and (message.get("text") or message.get("source_text")):
-            return True
-    return False
+    source_char_count = 0
+    signal_by_key: Dict[str, int] = {}
+    for index, message in enumerate(messages):
+        if not isinstance(message, dict):
+            continue
+        raw_text = _summary_message_text(message)
+        if raw_text:
+            source_char_count += len(raw_text)
+        signal_text = _summary_message_signal_text(message)
+        if not signal_text:
+            continue
+        signal_key = (
+            str(message.get("utterance_id"))
+            if message.get("utterance_id")
+            else str(message.get("message_id") or index)
+        )
+        signal_by_key[signal_key] = max(
+            signal_by_key.get(signal_key, 0),
+            len(signal_text),
+        )
+
+    return {
+        "source_record_count": len([item for item in messages if isinstance(item, dict)]),
+        "source_char_count": source_char_count,
+        "source_token_estimate": max((source_char_count + 3) // 4, 0),
+        "signal_record_count": len(signal_by_key),
+        "signal_char_count": sum(signal_by_key.values()),
+    }
+
+
+def _summary_message_text(message: Dict[str, Any]) -> str:
+    parts: list[str] = []
+    for key in ("source_text", "text"):
+        value = message.get(key)
+        if isinstance(value, str) and value.strip():
+            parts.append(value.strip())
+    translations = message.get("translations")
+    if isinstance(translations, list):
+        for translation in translations:
+            if not isinstance(translation, dict):
+                continue
+            text = translation.get("text") or translation.get("translated_text")
+            if isinstance(text, str) and text.strip():
+                parts.append(text.strip())
+    return "\n".join(parts)
+
+
+def _summary_message_signal_text(message: Dict[str, Any]) -> str:
+    kind = message.get("kind")
+    preferred_keys = {
+        "source": ("source_text", "text"),
+        "relay": ("source_text", "text"),
+        "translated": ("source_text", "text"),
+        "chat": ("text",),
+    }.get(kind, ("source_text", "text"))
+    for key in preferred_keys:
+        value = message.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
+def _summary_output_char_count(summary: Dict[str, Any]) -> int:
+    total = 0
+    for value in summary.values():
+        total += _summary_value_char_count(value)
+    return total
+
+
+def _summary_value_char_count(value: Any) -> int:
+    if isinstance(value, str):
+        return len(value)
+    if isinstance(value, list):
+        return sum(_summary_value_char_count(item) for item in value)
+    if isinstance(value, dict):
+        return sum(_summary_value_char_count(item) for item in value.values())
+    return 0

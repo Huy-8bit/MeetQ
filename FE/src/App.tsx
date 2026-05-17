@@ -1,35 +1,28 @@
-import { AnimatePresence, motion, useReducedMotion } from "motion/react";
+import { AnimatePresence } from "motion/react";
 import { Navigate, Route, Routes, useLocation } from "react-router-dom";
+import { PageTransition, TransitionOverlay } from "./components/PageTransition";
 import { HomePage } from "./pages/HomePage";
 import { RoomPage } from "./pages/RoomPage";
 import { TestPage } from "./pages/TestPage";
 
 export default function App() {
   const location = useLocation();
-  const shouldReduceMotion = useReducedMotion();
+  const routeTransitionKey = `${location.pathname}${location.search}`;
 
   return (
     <div className="app-route-frame">
+      <div className="route-ambient-field" aria-hidden="true" />
       <AnimatePresence mode="wait" initial={false}>
-        <motion.div
-          key={location.pathname}
-          className="app-route-view"
-          initial={shouldReduceMotion ? { opacity: 0.96 } : { opacity: 0, y: 8, scale: 0.995 }}
-          animate={{ opacity: 1, y: 0, scale: 1 }}
-          exit={shouldReduceMotion ? { opacity: 0.96 } : { opacity: 0, y: -4 }}
-          transition={{
-            duration: shouldReduceMotion ? 0.08 : 0.22,
-            ease: [0.22, 1, 0.36, 1],
-          }}
-        >
+        <PageTransition key={routeTransitionKey} routeKey={routeTransitionKey}>
           <Routes location={location}>
             <Route path="/" element={<HomePage />} />
             <Route path="/rooms/:roomId" element={<RoomPage />} />
             <Route path="/test" element={<TestPage />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
-        </motion.div>
+        </PageTransition>
       </AnimatePresence>
+      <TransitionOverlay transitionKey={routeTransitionKey} />
     </div>
   );
 }

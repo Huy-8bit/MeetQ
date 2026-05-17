@@ -3,7 +3,7 @@ import { Link, useLocation, useNavigate } from "react-router-dom";
 import { motion, AnimatePresence } from "motion/react";
 import gsap from "gsap";
 import { ScrollTrigger } from "gsap/ScrollTrigger";
-import { Captions, CheckCircle2, Globe2, Mic2, Power, Volume2, Zap } from "lucide-react";
+import { CheckCircle2, Globe2, Mic2, Zap } from "lucide-react";
 import { api, ApiError } from "../lib/api";
 import { useAmbientFloat, usePrefersReducedMotion } from "../lib/motion";
 import { useTextAnimations } from "../lib/textAnimations";
@@ -1100,35 +1100,21 @@ export function HomePage() {
                 <small>Pick what MeetQ sends back to the room</small>
               </div>
               <div className="hp-brse-mode" role="group" aria-label="BRSE output mode">
-                {BRSE_CREATE_MODE_OPTIONS.map((option) => {
-                  const RelayIcon =
-                    option.value === "voice_text"
-                      ? Volume2
-                      : option.value === "text_only"
-                        ? Captions
-                        : Power;
-
-                  return (
-                    <MotionButton
-                      key={option.value}
-                      type="button"
-                      className={[
-                        "hp-brse-mode-option",
-                        option.value === brseCreateMode ? "is-active" : "",
-                      ].filter(Boolean).join(" ")}
-                      aria-pressed={option.value === brseCreateMode}
-                      onClick={() => setBrseCreateMode(option.value)}
-                    >
-                      <span className="hp-relay-option-icon" aria-hidden="true">
-                        <RelayIcon size={16} strokeWidth={2.2} />
-                      </span>
-                      <span className="hp-relay-option-copy">
-                        <strong>{option.label}</strong>
-                        <span>{option.detail}</span>
-                      </span>
-                    </MotionButton>
-                  );
-                })}
+                {BRSE_CREATE_MODE_OPTIONS.map((option) => (
+                  <MotionButton
+                    key={option.value}
+                    type="button"
+                    className={[
+                      "hp-brse-mode-option",
+                      option.value === brseCreateMode ? "is-active" : "",
+                    ].filter(Boolean).join(" ")}
+                    aria-label={`${option.label}: ${option.detail}`}
+                    aria-pressed={option.value === brseCreateMode}
+                    onClick={() => setBrseCreateMode(option.value)}
+                  >
+                    <strong>{option.label}</strong>
+                  </MotionButton>
+                ))}
               </div>
             </section>
 

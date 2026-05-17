@@ -70,6 +70,11 @@ export function ParticipantList({
         {participants.map((participant) => {
           const isSelf = participant.participant_id === selfParticipantId;
           const isVirtual = participant.kind === "virtual_brse" || participant.is_virtual;
+          const participantStatus = isVirtual
+            ? brsePeopleCopy.virtual
+            : participant.muted_by_host
+              ? "Muted by host"
+              : formatParticipantStatus(participant.status);
           const canMute =
             isCurrentUserHost &&
             !isSelf &&
@@ -82,19 +87,25 @@ export function ParticipantList({
               key={participant.participant_id}
               data-participant-motion
             >
-              <div>
-                <strong data-text-animate="fade">
-                  {participant.display_name}
-                  {isSelf ? " (You)" : ""}
-                </strong>
-                <p data-text-animate="fade">
-                  {isVirtual
-                    ? brsePeopleCopy.virtual
-                    : participant.muted_by_host
-                      ? "Muted by host"
-                      : participant.status}
-                </p>
+              <div
+                className={[
+                  "participant-avatar",
+                  isVirtual ? "is-virtual" : "",
+                  participant.status === "connected" ? "is-online" : "",
+                ].filter(Boolean).join(" ")}
+                aria-hidden="true"
+              >
+                <span>{getParticipantInitials(participant.display_name, Boolean(isVirtual))}</span>
               </div>
+
+              <div className="participant-main">
+                <div className="participant-identity">
+                  <strong data-text-animate="fade">{participant.display_name}</strong>
+                  {isSelf ? <span className="participant-you-chip">You</span> : null}
+                </div>
+                <p data-text-animate="fade">{participantStatus}</p>
+              </div>
+
               <div className="participant-row-tags">
                 {participant.is_host ? (
                   <span className="badge badge-host">Host</span>
@@ -165,4 +176,33 @@ function getBrsePeopleCopy({
     virtual: "AI voice + text relay participant",
     badge: "AI relay",
   };
+}
+
+function getParticipantInitials(displayName: string, isVirtual: boolean): string {
+  if (isVirtual) {
+    return "AI";
+  }
+
+  const normalized = displayName.trim();
+  if (!normalized) {
+    return "U";
+  }
+
+  const parts = normalized.split(/\s+/).slice(0, 2);
+  return parts.map((part) => part[0]?.toUpperCase()).join("") || "U";
+}
+
+function formatParticipantStatus(status: ParticipantSnapshot["status"]): string {
+  switch (status) {
+    case "connected":
+      return "In room";
+    case "joining":
+      return "Joining";
+    case "reconnecting":
+      return "Reconnecting";
+    case "disconnected":
+      return "Disconnected";
+    default:
+      return status;
+  }
 }

@@ -335,7 +335,9 @@ export interface MeetingSummarySourceWindow {
   from?: string | null;
   to?: string | null;
   message_count?: number;
+  total_message_count?: number;
   max_messages?: number;
+  selection_strategy?: string;
   [key: string]: unknown;
 }
 
@@ -346,6 +348,11 @@ export interface MeetingSummarySourceStats {
   translated_transcript_count?: number;
   chat_count?: number;
   included_message_count?: number;
+  source_char_count?: number;
+  source_token_estimate?: number;
+  signal_record_count?: number;
+  signal_char_count?: number;
+  selection_strategy?: string;
   truncated?: boolean;
   [key: string]: unknown;
 }
@@ -364,6 +371,9 @@ export interface MeetingSummaryResponse {
   decisions?: string[] | null;
   action_items?: MeetingSummaryActionItemPayload[] | null;
   action_item_details?: MeetingSummaryActionItem[] | null;
+  risks_blockers?: string[] | null;
+  open_questions?: string[] | null;
+  next_steps?: string[] | null;
   participant_highlights?: MeetingSummaryParticipantItem[] | null;
   participant_summary?: MeetingSummaryParticipantItem[] | null;
   duration_seconds?: number | null;

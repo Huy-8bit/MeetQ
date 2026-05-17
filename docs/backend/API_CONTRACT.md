@@ -10,7 +10,7 @@
 >
 > Update note (2026-05-08): relay rooms now expose additive `brse_output_mode="voice_text" | "text_only"`. `voice_text` preserves existing BRSE relay voice + text behavior. `text_only` keeps BRSE runtime, source transcript, and relay text active, but suppresses BRSE audio track publication and relay audio frames. This is distinct from `brse_enabled=false` and from `brse_mode="silent_summary"`.
 >
-> Update note (2026-05-08): meeting summaries now return a structured meeting recap package. Canonical recap fields are `summary_text`, `key_points`, `action_items`, `decisions`, and `participant_highlights`. Backward-compatible aliases `highlights` and `participant_summary` remain in the response and mirror the canonical fields.
+> Update note (2026-05-08): meeting summaries now return a structured meeting recap package. Canonical recap fields are `summary_text`, `key_points`, `action_items`, `decisions`, `risks_blockers`, `open_questions`, `next_steps`, and `participant_highlights`. Backward-compatible aliases `highlights` and `participant_summary` remain in the response and mirror the canonical fields.
 >
 > Update note (2026-05-06): meeting summaries now support two stored types: `interim` live checkpoint summaries and `final` post-meeting summaries. `POST /api/rooms/{room_id}/summary` generates/refreshes summary; `GET /api/rooms/{room_id}/summary?type=interim|final` reads stored summary. Default GET type remains `final`.
 >
@@ -501,6 +501,9 @@ Nếu chưa có summary record, trả `404 meeting_summary_not_found`.
   "key_points": ["..."],
   "decisions": ["..."],
   "action_items": ["..."],
+  "risks_blockers": ["..."],
+  "open_questions": ["..."],
+  "next_steps": ["..."],
   "participant_highlights": [
     {
       "participant_id": "pt_...",
@@ -529,7 +532,9 @@ Nếu chưa có summary record, trả `404 meeting_summary_not_found`.
     "from": "ISO-8601 UTC string | null",
     "to": "ISO-8601 UTC string | null",
     "message_count": 14,
-    "max_messages": 240
+    "total_message_count": 14,
+    "max_messages": 240,
+    "selection_strategy": "all_messages | evenly_sampled_by_time | latest_redis_snapshot"
   },
   "source_stats": {
     "transcript_count": 12,
@@ -538,7 +543,10 @@ Nếu chưa có summary record, trả `404 meeting_summary_not_found`.
     "translated_transcript_count": 0,
     "chat_count": 2,
     "included_message_count": 14,
-    "truncated": false
+    "truncated": false,
+    "source_char_count": 2200,
+    "source_token_estimate": 550,
+    "selection_strategy": "all_messages | evenly_sampled_by_time | latest_redis_snapshot"
   },
   "error": null
 }
@@ -550,6 +558,9 @@ Recap field semantics:
 - `key_points`: main discussion points; not follow-up tasks.
 - `action_items`: explicit next tasks only. If no clear evidence, this is `[]`.
 - `decisions`: clearly agreed decisions only. If no clear evidence, this is `[]`.
+- `risks_blockers`: explicit blockers, issues, constraints, or risks. If no clear evidence, this is `[]`.
+- `open_questions`: explicit unresolved questions or pending decisions. If no clear evidence, this is `[]`.
+- `next_steps`: explicit follow-up checkpoints or review steps. If no clear evidence, this is `[]`.
 - `participant_highlights`: short grounded contribution summary per participant.
 - `highlights`: backward-compatible alias of `key_points`.
 - `participant_summary`: backward-compatible alias of `participant_highlights`.

@@ -466,6 +466,9 @@ class MeetingSummaryResponse(BaseModel):
     action_item_details: List[MeetingSummaryActionItem] = Field(
         default_factory=list
     )
+    risks_blockers: List[str] = Field(default_factory=list)
+    open_questions: List[str] = Field(default_factory=list)
+    next_steps: List[str] = Field(default_factory=list)
     participant_highlights: List[MeetingSummaryParticipantItem] = Field(
         default_factory=list
     )
@@ -503,6 +506,26 @@ class MeetingSummaryResponse(BaseModel):
         normalized["action_items"] = action_items
         normalized["action_item_details"] = action_item_details
 
+        normalized["risks_blockers"] = _meeting_summary_first_string_list(
+            normalized,
+            "risks_blockers",
+            "blockers",
+            "risks",
+            "issues",
+        )
+        normalized["open_questions"] = _meeting_summary_first_string_list(
+            normalized,
+            "open_questions",
+            "unanswered_questions",
+            "questions",
+        )
+        normalized["next_steps"] = _meeting_summary_first_string_list(
+            normalized,
+            "next_steps",
+            "follow_ups",
+            "follow_up",
+        )
+
         participant_highlights = _meeting_summary_participant_items(
             normalized.get("participant_highlights")
         )
@@ -517,6 +540,14 @@ class MeetingSummaryResponse(BaseModel):
         normalized["participant_summary"] = participant_summary
 
         return normalized
+
+
+def _meeting_summary_first_string_list(data: Dict[str, Any], *keys: str) -> List[str]:
+    for key in keys:
+        result = _meeting_summary_string_list(data.get(key))
+        if result:
+            return result
+    return []
 
 
 TestSessionStatus = Literal[

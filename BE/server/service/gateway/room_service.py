@@ -1059,6 +1059,7 @@ class RoomService:
             "included_message_count": len(messages),
             "max_source_items": max_messages,
             "truncated": total_count > len(messages),
+            "selection_strategy": "latest_redis_snapshot",
         }
         return {
             "room": {
@@ -1113,6 +1114,8 @@ class RoomService:
                 "to": last_at,
                 "message_count": len(messages),
                 "max_messages": max_messages,
+                "total_message_count": total_count,
+                "selection_strategy": "latest_redis_snapshot",
             },
             "source_stats": source_stats,
             "duration_seconds": duration_seconds,

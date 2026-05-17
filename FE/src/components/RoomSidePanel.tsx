@@ -77,7 +77,6 @@ export function RoomSidePanel({
     >
       <div className="side-panel-header">
         <div className="side-panel-heading">
-          <span className="side-panel-kicker" data-text-animate="highlight">Context</span>
           <div>
             <strong className="side-panel-title" data-text-animate="fade">{activeTabCopy.label}</strong>
             <p className="side-panel-subtitle" data-text-animate="fade">{activeTabCopy.detail}</p>

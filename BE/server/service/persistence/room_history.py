@@ -20,6 +20,22 @@ ASCENDING = 1
 DESCENDING = -1
 
 
+def _summary_sample_offsets(total_count: int, max_messages: int) -> list[int]:
+    if total_count <= 0 or max_messages <= 0:
+        return []
+    limit = min(total_count, max_messages)
+    if limit == total_count:
+        return list(range(total_count))
+    if limit == 1:
+        return [total_count - 1]
+
+    last_index = total_count - 1
+    step = last_index / float(limit - 1)
+    offsets = [int(index * step) for index in range(limit)]
+    offsets[-1] = last_index
+    return offsets
+
+
 class MongoRoomHistoryRepository:
     """MongoDB sidecar archive for room history.
 
@@ -514,6 +530,9 @@ class MongoRoomHistoryRepository:
             "decisions": [],
             "action_items": [],
             "action_item_details": [],
+            "risks_blockers": [],
+            "open_questions": [],
+            "next_steps": [],
             "participant_highlights": [],
             "participant_summary": [],
             "duration_seconds": None,
@@ -590,6 +609,7 @@ class MongoRoomHistoryRepository:
         *,
         max_messages: int,
     ) -> Dict[str, Any]:
+        max_messages = max(max_messages, 1)
         room_doc = await self.db[self.rooms_collection].find_one(
             {"room_id": room_id},
             {"_id": 0},
@@ -626,20 +646,29 @@ class MongoRoomHistoryRepository:
         chat_count = await self.db[self.messages_collection].count_documents(
             {"room_id": room_id, "kind": "chat"}
         )
-        message_docs = await self.db[self.messages_collection].find(
-            {"room_id": room_id, "kind": kind_filter},
-            {"_id": 0},
-        ).sort("created_at_dt", ASCENDING).limit(max(max_messages, 1)).to_list(length=max(max_messages, 1))
+        message_docs = await self._collect_summary_message_docs(
+            room_id=room_id,
+            kind_filter=kind_filter,
+            total_count=total_count,
+            max_messages=max_messages,
+        )
         messages = [
             summary_message
             for message in message_docs
             if (summary_message := self._summary_source_message(message)) is not None
         ]
+        selection_strategy = (
+            "all_messages"
+            if total_count <= max(max_messages, 1)
+            else "evenly_sampled_by_time"
+        )
         source_window = self._source_window_from_messages(
             messages,
             source="mongodb_archive",
             max_messages=max_messages,
         )
+        source_window["total_message_count"] = total_count
+        source_window["selection_strategy"] = selection_strategy
         duration_seconds = room_doc.get("duration_seconds")
         if duration_seconds is None:
             duration_seconds = self._duration_seconds(
@@ -657,6 +686,7 @@ class MongoRoomHistoryRepository:
             "included_message_count": len(messages),
             "max_source_items": max_messages,
             "truncated": total_count > len(message_docs),
+            "selection_strategy": selection_strategy,
         }
         return {
             "room": self._summary_room_doc(room_doc, duration_seconds=duration_seconds),
@@ -693,6 +723,9 @@ class MongoRoomHistoryRepository:
             "decisions": recap.get("decisions") or [],
             "action_items": recap.get("action_items") or [],
             "action_item_details": recap.get("action_item_details") or [],
+            "risks_blockers": recap.get("risks_blockers") or [],
+            "open_questions": recap.get("open_questions") or [],
+            "next_steps": recap.get("next_steps") or [],
             "participant_highlights": recap.get("participant_highlights") or [],
             "participant_summary": recap.get("participant_summary") or [],
             "duration_seconds": duration_seconds,
@@ -743,6 +776,9 @@ class MongoRoomHistoryRepository:
             "decisions": [],
             "action_items": [],
             "action_item_details": [],
+            "risks_blockers": [],
+            "open_questions": [],
+            "next_steps": [],
             "participant_highlights": [],
             "participant_summary": [],
             "duration_seconds": duration_seconds,
@@ -1036,6 +1072,25 @@ class MongoRoomHistoryRepository:
             "decisions": self._string_list(payload.get("decisions")),
             "action_items": action_items,
             "action_item_details": action_item_details,
+            "risks_blockers": self._first_string_list(
+                payload,
+                "risks_blockers",
+                "blockers",
+                "risks",
+                "issues",
+            ),
+            "open_questions": self._first_string_list(
+                payload,
+                "open_questions",
+                "unanswered_questions",
+                "questions",
+            ),
+            "next_steps": self._first_string_list(
+                payload,
+                "next_steps",
+                "follow_ups",
+                "follow_up",
+            ),
             "participant_highlights": participant_highlights,
             "participant_summary": list(participant_highlights),
         }
@@ -1049,6 +1104,13 @@ class MongoRoomHistoryRepository:
             if text:
                 result.append(text)
         return result
+
+    def _first_string_list(self, payload: Dict[str, Any], *keys: str) -> list[str]:
+        for key in keys:
+            result = self._string_list(payload.get(key))
+            if result:
+                return result
+        return []
 
     def _action_item_texts(self, value: Any) -> list[str]:
         if not isinstance(value, list):
@@ -1120,6 +1182,33 @@ class MongoRoomHistoryRepository:
             "es": "No hay suficiente contenido de la reunión para generar un resumen fundamentado.",
         }
         return messages.get(language or "", messages["en"])
+
+    async def _collect_summary_message_docs(
+        self,
+        *,
+        room_id: str,
+        kind_filter: Dict[str, Any],
+        total_count: int,
+        max_messages: int,
+    ) -> list[Dict[str, Any]]:
+        query = {"room_id": room_id, "kind": kind_filter}
+        projection = {"_id": 0}
+        limit = max(max_messages, 1)
+        if total_count <= limit:
+            return await self.db[self.messages_collection].find(
+                query,
+                projection,
+            ).sort("created_at_dt", ASCENDING).limit(limit).to_list(length=limit)
+
+        docs: list[Dict[str, Any]] = []
+        for offset in _summary_sample_offsets(total_count, limit):
+            page = await self.db[self.messages_collection].find(
+                query,
+                projection,
+            ).sort("created_at_dt", ASCENDING).skip(offset).limit(1).to_list(length=1)
+            if page:
+                docs.append(page[0])
+        return docs
 
     def _summary_source_message(self, message: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         kind = message.get("kind")

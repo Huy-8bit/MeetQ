@@ -261,6 +261,9 @@ export function MeetingSummaryPanel({
                 visibleSummary!.action_item_details,
               )}
             />
+            <SummaryList title="Risks and blockers" items={visibleSummary!.risks_blockers ?? []} />
+            <SummaryList title="Open questions" items={visibleSummary!.open_questions ?? []} />
+            <SummaryList title="Next steps" items={visibleSummary!.next_steps ?? []} />
             <ParticipantSummaries
               items={
                 visibleSummary!.participant_highlights?.length
@@ -463,6 +466,9 @@ function hasSummaryContent(summary: MeetingSummaryResponse | null): boolean {
       || summary.highlights?.length
       || summary.decisions?.length
       || summary.action_items?.length
+      || summary.risks_blockers?.length
+      || summary.open_questions?.length
+      || summary.next_steps?.length
       || summary.participant_highlights?.length
       || summary.participant_summary?.length,
   );

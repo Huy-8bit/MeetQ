@@ -81,3 +81,8 @@ def test_summary_prompt_requires_target_language():
     assert "Write the summary in Vietnamese." in prompt
     assert "Do not default to English unless target language is English." in prompt
     assert "If the source transcript contains multiple languages" in prompt
+    assert "Preserve technical terms" in prompt
+    assert "action_item_details" in prompt
+    assert "risks_blockers" in prompt
+    assert "open_questions" in prompt
+    assert "next_steps" in prompt

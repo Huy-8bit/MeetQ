@@ -142,15 +142,21 @@ export function JoinRoomCard({
 
   return (
     <section className="join-room-shell">
-      <div className="join-room-card join-room-card-minimal" ref={joinMotionRef}>
-        <div className="join-room-topline" data-join-motion>
-          <div>
-            <span className="product-kicker" data-text-animate="highlight">Join</span>
-            <h1 data-text-animate="line">Enter room</h1>
+      <div className="join-room-card join-room-card-minimal join-room-card-premium" ref={joinMotionRef}>
+        <span className="join-room-ambient-sweep join-room-ambient-sweep-a" aria-hidden="true" />
+        <span className="join-room-ambient-sweep join-room-ambient-sweep-b" aria-hidden="true" />
+
+        <div className="join-room-topline join-room-hero-line" data-join-motion>
+          <div className="join-room-title-block">
+            <span className="product-kicker" data-text-animate="fade">Room access</span>
+            <h1 data-text-animate="line">Enter MeetQ room</h1>
+            <p data-text-animate="fade">
+              Confirm your name and language before joining the live AI relay.
+            </p>
           </div>
 
           <div className="join-room-id-badge" aria-label={`Room ${room.room_id}`} data-text-animate="fade">
-            <span>Room</span>
+            <span>Room ID</span>
             <strong>{room.room_id}</strong>
           </div>
         </div>
@@ -168,10 +174,11 @@ export function JoinRoomCard({
             <p data-text-animate="fade">Room expired.</p>
           </div>
         ) : (
-          <>
+          <div className="join-room-body-grid">
             <div className="join-room-form-card" data-join-motion>
               <div className="join-form-header">
-                <h2 data-text-animate="line">Join as</h2>
+                <span data-text-animate="fade">Profile</span>
+                <h2 data-text-animate="fade">Join as participant</h2>
               </div>
 
               <form className="join-form redesigned-join-form" onSubmit={(event) => void handleSubmit(event)}>
@@ -236,7 +243,7 @@ export function JoinRoomCard({
               brseRoomMode={brseRoomMode}
               brseAudioExpected={brseAudioExpected}
             />
-          </>
+          </div>
         )}
       </div>
     </section>
