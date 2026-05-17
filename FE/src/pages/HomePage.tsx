@@ -3,7 +3,7 @@ import { Link, useLocation, useNavigate } from "react-router-dom";
 import { motion, AnimatePresence } from "motion/react";
 import gsap from "gsap";
 import { ScrollTrigger } from "gsap/ScrollTrigger";
-import { Zap, Mic2, CheckCircle2, Globe2 } from "lucide-react";
+import { Captions, CheckCircle2, Globe2, Mic2, Power, Volume2, Zap } from "lucide-react";
 import { api, ApiError } from "../lib/api";
 import { useAmbientFloat, usePrefersReducedMotion } from "../lib/motion";
 import { useTextAnimations } from "../lib/textAnimations";
@@ -1055,23 +1055,19 @@ export function HomePage() {
               <div>
                 <p className="hp-card-label" data-text-animate="fade">New room</p>
                 <h2 className="hp-card-title" data-text-animate="fade">
-                  <span>Launch a live</span>
-                  <span>AI relay</span>
+                  <span>Create AI relay</span>
+                  <span>room</span>
                 </h2>
                 <p className="hp-card-subtitle" data-text-animate="fade">
-                  Speak naturally. MeetQ translates in real time so every participant hears and reads their language.
+                  Choose languages, then let MeetQ handle live voice and captions.
                 </p>
-                <div className="hp-flow-steps" aria-hidden="true">
-                  <span>Speak</span>
-                  <span>AI translates</span>
-                  <span>Everyone follows</span>
-                </div>
               </div>
             </div>
 
             <section className="hp-create-section hp-language-section hp-form-section">
               <div className="hp-section-heading">
                 <span data-text-animate="fade">Conversation pair</span>
+                <small>Languages for the real-time bridge</small>
               </div>
               <div className="hp-lang-row">
                 <div className="hp-lang-slot">
@@ -1101,23 +1097,38 @@ export function HomePage() {
             <section className="hp-create-section hp-option-section hp-form-section hp-relay-section">
               <div className="hp-section-heading">
                 <span data-text-animate="fade">AI relay</span>
+                <small>Pick what MeetQ sends back to the room</small>
               </div>
               <div className="hp-brse-mode" role="group" aria-label="BRSE output mode">
-                {BRSE_CREATE_MODE_OPTIONS.map((option) => (
-                  <MotionButton
-                    key={option.value}
-                    type="button"
-                    className={[
-                      "hp-brse-mode-option",
-                      option.value === brseCreateMode ? "is-active" : "",
-                    ].filter(Boolean).join(" ")}
-                    aria-pressed={option.value === brseCreateMode}
-                    onClick={() => setBrseCreateMode(option.value)}
-                  >
-                    <strong>{option.label}</strong>
-                    {option.value === brseCreateMode ? <span>{option.detail}</span> : null}
-                  </MotionButton>
-                ))}
+                {BRSE_CREATE_MODE_OPTIONS.map((option) => {
+                  const RelayIcon =
+                    option.value === "voice_text"
+                      ? Volume2
+                      : option.value === "text_only"
+                        ? Captions
+                        : Power;
+
+                  return (
+                    <MotionButton
+                      key={option.value}
+                      type="button"
+                      className={[
+                        "hp-brse-mode-option",
+                        option.value === brseCreateMode ? "is-active" : "",
+                      ].filter(Boolean).join(" ")}
+                      aria-pressed={option.value === brseCreateMode}
+                      onClick={() => setBrseCreateMode(option.value)}
+                    >
+                      <span className="hp-relay-option-icon" aria-hidden="true">
+                        <RelayIcon size={16} strokeWidth={2.2} />
+                      </span>
+                      <span className="hp-relay-option-copy">
+                        <strong>{option.label}</strong>
+                        <span>{option.detail}</span>
+                      </span>
+                    </MotionButton>
+                  );
+                })}
               </div>
             </section>
 
