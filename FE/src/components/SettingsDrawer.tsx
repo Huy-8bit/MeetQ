@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import { useDrawerRevealMotion } from "../lib/motion";
+import { useTextAnimations } from "../lib/textAnimations";
 import { MotionButton } from "./MotionButton";
 
 interface SettingsDrawerProps {
@@ -18,6 +19,9 @@ export function SettingsDrawer({
   title = "Devices",
 }: SettingsDrawerProps) {
   const drawerMotionRef = useDrawerRevealMotion<HTMLDivElement>(open);
+  useTextAnimations(drawerMotionRef, {
+    dependencies: [open, eyebrow, title],
+  });
 
   if (!open) {
     return null;
@@ -39,14 +43,15 @@ export function SettingsDrawer({
       >
         <header className="settings-drawer-header">
           <div>
-            <span>{eyebrow}</span>
-            <h2 id="settings-drawer-title">{title}</h2>
+            <span data-text-animate="highlight">{eyebrow}</span>
+            <h2 id="settings-drawer-title" data-text-animate="line">{title}</h2>
           </div>
           <MotionButton
             className="settings-drawer-close"
             type="button"
             onClick={onClose}
             aria-label="Close settings"
+            data-text-animate="cta"
           >
             Close
           </MotionButton>

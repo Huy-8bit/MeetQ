@@ -2,6 +2,7 @@ import type { ParticipantSnapshot } from "../types/api";
 import type { BrseRoomMode } from "../lib/brseModes";
 import { getLanguageLabel } from "../lib/languages";
 import { useRevealMotion } from "../lib/motion";
+import { useTextAnimations } from "../lib/textAnimations";
 import { MotionButton } from "./MotionButton";
 
 interface ParticipantListProps {
@@ -35,6 +36,9 @@ export function ParticipantList({
     scaleFrom: 0.996,
     dependencies: [participants.length, brseEnabled, brseRoomMode, brseAudioExpected],
   });
+  useTextAnimations(participantMotionRef, {
+    dependencies: [participants.length, brseEnabled, brseRoomMode, brseAudioExpected],
+  });
   const brsePeopleCopy = getBrsePeopleCopy({
     brseEnabled,
     brseRoomMode,
@@ -48,18 +52,18 @@ export function ParticipantList({
     >
       <div className="panel-header">
         <div>
-          <h3>Participants</h3>
-          <p>{brsePeopleCopy.panel}</p>
+          <h3 data-text-animate="fade">Participants</h3>
+          <p data-text-animate="fade">{brsePeopleCopy.panel}</p>
         </div>
-        <span className="panel-count">{participants.length}</span>
+        <span className="panel-count" data-text-animate="fade">{participants.length}</span>
       </div>
 
       <div className="participant-list">
         {participants.length === 0 ? (
           <div className="people-empty panel-empty-state" data-participant-motion>
-            <span className="panel-empty-kicker">People</span>
-            <strong>No participants yet</strong>
-            <p>Joined participants and BRSE relay presence will appear here.</p>
+            <span className="panel-empty-kicker" data-text-animate="highlight">People</span>
+            <strong data-text-animate="fade">No participants yet</strong>
+            <p data-text-animate="fade">Joined participants and BRSE relay presence will appear here.</p>
           </div>
         ) : null}
 
@@ -79,11 +83,11 @@ export function ParticipantList({
               data-participant-motion
             >
               <div>
-                <strong>
+                <strong data-text-animate="fade">
                   {participant.display_name}
                   {isSelf ? " (You)" : ""}
                 </strong>
-                <p>
+                <p data-text-animate="fade">
                   {isVirtual
                     ? brsePeopleCopy.virtual
                     : participant.muted_by_host

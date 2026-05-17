@@ -35,6 +35,7 @@ import {
   type AppThemeMode,
   type RoomLayoutMode,
 } from "../lib/uiPreferences";
+import { useTextAnimationRoot } from "../lib/textAnimations";
 
 const APP_VERSION = "0.1.0";
 
@@ -57,6 +58,22 @@ export function RoomPage() {
   const [layoutMode, setLayoutMode] = useState<RoomLayoutMode>(() => loadRoomLayoutPreference());
   const [pinnedStageTarget, setPinnedStageTarget] = useState<PinnedStageTarget | null>(null);
   const session = getSession(roomId);
+  const roomTextMotionRef = useTextAnimationRoot<HTMLElement>({
+    selector: [
+      ".room-boot .empty-state > [data-text-animate]",
+      ".room-ended-copy > [data-text-animate]",
+      ".room-topbar [data-text-animate]",
+      ".room-alert-stack [data-text-animate]",
+    ].join(", "),
+    dependencies: [
+      loadingSnapshot,
+      snapshotError,
+      snapshotExpired,
+      showEndedSummary,
+      Boolean(session),
+      Boolean(roomSnapshot),
+    ],
+  });
   const handleSessionInvalidated = useCallback(() => {
     clearSession(roomId);
   }, [clearSession, roomId]);
@@ -332,11 +349,11 @@ export function RoomPage() {
 
   if (loadingSnapshot && !roomSnapshot && !session) {
     return (
-      <main className="room-boot">
+      <main className="room-boot" ref={roomTextMotionRef}>
         <div className="empty-state room-boot-loading">
           <span className="loading-spinner loading-spinner-lg" aria-hidden="true" />
-          <strong>Loading room</strong>
-          <p>Fetching room snapshot from the gateway.</p>
+          <strong data-text-animate="fade">Loading room</strong>
+          <p data-text-animate="fade">Fetching room snapshot from the gateway.</p>
         </div>
       </main>
     );
@@ -345,16 +362,16 @@ export function RoomPage() {
   // Expired room with no session: show dedicated expired page (not generic error)
   if ((snapshotExpired || showEndedSummary) && !session) {
     return (
-      <main className="room-boot">
+      <main className="room-boot" ref={roomTextMotionRef}>
         <div className="room-ended-summary-page">
           <div className="room-ended-copy">
-            <span className="room-ended-kicker">Meeting ended</span>
-            <h1>Final summary</h1>
-            <p>
+            <span className="room-ended-kicker" data-text-animate="highlight">Meeting ended</span>
+            <h1 data-text-animate="line">Final summary</h1>
+            <p data-text-animate="fade">
               This room is closed. The final summary stays available here when the backend
               finishes preparing it.
             </p>
-            <button type="button" className="button-secondary" onClick={() => navigate("/")}>
+            <button type="button" className="button-secondary" onClick={() => navigate("/")} data-text-animate="cta">
               Back Home
             </button>
           </div>
@@ -368,11 +385,11 @@ export function RoomPage() {
 
   if (snapshotError && !roomSnapshot && !session) {
     return (
-      <main className="room-boot">
+      <main className="room-boot" ref={roomTextMotionRef}>
         <div className="empty-state">
-          <strong>Room unavailable</strong>
-          <p>{snapshotError}</p>
-          <button type="button" className="button-secondary" onClick={() => navigate("/")}>
+          <strong data-text-animate="fade">Room unavailable</strong>
+          <p data-text-animate="fade">{snapshotError}</p>
+          <button type="button" className="button-secondary" onClick={() => navigate("/")} data-text-animate="cta">
             Back Home
           </button>
         </div>
@@ -386,7 +403,7 @@ export function RoomPage() {
     }
 
     return (
-      <main className="room-boot">
+      <main className="room-boot" ref={roomTextMotionRef}>
         <JoinRoomCard
           room={roomSnapshot.room}
           participants={roomSnapshot.participants}
@@ -407,7 +424,7 @@ export function RoomPage() {
       `layout-${layoutMode}`,
       meeting.brseEnabled ? "brse-on" : "brse-off",
       sidePanelOpen ? "panel-open" : "panel-closed",
-    ].join(" ")}>
+    ].join(" ")} ref={roomTextMotionRef}>
       <RoomTopBar
         roomId={roomId}
         displayName={meeting.selfState?.display_name || session.participant.display_name}

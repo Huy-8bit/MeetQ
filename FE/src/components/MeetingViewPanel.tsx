@@ -40,14 +40,14 @@ export function MeetingViewPanel({
   return (
     <section className="meeting-view-panel panel-section" aria-labelledby="meeting-view-title">
       <div className="panel-header compact">
-        <h3 id="meeting-view-title">View</h3>
-        <p>Theme and room layout.</p>
+        <h3 id="meeting-view-title" data-text-animate="fade">View</h3>
+        <p data-text-animate="fade">Theme and room layout.</p>
       </div>
 
       <div className="view-setting-block">
         <div className="view-setting-label">
-          <strong>Theme</strong>
-          <span>Choose the meeting color mode.</span>
+          <strong data-text-animate="fade">Theme</strong>
+          <span data-text-animate="fade">Choose the meeting color mode.</span>
         </div>
         <div className="segmented-control" role="group" aria-label="Theme mode">
           {THEME_OPTIONS.map((option) => (
@@ -57,6 +57,7 @@ export function MeetingViewPanel({
               type="button"
               onClick={() => onThemeChange(option.value)}
               aria-pressed={themeMode === option.value}
+              data-text-animate="cta"
             >
               {option.label}
             </MotionButton>
@@ -66,8 +67,8 @@ export function MeetingViewPanel({
 
       <div className="view-setting-block">
         <div className="view-setting-label">
-          <strong>Layout</strong>
-          <span>Adjust the meeting room balance.</span>
+          <strong data-text-animate="fade">Layout</strong>
+          <span data-text-animate="fade">Adjust the meeting room balance.</span>
         </div>
         <div className="layout-option-grid" role="group" aria-label="Meeting layout">
           {LAYOUT_OPTIONS.map((option) => (
@@ -77,6 +78,7 @@ export function MeetingViewPanel({
               type="button"
               onClick={() => onLayoutChange(option.value)}
               aria-pressed={layoutMode === option.value}
+              data-text-animate="cta"
             >
               <strong>{option.label}</strong>
               <span>{option.helper}</span>

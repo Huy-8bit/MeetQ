@@ -5,6 +5,7 @@ import type {
   MeetingSummaryType,
 } from "../types/api";
 import { useRevealMotion } from "../lib/motion";
+import { useTextAnimations } from "../lib/textAnimations";
 import { MotionButton } from "./MotionButton";
 
 interface MeetingSummaryPanelProps {
@@ -81,6 +82,18 @@ export function MeetingSummaryPanel({
       visibleSummary?.created_at,
     ],
   });
+  useTextAnimations(summaryMotionRef, {
+    dependencies: [
+      visibleType,
+      status,
+      hasCompletedContent,
+      isLoading,
+      isGenerating,
+      error,
+      visibleSummary?.generated_at,
+      visibleSummary?.created_at,
+    ],
+  });
 
   return (
     <section
@@ -89,8 +102,8 @@ export function MeetingSummaryPanel({
     >
       <div className="panel-header summary-panel-header">
         <div>
-          <h3>Summary</h3>
-          <p>
+          <h3 data-text-animate="fade">Summary</h3>
+          <p data-text-animate="fade">
             {visibleType === "final"
               ? "Final meeting notes after the room closes."
               : "A live checkpoint updated during the meeting."}
@@ -110,6 +123,7 @@ export function MeetingSummaryPanel({
                 className="button-primary summary-primary-action"
                 onClick={onPrepareFinal}
                 disabled={isLoading || isGenerating || isPending || hasCompletedContent}
+                data-text-animate="cta"
               >
                 {isGenerating
                   ? "Preparing..."
@@ -124,6 +138,7 @@ export function MeetingSummaryPanel({
                 className="button-secondary summary-secondary-action"
                 onClick={onCheckFinal}
                 disabled={isLoading || isGenerating}
+                data-text-animate="cta"
               >
                 {isLoading ? "Checking..." : "Check latest"}
               </MotionButton>
@@ -136,6 +151,7 @@ export function MeetingSummaryPanel({
               className="button-primary summary-primary-action"
               onClick={onRefreshInterim}
               disabled={!canUseInterimAction}
+              data-text-animate="cta"
             >
               {isGenerating || isPending
                 ? "Generating..."
@@ -148,6 +164,7 @@ export function MeetingSummaryPanel({
               className="button-secondary summary-secondary-action"
               onClick={onCheckInterim}
               disabled={isLoading || isGenerating}
+              data-text-animate="cta"
             >
               {isLoading ? "Checking..." : "Check latest"}
             </MotionButton>
@@ -156,7 +173,7 @@ export function MeetingSummaryPanel({
       </div>
 
       {error ? (
-        <div className="summary-alert summary-alert-error" role="status" data-summary-motion>
+        <div className="summary-alert summary-alert-error" role="status" data-summary-motion data-text-animate="fade">
           {error}
         </div>
       ) : null}
@@ -222,7 +239,7 @@ export function MeetingSummaryPanel({
         {hasCompletedContent ? (
           <article className="summary-artifact" data-summary-motion>
             <div className="summary-artifact-meta">
-              <span>{visibleType === "final" ? "Final summary" : "Current summary"}</span>
+              <span data-text-animate="highlight">{visibleType === "final" ? "Final summary" : "Current summary"}</span>
               <div className="summary-artifact-meta-tail">
                 {summaryLanguage ? <span>{summaryLanguage}</span> : null}
                 {generatedLabel ? <time>{generatedLabel}</time> : null}
@@ -230,7 +247,7 @@ export function MeetingSummaryPanel({
             </div>
 
             {visibleSummary!.summary_text ? (
-              <p className="summary-main-text">{visibleSummary!.summary_text}</p>
+              <p className="summary-main-text" data-text-animate="fade">{visibleSummary!.summary_text}</p>
             ) : null}
 
             <SummaryList
@@ -274,8 +291,8 @@ function SummaryState({
         <div className="summary-state-loading">
           <span className="loading-spinner" aria-hidden="true" />
           <div className="summary-state-loading-text">
-            <strong>{title}</strong>
-            <p>{text}</p>
+            <strong data-text-animate="fade">{title}</strong>
+            <p data-text-animate="fade">{text}</p>
           </div>
         </div>
         <div className="summary-loading-rows summary-loading-rows-spaced">
@@ -291,9 +308,9 @@ function SummaryState({
 
   return (
     <div className="summary-state-card panel-empty-state" data-summary-motion>
-      <span className="panel-empty-kicker">Summary</span>
-      <strong>{title}</strong>
-      <p>{text}</p>
+      <span className="panel-empty-kicker" data-text-animate="highlight">Summary</span>
+      <strong data-text-animate="fade">{title}</strong>
+      <p data-text-animate="fade">{text}</p>
     </div>
   );
 }
@@ -305,10 +322,10 @@ function SummaryList({ title, items }: { title: string; items: string[] }) {
 
   return (
     <section className="summary-section">
-      <h4>{title}</h4>
+      <h4 data-text-animate="fade">{title}</h4>
       <ul className="summary-list">
         {items.map((item, index) => (
-          <li key={`${title}-${index}`}>{item}</li>
+          <li key={`${title}-${index}`} data-text-animate="fade">{item}</li>
         ))}
       </ul>
     </section>
@@ -326,12 +343,12 @@ function ActionItems({
 
   return (
     <section className="summary-section">
-      <h4>Action items</h4>
+      <h4 data-text-animate="fade">Action items</h4>
       <ul className="summary-action-list">
         {items.map((item, index) => {
           const meta = [item.owner, item.due].filter(Boolean).join(" / ");
           return (
-            <li key={`action-${index}`}>
+            <li key={`action-${index}`} data-text-animate="fade">
               <span>{item.text}</span>
               {meta ? <small>{meta}</small> : null}
             </li>
@@ -353,10 +370,10 @@ function ParticipantSummaries({
 
   return (
     <section className="summary-section">
-      <h4>Participants</h4>
+      <h4 data-text-animate="fade">Participants</h4>
       <div className="summary-participant-list">
         {items.map((item, index) => (
-          <div className="summary-participant-item" key={item.participant_id || `participant-${index}`}>
+          <div className="summary-participant-item" key={item.participant_id || `participant-${index}`} data-text-animate="fade">
             {item.display_name ? <strong>{item.display_name}</strong> : null}
             <p>{item.summary}</p>
           </div>
@@ -390,10 +407,10 @@ function SourceStats({
 
   return (
     <section className="summary-section">
-      <h4>Source</h4>
+      <h4 data-text-animate="fade">Source</h4>
       <div className="summary-stat-list">
         {statItems.map((item) => (
-          <span key={item}>{item}</span>
+          <span key={item} data-text-animate="fade">{item}</span>
         ))}
       </div>
     </section>

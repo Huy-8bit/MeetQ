@@ -5,20 +5,23 @@ import { MicLevelMeter } from "../components/MicLevelMeter";
 import { useMicTest } from "../features/test/useMicTest";
 import { useTranslationTest } from "../features/test/useTranslationTest";
 import { getLanguageLabel, SUPPORTED_MEETING_LANGUAGES } from "../lib/languages";
+import { useTextAnimationRoot } from "../lib/textAnimations";
 import type { Language } from "../types/api";
 
 export function TestPage() {
+  const textMotionRef = useTextAnimationRoot<HTMLElement>();
+
   return (
-    <main className="test-page">
+    <main className="test-page" ref={textMotionRef}>
       <header className="test-page-header">
         <div>
-          <span className="eyebrow">Dev Tools</span>
-          <h1>Mic &amp; Translation Test</h1>
-          <p>
+          <span className="eyebrow" data-text-animate="highlight">Dev Tools</span>
+          <h1 data-text-animate="line">Mic &amp; Translation Test</h1>
+          <p data-text-animate="fade">
             Kiểm tra mic và dịch thuật trước khi vào phòng họp thật.
           </p>
         </div>
-        <Link to="/" className="button-secondary test-back-btn">
+        <Link to="/" className="button-secondary test-back-btn" data-text-animate="cta">
           ← Về Trang Chủ
         </Link>
       </header>
@@ -42,8 +45,8 @@ function MicTestSection() {
     <section className="test-card panel">
       <div className="test-card-header">
         <div>
-          <h2>Mic Test</h2>
-          <p>Kiểm tra microphone có hoạt động và backend nhận audio chưa.</p>
+          <h2 data-text-animate="line">Mic Test</h2>
+          <p data-text-animate="fade">Kiểm tra microphone có hoạt động và backend nhận audio chưa.</p>
         </div>
         <span className={`test-status-badge status-${state.status}`}>
           {statusLabel(state.status)}
@@ -56,7 +59,7 @@ function MicTestSection() {
 
       <div className="mic-level-section">
         <MicLevelMeter level={state.level} peak={state.peak} db={state.db} />
-        <div className="mic-feedback">
+        <div className="mic-feedback" data-text-animate="fade">
           {micFeedbackText(state.status, state.level)}
         </div>
       </div>
@@ -71,6 +74,7 @@ function MicTestSection() {
             className="button-primary"
             onClick={() => void start()}
             disabled={state.status === "requesting_permission" || state.status === "connecting"}
+            data-text-animate="cta"
           >
             {state.status === "requesting_permission"
               ? "Đang xin quyền mic..."
@@ -79,7 +83,7 @@ function MicTestSection() {
               : "Bắt đầu Mic Test"}
           </button>
         ) : (
-          <button className="button-danger" onClick={() => void stop()}>
+          <button className="button-danger" onClick={() => void stop()} data-text-animate="cta">
             Dừng
           </button>
         )}
@@ -153,8 +157,8 @@ function TranslationTestSection() {
     <section className="test-card panel">
       <div className="test-card-header">
         <div>
-          <h2>Translation Test</h2>
-          <p>Nói thử và xem kết quả dịch realtime từ backend.</p>
+          <h2 data-text-animate="line">Translation Test</h2>
+          <p data-text-animate="fade">Nói thử và xem kết quả dịch realtime từ backend.</p>
         </div>
         <span className={`test-status-badge status-${state.status}`}>
           {translationStatusLabel(state.status)}
@@ -262,6 +266,7 @@ function TranslationTestSection() {
               state.status === "connecting" ||
               state.srcLang === state.tgtLang
             }
+            data-text-animate="cta"
           >
             {state.status === "requesting_permission"
               ? "Đang xin quyền mic..."
@@ -270,7 +275,7 @@ function TranslationTestSection() {
               : "Bắt đầu Translation Test"}
           </button>
         ) : (
-          <button className="button-danger" onClick={() => void stop()}>
+          <button className="button-danger" onClick={() => void stop()} data-text-animate="cta">
             Dừng
           </button>
         )}

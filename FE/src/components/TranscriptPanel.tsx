@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef } from "react";
 import type { TranscriptEntry } from "../features/room/transcripts";
 import { formatLanguageFlow, getLanguageLabel } from "../lib/languages";
 import { animateLatestItem } from "../lib/motion";
+import { useTextAnimationRoot } from "../lib/textAnimations";
 
 /**
  * Max items rendered in the transcript list at the render layer.
@@ -30,6 +31,9 @@ export function TranscriptPanel({
 }: TranscriptPanelProps) {
   const listRef = useRef<HTMLDivElement | null>(null);
   const isNearBottomRef = useRef(true);
+  const textMotionRef = useTextAnimationRoot<HTMLElement>({
+    dependencies: [brseEnabled, embedded, entries.length === 0],
+  });
 
   const visibleEntries = useMemo(
     () => (entries.length > MAX_VISIBLE_ENTRIES ? entries.slice(-MAX_VISIBLE_ENTRIES) : entries),
@@ -69,26 +73,26 @@ export function TranscriptPanel({
   }, [latestTranscriptId]);
 
   return (
-    <section className={embedded ? "transcript-panel panel-section" : "panel transcript-panel"}>
+    <section className={embedded ? "transcript-panel panel-section" : "panel transcript-panel"} ref={textMotionRef}>
       <div className="panel-header">
         <div>
-          <h3>{brseEnabled ? "Transcript + Relay" : "Transcript"}</h3>
-          <p>
+          <h3 data-text-animate="fade">{brseEnabled ? "Transcript + Relay" : "Transcript"}</h3>
+          <p data-text-animate="fade">
             {brseEnabled
               ? "Original speech and BRSE relay lines stay separated for scanning."
               : "Normal meeting transcript appears here when speech is available."}
           </p>
         </div>
         {visibleEntries.length > 0 ? (
-          <span className="panel-count">{visibleEntries.length}</span>
+          <span className="panel-count" data-text-animate="fade">{visibleEntries.length}</span>
         ) : null}
       </div>
 
       <div className="transcript-list" ref={listRef} onScroll={handleScroll}>
         {visibleEntries.length === 0 ? (
           <div className="empty-state small">
-            <strong>Waiting for speech</strong>
-            <p>
+            <strong data-text-animate="fade">Waiting for speech</strong>
+            <p data-text-animate="fade">
               {brseEnabled
                 ? "Human speech and relay output will appear here."
                 : "Human speech will appear here when available."}

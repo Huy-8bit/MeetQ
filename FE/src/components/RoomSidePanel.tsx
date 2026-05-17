@@ -4,6 +4,7 @@ import {
   useContentSwitchMotion,
   usePanelTransition,
 } from "../lib/motion";
+import { useTextAnimations } from "../lib/textAnimations";
 import { MotionButton } from "./MotionButton";
 
 export type RoomPanelTab = "relay" | "chat" | "summary" | "people";
@@ -48,6 +49,10 @@ export function RoomSidePanel({
     axis: "x",
     distance: 20,
   });
+  useTextAnimations(panelMotionRef, {
+    selector: ".side-panel-header [data-text-animate]",
+    dependencies: [activeTab, open],
+  });
   const bodyMotionRef = useContentSwitchMotion<HTMLDivElement>(activeTab, {
     selector: ":scope > *",
     distance: 8,
@@ -72,10 +77,10 @@ export function RoomSidePanel({
     >
       <div className="side-panel-header">
         <div className="side-panel-heading">
-          <span className="side-panel-kicker">Context</span>
+          <span className="side-panel-kicker" data-text-animate="highlight">Context</span>
           <div>
-            <strong className="side-panel-title">{activeTabCopy.label}</strong>
-            <p className="side-panel-subtitle">{activeTabCopy.detail}</p>
+            <strong className="side-panel-title" data-text-animate="fade">{activeTabCopy.label}</strong>
+            <p className="side-panel-subtitle" data-text-animate="fade">{activeTabCopy.detail}</p>
           </div>
         </div>
 
@@ -101,7 +106,7 @@ export function RoomSidePanel({
                 className={activeTab === id ? "side-tab is-active" : "side-tab"}
                 onClick={() => onTabChange(id)}
               >
-                <span className="side-tab-label">{label}</span>
+                <span className="side-tab-label" data-text-animate="cta">{label}</span>
                 {count > 0 ? <span className="side-tab-badge">{count}</span> : null}
               </MotionButton>
             );

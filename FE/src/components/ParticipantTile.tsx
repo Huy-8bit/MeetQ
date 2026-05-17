@@ -96,20 +96,20 @@ export function ParticipantTile({
               <i />
               <i />
             </div>
-            <strong>{isBrseEnabled ? relayStatusLabel : "Relay off"}</strong>
-            <p>{brseCaption}</p>
+            <strong data-text-animate="fade">{isBrseEnabled ? relayStatusLabel : "Relay off"}</strong>
+            <p data-text-animate="fade">{brseCaption}</p>
           </div>
         ) : (
           <div className="participant-fallback participant-fallback-human">
             <span>{initials || "?"}</span>
-            <strong>{feed.isLocal && feed.isCameraOff ? "Camera off" : feed.displayName}</strong>
+            <strong data-text-animate="fade">{feed.isLocal && feed.isCameraOff ? "Camera off" : feed.displayName}</strong>
           </div>
         )}
       </div>
       <div className="participant-tile-footer">
         <div>
-          <strong>{feed.displayName}</strong>
-          <p>
+          <strong data-text-animate="fade">{feed.displayName}</strong>
+          <p data-text-animate="fade">
             {label
               || (feed.isLocal
                 ? "You"

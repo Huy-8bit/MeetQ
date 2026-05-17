@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 import { getLanguageLabel } from "../lib/languages";
 import { animateLatestItem } from "../lib/motion";
+import { useTextAnimationRoot } from "../lib/textAnimations";
 import type { ChatTranslationMode, MeetingLanguage, RoomChatMessage } from "../types/api";
 import { MotionButton } from "./MotionButton";
 
@@ -54,6 +55,11 @@ export function ChatPanel({
   const listRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const latestMessageId = messages[messages.length - 1]?.message_id ?? null;
+  // Only useful when room has a 2-lang pair and translation can be meaningful.
+  const canTranslate = !meetingLanguages || meetingLanguages.length >= 2;
+  const textMotionRef = useTextAnimationRoot<HTMLElement>({
+    dependencies: [embedded, messages.length === 0, canTranslate],
+  });
 
   // Auto-scroll to bottom on new messages
   useEffect(() => {
@@ -116,18 +122,14 @@ export function ChatPanel({
     }
   }
 
-  // Decide whether to show the translate toggle.
-  // Only useful when room has a 2-lang pair and translation can be meaningful.
-  const canTranslate = !meetingLanguages || meetingLanguages.length >= 2;
-
   return (
-    <section className={embedded ? "chat-panel panel-section" : "panel chat-panel"}>
+    <section className={embedded ? "chat-panel panel-section" : "panel chat-panel"} ref={textMotionRef}>
       <div className="panel-header chat-intro">
         <div>
-          <h3>Room Chat</h3>
-          <p>Send messages to everyone in the room.</p>
+          <h3 data-text-animate="fade">Room Chat</h3>
+          <p data-text-animate="fade">Send messages to everyone in the room.</p>
         </div>
-        <span className="panel-count">{messages.length}</span>
+        <span className="panel-count" data-text-animate="fade">{messages.length}</span>
       </div>
 
       <div
@@ -136,9 +138,9 @@ export function ChatPanel({
       >
         {messages.length === 0 ? (
           <div className="chat-empty panel-empty-state">
-            <span className="panel-empty-kicker">Chat</span>
-            <strong>No messages yet</strong>
-            <p>Chat notes for this room will appear here.</p>
+            <span className="panel-empty-kicker" data-text-animate="highlight">Chat</span>
+            <strong data-text-animate="fade">No messages yet</strong>
+            <p data-text-animate="fade">Chat notes for this room will appear here.</p>
           </div>
         ) : (
           messages.map((message) => {
@@ -206,6 +208,7 @@ export function ChatPanel({
               onClick={() => handleModeChange("original_only")}
               disabled={disabled}
               title="Send without translation"
+              data-text-animate="cta"
             >
               Original
             </MotionButton>
@@ -215,6 +218,7 @@ export function ChatPanel({
               onClick={() => handleModeChange("translate")}
               disabled={disabled}
               title="Send with translation"
+              data-text-animate="cta"
             >
               + Translate
             </MotionButton>
@@ -238,6 +242,7 @@ export function ChatPanel({
             type="submit"
             disabled={disabled || isSending || !inputText.trim()}
             attentionKey={inputText.trim() ? "chat-ready" : null}
+            data-text-animate="cta"
           >
             {isSending ? "Sending..." : "Send"}
           </MotionButton>

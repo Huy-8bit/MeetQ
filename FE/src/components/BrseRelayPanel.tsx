@@ -4,6 +4,7 @@ import type { TranscriptEntry } from "../features/room/transcripts";
 import type { BrseRoomMode } from "../lib/brseModes";
 import { formatLanguageFlow, getLanguageLabel } from "../lib/languages";
 import { animateLatestItem, useRevealMotion } from "../lib/motion";
+import { useTextAnimations } from "../lib/textAnimations";
 import type { MeetingLanguage } from "../types/api";
 
 interface BrseRelayPanelProps {
@@ -30,6 +31,9 @@ export function BrseRelayPanel({
     distance: 8,
     duration: 280,
     stagger: 36,
+    dependencies: [brseEnabled, brseRoomMode, brseAudioExpected],
+  });
+  useTextAnimations(emptyMotionRef, {
     dependencies: [brseEnabled, brseRoomMode, brseAudioExpected],
   });
   const isNearBottomRef = useRef(true);
@@ -70,9 +74,9 @@ export function BrseRelayPanel({
 
     return (
       <div className="relay-history-empty panel-empty-state" ref={emptyMotionRef}>
-        <span className="panel-empty-kicker" data-relay-empty-motion>Relay</span>
-        <strong data-relay-empty-motion>{emptyCopy.title}</strong>
-        <p data-relay-empty-motion>{emptyCopy.detail}</p>
+        <span className="panel-empty-kicker" data-relay-empty-motion data-text-animate="highlight">Relay</span>
+        <strong data-relay-empty-motion data-text-animate="fade">{emptyCopy.title}</strong>
+        <p data-relay-empty-motion data-text-animate="fade">{emptyCopy.detail}</p>
       </div>
     );
   }

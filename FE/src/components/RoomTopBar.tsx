@@ -53,19 +53,19 @@ export function RoomTopBar({
     <header className="room-topbar">
       {/* Left: identity */}
       <div className="room-topbar-identity">
-        <div className="room-brand-mark">MQ</div>
+        <div className="room-brand-mark" data-text-animate="fade">MQ</div>
         <div className="room-topbar-meta">
-          <span className="room-topbar-name">{displayName || "Meeting"}</span>
+          <span className="room-topbar-name" data-text-animate="fade">{displayName || "Meeting"}</span>
           <div className="room-topbar-sub">
-            <span>{roomId}</span>
+            <span data-text-animate="fade">{roomId}</span>
             <span>·</span>
-            <span>{formatMeetingLanguageBridge(meetingLanguages)}</span>
+            <span data-text-animate="fade">{formatMeetingLanguageBridge(meetingLanguages)}</span>
             <span>·</span>
-            <span>{participantCount}p</span>
+            <span data-text-animate="fade">{participantCount}p</span>
             {remainingLabel ? (
               <>
                 <span>·</span>
-                <span className={isExpired ? "topbar-timer expired" : "topbar-timer"}>
+                <span className={isExpired ? "topbar-timer expired" : "topbar-timer"} data-text-animate="fade">
                   {isExpired ? "Ended" : remainingLabel}
                 </span>
               </>
@@ -98,7 +98,7 @@ export function RoomTopBar({
       </div>
 
       {brseToggleError ? (
-        <div className="room-topbar-error">{brseToggleError}</div>
+        <div className="room-topbar-error" data-text-animate="fade">{brseToggleError}</div>
       ) : null}
     </header>
   );

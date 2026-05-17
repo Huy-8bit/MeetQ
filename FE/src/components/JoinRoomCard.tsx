@@ -12,6 +12,7 @@ import {
 import { formatExpiresAtHuman, useRoomExpiry } from "../features/room/useRoomExpiry";
 import { loadUserPrefs, saveUserPrefs } from "../lib/userPrefs";
 import { useRevealMotion } from "../lib/motion";
+import { useTextAnimations } from "../lib/textAnimations";
 import type { MeetingLanguage, ParticipantSnapshot, RoomSnapshotResponse } from "../types/api";
 import { CustomSelect, type CustomSelectOption } from "./CustomSelect";
 import { MotionButton } from "./MotionButton";
@@ -42,6 +43,14 @@ export function JoinRoomCard({
     duration: 460,
     stagger: 54,
     scaleFrom: 0.992,
+  });
+  useTextAnimations(joinMotionRef, {
+    dependencies: [
+      room.room_id,
+      isExpired,
+      participants.length,
+      meetingLanguages.join("-"),
+    ],
   });
   const savedLang = meetingLanguages.includes(prefs.language as MeetingLanguage)
     ? (prefs.language as MeetingLanguage)
@@ -136,11 +145,11 @@ export function JoinRoomCard({
       <div className="join-room-card join-room-card-minimal" ref={joinMotionRef}>
         <div className="join-room-topline" data-join-motion>
           <div>
-            <span className="product-kicker">Join</span>
-            <h1>Enter room</h1>
+            <span className="product-kicker" data-text-animate="highlight">Join</span>
+            <h1 data-text-animate="line">Enter room</h1>
           </div>
 
-          <div className="join-room-id-badge" aria-label={`Room ${room.room_id}`}>
+          <div className="join-room-id-badge" aria-label={`Room ${room.room_id}`} data-text-animate="fade">
             <span>Room</span>
             <strong>{room.room_id}</strong>
           </div>
@@ -155,19 +164,19 @@ export function JoinRoomCard({
         {isExpired ? (
           <div className="room-expired-state" data-join-motion>
             <span className="room-expired-icon" aria-hidden="true">⏱</span>
-            <strong>Meeting ended</strong>
-            <p>Room expired.</p>
+            <strong data-text-animate="fade">Meeting ended</strong>
+            <p data-text-animate="fade">Room expired.</p>
           </div>
         ) : (
           <>
             <div className="join-room-form-card" data-join-motion>
               <div className="join-form-header">
-                <h2>Join as</h2>
+                <h2 data-text-animate="line">Join as</h2>
               </div>
 
               <form className="join-form redesigned-join-form" onSubmit={(event) => void handleSubmit(event)}>
                 <label className="join-input-field">
-                  <span>Your name</span>
+                  <span data-text-animate="fade">Your name</span>
                   <input
                     value={displayName}
                     onChange={(event) => {
@@ -181,7 +190,7 @@ export function JoinRoomCard({
                 </label>
 
                 <label className="join-input-field">
-                  <span>Your language</span>
+                  <span data-text-animate="fade">Your language</span>
                   <CustomSelect
                     className="join-language-select"
                     value={language}
@@ -205,6 +214,7 @@ export function JoinRoomCard({
                   type="submit"
                   disabled={isSubmitting || languagePairUnavailable}
                   attentionKey={joinAttentionKey}
+                  data-text-animate="cta"
                 >
                   {isSubmitting ? "Joining..." : "Join Meeting"}
                 </MotionButton>
@@ -247,8 +257,8 @@ function CompactMeta({
       className={danger ? "join-room-quick-stat is-expired" : "join-room-quick-stat"}
       data-join-motion
     >
-      <span>{label}</span>
-      <strong>{value}</strong>
+      <span data-text-animate="fade">{label}</span>
+      <strong data-text-animate="fade">{value}</strong>
     </div>
   );
 }
@@ -266,8 +276,8 @@ function RoomModeBadge({ mode }: { mode: BrseRoomMode }) {
       ].filter(Boolean).join(" ")}
       data-join-motion
     >
-      <span>Mode</span>
-      <strong>{getBrseModeLabel(mode)}</strong>
+      <span data-text-animate="fade">Mode</span>
+      <strong data-text-animate="fade">{getBrseModeLabel(mode)}</strong>
     </div>
   );
 }
@@ -291,6 +301,9 @@ function ParticipantPreviewList({
     scaleFrom: 0.996,
     dependencies: [humanParticipants.length, virtualParticipants.length, brseRoomMode, brseAudioExpected],
   });
+  useTextAnimations(previewMotionRef, {
+    dependencies: [humanParticipants.length, virtualParticipants.length, brseRoomMode, brseAudioExpected],
+  });
   const visibleHumans = humanParticipants.slice(0, 5);
   const hiddenHumanCount = Math.max(0, humanParticipants.length - visibleHumans.length);
   const brseParticipant = virtualParticipants.find(
@@ -300,15 +313,15 @@ function ParticipantPreviewList({
   return (
     <section className="join-participant-preview" ref={previewMotionRef} data-join-motion>
       <div className="join-panel-header" data-preview-motion>
-        <span>Already inside</span>
-        <strong>{humanParticipants.length}</strong>
+        <span data-text-animate="fade">Already inside</span>
+        <strong data-text-animate="fade">{humanParticipants.length}</strong>
       </div>
 
       {humanParticipants.length === 0 ? (
         <div className="participant-empty-compact" data-preview-motion>
-          <strong>No one yet</strong>
+          <strong data-text-animate="fade">No one yet</strong>
           {brseParticipant ? (
-            <span className="virtual-participant-chip">
+            <span className="virtual-participant-chip" data-text-animate="fade">
               {getVirtualParticipantBadge(brseRoomMode, brseAudioExpected)}
             </span>
           ) : null}
@@ -322,8 +335,8 @@ function ParticipantPreviewList({
               data-preview-motion
             >
               <div>
-                <strong>{participant.display_name}</strong>
-                <p>{formatParticipantStatus(participant.status)}</p>
+                <strong data-text-animate="fade">{participant.display_name}</strong>
+                <p data-text-animate="fade">{formatParticipantStatus(participant.status)}</p>
               </div>
               <div className="participant-row-tags">
                 {participant.is_host ? <span className="badge badge-host">Host</span> : null}
@@ -336,17 +349,17 @@ function ParticipantPreviewList({
 
           {hiddenHumanCount > 0 ? (
             <div className="participant-preview participant-preview-more" data-preview-motion>
-              <strong>{hiddenHumanCount} more participant{hiddenHumanCount === 1 ? "" : "s"}</strong>
+              <strong data-text-animate="fade">{hiddenHumanCount} more participant{hiddenHumanCount === 1 ? "" : "s"}</strong>
             </div>
           ) : null}
 
           {brseParticipant ? (
             <div className="participant-preview virtual-participant-preview" data-preview-motion>
               <div>
-                <strong>{brseParticipant.display_name || "AI Relay"}</strong>
-                <p>{getVirtualParticipantCopy(brseRoomMode, brseAudioExpected)}</p>
+                <strong data-text-animate="fade">{brseParticipant.display_name || "AI Relay"}</strong>
+                <p data-text-animate="fade">{getVirtualParticipantCopy(brseRoomMode, brseAudioExpected)}</p>
               </div>
-              <span className="badge kind">
+              <span className="badge kind" data-text-animate="fade">
                 {getVirtualParticipantBadge(brseRoomMode, brseAudioExpected)}
               </span>
             </div>

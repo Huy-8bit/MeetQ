@@ -53,18 +53,19 @@ export function AudioDevicePanel({
     <section className={embedded ? "audio-settings-panel panel-section" : "panel audio-settings-panel"}>
       <div className="panel-header">
         <div>
-          <h3>Audio Settings</h3>
-          <p>Control microphone and playback devices for this room session.</p>
+          <h3 data-text-animate="fade">Audio Settings</h3>
+          <p data-text-animate="fade">Control microphone and playback devices for this room session.</p>
         </div>
       </div>
 
       <div className="audio-settings-grid">
         <div className="audio-setting-row">
-          <span className="audio-setting-label">Microphone</span>
+          <span className="audio-setting-label" data-text-animate="fade">Microphone</span>
           <MotionButton
             className={isMicMuted ? "button-secondary" : "button-primary"}
             onClick={onToggleMic}
             disabled={isTogglingMic || (isMutedByHost && isMicMuted)}
+            data-text-animate="cta"
           >
             {isTogglingMic
               ? "Updating..."
@@ -81,7 +82,7 @@ export function AudioDevicePanel({
         ) : null}
 
         <label className="field audio-setting-field">
-          <span>Input Device</span>
+          <span data-text-animate="fade">Input Device</span>
           <CustomSelect
             className="audio-device-select"
             value={selectedAudioInputDeviceId}
@@ -100,7 +101,7 @@ export function AudioDevicePanel({
         ) : null}
 
         <label className="field audio-setting-field">
-          <span>Output Device</span>
+          <span data-text-animate="fade">Output Device</span>
           <CustomSelect
             className="audio-device-select"
             value={selectedAudioOutputDeviceId}
@@ -123,7 +124,7 @@ export function AudioDevicePanel({
         </label>
 
         {!audioOutputSupported ? (
-          <div className="audio-setting-hint">
+          <div className="audio-setting-hint" data-text-animate="fade">
             This browser does not support changing audio output device.
           </div>
         ) : null}

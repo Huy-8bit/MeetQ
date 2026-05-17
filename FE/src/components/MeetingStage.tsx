@@ -5,6 +5,7 @@ import type { ScreenShareFeed, VideoFeed } from "../types/livekit";
 import type { BrseRoomMode } from "../lib/brseModes";
 import { preferScreenShareHighQuality } from "../lib/livekit";
 import { useContentSwitchMotion } from "../lib/motion";
+import { useTextAnimations } from "../lib/textAnimations";
 import { ParticipantTile } from "./ParticipantTile";
 import { VideoTrackView } from "./MediaElements";
 import { MotionButton } from "./MotionButton";
@@ -73,6 +74,15 @@ export function MeetingStage({
       stagger: 0,
     },
   );
+  useTextAnimations(stageMotionRef, {
+    dependencies: [
+      stageMode,
+      pinnedTarget?.type,
+      pinnedTarget?.participantId,
+      videos.length,
+      activeScreenShareCount,
+    ],
+  });
 
   const stageClass = [
     "meeting-stage",
@@ -97,7 +107,7 @@ export function MeetingStage({
     <section className={stageClass} ref={stageMotionRef}>
       {stageLabel ? (
         <div className="stage-sharer-label stage-priority-label">
-          <span>{stageLabel}</span>
+          <span data-text-animate="fade">{stageLabel}</span>
         </div>
       ) : null}
 
@@ -415,9 +425,9 @@ function ParticipantGrid({
     <div className={videos.length <= 2 ? "stage-video-grid is-few" : "stage-video-grid"}>
       {videos.length === 0 ? (
         <div className="stage-empty-state">
-          <span className="stage-empty-kicker">Stage</span>
-          <strong>Waiting for video</strong>
-          <p>Audio, relay, chat, and notes stay active while cameras connect.</p>
+          <span className="stage-empty-kicker" data-text-animate="highlight">Stage</span>
+          <strong data-text-animate="fade">Waiting for video</strong>
+          <p data-text-animate="fade">Audio, relay, chat, and notes stay active while cameras connect.</p>
         </div>
       ) : (
         videos.map((feed) => (

@@ -1,9 +1,12 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useLayoutEffect, useRef, type CSSProperties } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { motion, AnimatePresence } from "motion/react";
+import gsap from "gsap";
+import { ScrollTrigger } from "gsap/ScrollTrigger";
 import { Zap, Mic2, CheckCircle2, Globe2 } from "lucide-react";
 import { api, ApiError } from "../lib/api";
-import { useAmbientFloat, useRevealMotion } from "../lib/motion";
+import { useAmbientFloat, usePrefersReducedMotion } from "../lib/motion";
+import { useTextAnimations } from "../lib/textAnimations";
 import {
   BRSE_CREATE_MODE_OPTIONS,
   buildCreateBrsePayload,
@@ -26,6 +29,8 @@ type Slide = "chaos" | "clarity" | "translation" | "global";
 const SLIDES: Slide[] = ["chaos", "clarity", "translation", "global"];
 const SLIDE_DURATION = 6000; // ms each
 const CREATE_BRSE_MODE_STORAGE_KEY = "meetq:create-brse-mode";
+
+gsap.registerPlugin(ScrollTrigger);
 
 const CHAOS_TEXTS = [
   "Hello? Can you hear me?",
@@ -66,6 +71,178 @@ const SPEAKER_WAVE_CENTER_Y = 180;
 const SPEAKER_WAVE_MAX_HEIGHT = 42;
 
 function HomeRelayVisual() {
+  return (
+    <div className="home-relay-visual hrv-root hrv-cinematic" aria-hidden="true">
+      <div className="hrv-atmosphere">
+        <span className="hrv-atmosphere-sweep hrv-atmosphere-sweep-1" />
+        <span className="hrv-atmosphere-sweep hrv-atmosphere-sweep-2" />
+        <span className="hrv-grid-plane" />
+      </div>
+
+      <div className="hrv-field-particles">
+        {Array.from({ length: 18 }, (_, i) => (
+          <span key={i} className={`hrv-field-particle hrv-field-particle-${i + 1}`} />
+        ))}
+      </div>
+
+      <div className="hrv-header">
+        <span className="hrv-live-pill">
+          <span className="hrv-live-dot" />
+          Live AI relay
+        </span>
+        <span className="hrv-latency-pill">42 ms round trip</span>
+        <span className="hrv-latency-pill hrv-model-pill">Speech to voice + captions</span>
+      </div>
+
+      <div className="hrv-stage">
+        <svg
+          className="hrv-diagram hrv-beam-map"
+          viewBox="0 0 1000 640"
+          xmlns="http://www.w3.org/2000/svg"
+          preserveAspectRatio="none"
+        >
+          <defs>
+            <linearGradient id="hrvBeamInput" x1="0%" y1="0%" x2="100%" y2="0%">
+              <stop offset="0%" stopColor="#5eead4" stopOpacity="0" />
+              <stop offset="42%" stopColor="#5eead4" stopOpacity="0.95" />
+              <stop offset="100%" stopColor="#38bdf8" stopOpacity="0" />
+            </linearGradient>
+            <linearGradient id="hrvBeamVoice" x1="0%" y1="0%" x2="100%" y2="0%">
+              <stop offset="0%" stopColor="#38bdf8" stopOpacity="0" />
+              <stop offset="45%" stopColor="#38bdf8" stopOpacity="0.92" />
+              <stop offset="100%" stopColor="#7dd3fc" stopOpacity="0" />
+            </linearGradient>
+            <linearGradient id="hrvBeamCaption" x1="0%" y1="0%" x2="100%" y2="0%">
+              <stop offset="0%" stopColor="#a78bfa" stopOpacity="0" />
+              <stop offset="45%" stopColor="#a78bfa" stopOpacity="0.86" />
+              <stop offset="100%" stopColor="#f0abfc" stopOpacity="0" />
+            </linearGradient>
+            <linearGradient id="hrvBeamAmbient" x1="0%" y1="0%" x2="100%" y2="100%">
+              <stop offset="0%" stopColor="#67e8f9" stopOpacity="0.22" />
+              <stop offset="50%" stopColor="#5eead4" stopOpacity="0.07" />
+              <stop offset="100%" stopColor="#a78bfa" stopOpacity="0.18" />
+            </linearGradient>
+            <filter id="hrvBeamGlow" x="-25%" y="-60%" width="150%" height="220%">
+              <feGaussianBlur stdDeviation="5" result="blur" />
+              <feMerge>
+                <feMergeNode in="blur" />
+                <feMergeNode in="SourceGraphic" />
+              </feMerge>
+            </filter>
+            <path id="hrvPathInput" d="M 150 318 C 250 278, 322 284, 415 318" />
+            <path id="hrvPathVoice" d="M 584 306 C 668 222, 756 178, 870 176" />
+            <path id="hrvPathCaption" d="M 588 352 C 690 394, 742 464, 870 474" />
+          </defs>
+
+          <rect x="80" y="88" width="840" height="470" rx="90" fill="url(#hrvBeamAmbient)" opacity="0.18" />
+          <path className="hrv-beam-base" d="M 150 318 C 250 278, 322 284, 415 318" />
+          <path className="hrv-beam-base" d="M 584 306 C 668 222, 756 178, 870 176" />
+          <path className="hrv-beam-base" d="M 588 352 C 690 394, 742 464, 870 474" />
+          <path className="hrv-flow hrv-flow-in" d="M 150 318 C 250 278, 322 284, 415 318" stroke="url(#hrvBeamInput)" filter="url(#hrvBeamGlow)" />
+          <path className="hrv-flow hrv-flow-en" d="M 584 306 C 668 222, 756 178, 870 176" stroke="url(#hrvBeamVoice)" filter="url(#hrvBeamGlow)" />
+          <path className="hrv-flow hrv-flow-ja" d="M 588 352 C 690 394, 742 464, 870 474" stroke="url(#hrvBeamCaption)" filter="url(#hrvBeamGlow)" />
+
+          <circle r="5" fill="#5eead4" filter="url(#hrvBeamGlow)">
+            <animateMotion dur="1.8s" repeatCount="indefinite" begin="0s">
+              <mpath xlinkHref="#hrvPathInput" />
+            </animateMotion>
+          </circle>
+          <circle r="4" fill="#38bdf8" filter="url(#hrvBeamGlow)">
+            <animateMotion dur="1.55s" repeatCount="indefinite" begin="0.35s">
+              <mpath xlinkHref="#hrvPathVoice" />
+            </animateMotion>
+          </circle>
+          <circle r="4" fill="#a78bfa" filter="url(#hrvBeamGlow)">
+            <animateMotion dur="1.65s" repeatCount="indefinite" begin="0.72s">
+              <mpath xlinkHref="#hrvPathCaption" />
+            </animateMotion>
+          </circle>
+        </svg>
+
+        <div className="hrv-node-group hrv-node-card hrv-source-node">
+          <span className="hrv-node-kicker">Speaker</span>
+          <strong>Vietnamese input</strong>
+          <div className="hrv-waveform-ui" aria-hidden="true">
+            {WAVE_HEIGHTS.map((height, i) => (
+              <span
+                key={i}
+                className={`hrv-bar-svg hrv-bar-${i % 5}`}
+                style={{ "--hrv-wave-scale": height } as CSSProperties}
+              />
+            ))}
+          </div>
+          <small>Capturing voice, intent, and timing</small>
+        </div>
+
+        <div className="hrv-core-system">
+          <span className="hrv-core-ring hrv-core-ring-1" />
+          <span className="hrv-core-ring hrv-core-ring-2" />
+          <div className="hrv-core-rect">
+            <span className="hrv-core-icon-bg">AI</span>
+            <strong>MeetQ Relay</strong>
+            <small>Context aware translation engine</small>
+            <div className="hrv-processing-row">
+              <span className="hrv-proc-dot hrv-proc-1" />
+              <span className="hrv-proc-dot hrv-proc-2" />
+              <span className="hrv-proc-dot hrv-proc-3" />
+            </div>
+          </div>
+        </div>
+
+        <div className="hrv-node-group hrv-node-card hrv-voice-node">
+          <span className="hrv-node-kicker hrv-node-kicker-blue">Translated voice</span>
+          <strong>English output</strong>
+          <div className="hrv-mini-spectrum" aria-hidden="true">
+            {[0.42, 0.75, 0.55, 1, 0.62, 0.86].map((height, i) => (
+              <span
+                key={i}
+                className={`hrv-bar-svg hrv-bar-${(i + 1) % 5}`}
+                style={{ "--hrv-wave-scale": height } as CSSProperties}
+              />
+            ))}
+          </div>
+          <small>Hello team, we are ready to start.</small>
+        </div>
+
+        <div className="hrv-node-group hrv-node-card hrv-caption-node">
+          <span className="hrv-node-kicker hrv-node-kicker-violet">Live captions</span>
+          <strong>Japanese text</strong>
+          <div className="hrv-caption-lines" aria-hidden="true">
+            <span />
+            <span />
+            <span />
+          </div>
+          <small>こんにちは、開始できます。</small>
+        </div>
+
+        <div className="hrv-sequence-rail">
+          {["Speak", "Analyze", "Translate", "Relay"].map((step, i) => (
+            <span key={step} className={`hrv-sequence-step hrv-sequence-step-${i + 1}`}>
+              {step}
+            </span>
+          ))}
+        </div>
+      </div>
+
+      <div className="hrv-feed-strip">
+        <div className="hrv-feed-item hrv-feed-vi-row">
+          <span className="hrv-feed-tag hrv-feed-tag-vi">VI</span>
+          <span className="hrv-feed-text">Xin chào team, mình bắt đầu nhé.</span>
+        </div>
+        <div className="hrv-feed-item hrv-feed-ai-row">
+          <span className="hrv-feed-tag hrv-feed-tag-ai">AI</span>
+          <span className="hrv-feed-text hrv-feed-text-muted">Detecting speaker intent and product terms</span>
+        </div>
+        <div className="hrv-feed-item hrv-feed-en-row">
+          <span className="hrv-feed-tag hrv-feed-tag-en">EN</span>
+          <span className="hrv-feed-text">Hello team, we are ready to start.</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function LegacyHomeRelayVisual() {
   return (
     <div className="home-relay-visual hrv-root" aria-hidden="true">
       {/* ── Header strip ──────────────────────────────────────────────── */}
@@ -644,16 +821,138 @@ function IntroShowcase() {
 
 // ─── Action panel ─────────────────────────────────────────────────────────────
 
+function useHomeGsapAnimation(reducedMotion: boolean) {
+  const rootRef = useRef<HTMLElement>(null);
+
+  useLayoutEffect(() => {
+    const root = rootRef.current;
+    if (!root) {
+      return;
+    }
+
+    const relayDiagram = root.querySelector<SVGSVGElement>(".hrv-diagram");
+
+    if (reducedMotion) {
+      relayDiagram?.pauseAnimations();
+      return () => {
+        relayDiagram?.unpauseAnimations();
+      };
+    }
+
+    relayDiagram?.unpauseAnimations();
+
+    const ctx = gsap.context(() => {
+      const nav = root.querySelector<HTMLElement>(".hp-nav");
+      const hero = root.querySelector<HTMLElement>(".hp-showcase-hero");
+      const relayVisual = root.querySelector<HTMLElement>(".home-relay-visual");
+      const roomPanel = root.querySelector<HTMLElement>(".hp-room-panel");
+      const relayParts = gsap.utils.toArray<SVGElement>(
+        ".hrv-header, .hrv-node-group, .hrv-core-rect, .hrv-core-icon-bg, .hrv-feed-item",
+      );
+
+      const introTimeline = gsap.timeline({
+        defaults: {
+          ease: "power3.out",
+          clearProps: "transform,opacity,visibility",
+        },
+      });
+
+      if (nav) {
+        introTimeline.from(nav, { autoAlpha: 0, y: -12, duration: 0.42 }, 0);
+      }
+
+      if (hero) {
+        introTimeline.from(hero, { autoAlpha: 0, y: 24, scale: 0.985, duration: 0.72 }, 0.08);
+      }
+
+      if (relayVisual) {
+        introTimeline.from(relayVisual, { autoAlpha: 0, y: 18, scale: 0.992, duration: 0.68 }, 0.14);
+      }
+
+      if (roomPanel) {
+        introTimeline.from(roomPanel, { autoAlpha: 0, x: 24, scale: 0.992, duration: 0.66 }, 0.2);
+      }
+
+      if (relayParts.length > 0) {
+        introTimeline.from(
+          relayParts,
+          {
+            autoAlpha: 0,
+            y: 10,
+            scale: 0.985,
+            duration: 0.46,
+            stagger: 0.045,
+            transformOrigin: "center center",
+          },
+          0.32,
+        );
+      }
+
+      const scrollGroups = [
+        {
+          trigger: ".hp-room-card",
+          targets: ".hp-room-card .hp-card-header, .hp-room-card .hp-form-section, .hp-room-card .hp-cta-section",
+          y: 14,
+          stagger: 0.055,
+        },
+        {
+          trigger: ".hp-brse-mode",
+          targets: ".hp-brse-mode-option",
+          y: 8,
+          stagger: 0.045,
+        },
+        {
+          trigger: ".hp-join-card",
+          targets: ".hp-join-card .hp-card-label, .hp-join-card .hp-join-row",
+          y: 10,
+          stagger: 0.05,
+        },
+        {
+          trigger: ".hp-footer",
+          targets: ".hp-footer-icon",
+          y: 6,
+          stagger: 0.04,
+        },
+      ];
+
+      scrollGroups.forEach(({ trigger, targets, y, stagger }) => {
+        const triggerElement = root.querySelector<HTMLElement>(trigger);
+        const targetElements = gsap.utils.toArray<HTMLElement>(targets);
+
+        if (!triggerElement || targetElements.length === 0) {
+          return;
+        }
+
+        gsap.from(targetElements, {
+          autoAlpha: 0,
+          y,
+          duration: 0.42,
+          stagger,
+          ease: "power2.out",
+          clearProps: "transform,opacity,visibility",
+          scrollTrigger: {
+            trigger: triggerElement,
+            start: "top 88%",
+            once: true,
+          },
+        });
+      });
+    }, root);
+
+    return () => {
+      ctx.revert();
+    };
+  }, [reducedMotion]);
+
+  return rootRef;
+}
+
 export function HomePage() {
   const navigate = useNavigate();
   const location = useLocation();
-  const pageMotionRef = useRevealMotion<HTMLElement>({
-    selector: "[data-home-motion]",
-    distance: 18,
-    duration: 560,
-    stagger: 72,
-    scaleFrom: 0.992,
-  });
+  const reducedMotion = usePrefersReducedMotion();
+  const pageMotionRef = useHomeGsapAnimation(reducedMotion);
+  useTextAnimations(pageMotionRef);
   const [roomInput, setRoomInput] = useState("");
   const [langA, setLangA] = useState<MeetingLanguage | "">("");
   const [langB, setLangB] = useState<MeetingLanguage | "">("");
@@ -730,9 +1029,9 @@ export function HomePage() {
       {/* Nav — absolute top */}
       <nav className="hp-nav" data-home-motion>
         <div className="hp-nav-brand">
-          <span className="hp-nav-name">MeetQ</span>
+          <span className="hp-nav-name" data-text-animate="fade">MeetQ</span>
         </div>
-        <Link to="/test" className="hp-nav-link">Mic test</Link>
+        <Link to="/test" className="hp-nav-link" data-text-animate="cta">Mic test</Link>
       </nav>
 
       <div className="hp-hero-shell">
@@ -747,24 +1046,32 @@ export function HomePage() {
         {/* Right panel — room controls */}
         <div className="hp-panel hp-room-panel">
           {landingNotice && (
-            <div className="hp-notice" role="status">{landingNotice}</div>
+            <div className="hp-notice" role="status" data-text-animate="fade">{landingNotice}</div>
           )}
 
           {/* Create card */}
           <section className="hp-card hp-card-create hp-room-card" data-home-motion>
             <div className="hp-card-header hp-room-card-header">
               <div>
-                <p className="hp-card-label">New room</p>
-                <h2 className="hp-card-title">Start an AI-assisted meeting</h2>
-                <p className="hp-card-subtitle">
-                  Choose the language pair and how MeetQ relays speech, captions, and AI voice.
+                <p className="hp-card-label" data-text-animate="fade">New room</p>
+                <h2 className="hp-card-title" data-text-animate="fade">
+                  <span>Launch a live</span>
+                  <span>AI relay</span>
+                </h2>
+                <p className="hp-card-subtitle" data-text-animate="fade">
+                  Speak naturally. MeetQ translates in real time so every participant hears and reads their language.
                 </p>
+                <div className="hp-flow-steps" aria-hidden="true">
+                  <span>Speak</span>
+                  <span>AI translates</span>
+                  <span>Everyone follows</span>
+                </div>
               </div>
             </div>
 
             <section className="hp-create-section hp-language-section hp-form-section">
               <div className="hp-section-heading">
-                <span>Conversation pair</span>
+                <span data-text-animate="fade">Conversation pair</span>
               </div>
               <div className="hp-lang-row">
                 <div className="hp-lang-slot">
@@ -793,7 +1100,7 @@ export function HomePage() {
 
             <section className="hp-create-section hp-option-section hp-form-section hp-relay-section">
               <div className="hp-section-heading">
-                <span>AI relay</span>
+                <span data-text-animate="fade">AI relay</span>
               </div>
               <div className="hp-brse-mode" role="group" aria-label="BRSE output mode">
                 {BRSE_CREATE_MODE_OPTIONS.map((option) => (
@@ -825,16 +1132,17 @@ export function HomePage() {
                 onClick={() => { void handleCreateRoom(); }}
                 disabled={creating || !canCreate}
                 attentionKey={createAttentionKey}
+                data-text-animate="cta"
               >
                 {creating ? "Creating…" : "Create room"}
               </MotionButton>
-              <p>60-minute room. No account required.</p>
+              <p data-text-animate="fade">60-minute room. No account required.</p>
             </div>
           </section>
 
           {/* Join row */}
           <section className="hp-card hp-card-join hp-join-card" data-home-motion>
-            <p className="hp-card-label">Join room</p>
+            <p className="hp-card-label" data-text-animate="highlight">Join room</p>
             <div className="hp-join-row">
               <input
                 className="hp-join-input"
@@ -844,7 +1152,7 @@ export function HomePage() {
                 placeholder="rm_… or room link"
                 aria-label="Room ID or link"
               />
-              <MotionButton className="hp-btn-secondary" type="button" onClick={handleJoin}>
+              <MotionButton className="hp-btn-secondary" type="button" onClick={handleJoin} data-text-animate="cta">
                 Open
               </MotionButton>
             </div>
