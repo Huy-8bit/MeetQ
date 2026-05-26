@@ -2,8 +2,8 @@ import { startTransition, useEffect, useRef, useState } from "react";
 import { api, leaveRoomBestEffort, ApiError } from "../../lib/api";
 import { setRoomAudioOutputDevice } from "../../lib/audioOutput";
 import {
-  formatMeetingLanguagePair,
-  resolveMeetingLanguages,
+  formatRoomLanguageList,
+  normalizeRoomLanguages,
 } from "../../lib/languages";
 import {
   bindRoomRefresh,
@@ -439,6 +439,7 @@ export function useMeetingRoom({
       return;
     }
 
+    const sessionRoomLanguages = normalizeRoomLanguages(session.room);
     setRoomMeta((current) => ({
       room_id: current?.room_id || session.roomId,
       state: session.room.state,
@@ -450,8 +451,10 @@ export function useMeetingRoom({
         session.room.brse_output_mode ?? current?.brse_output_mode,
       participant_limit: session.room.participant_limit,
       supported_languages: session.room.supported_languages,
-      meeting_languages:
-        resolveMeetingLanguages(session.room.meeting_languages, session.room.supported_languages),
+      room_languages: sessionRoomLanguages,
+      meeting_languages: session.room.meeting_languages ?? sessionRoomLanguages,
+      language_a: session.room.language_a ?? sessionRoomLanguages[0],
+      language_b: session.room.language_b ?? sessionRoomLanguages[1],
       meeting_mode: session.room.meeting_mode ?? current?.meeting_mode,
       interpreter_mode: session.room.interpreter_mode ?? current?.interpreter_mode,
       audio_routing: session.room.audio_routing ?? current?.audio_routing,
@@ -1228,15 +1231,12 @@ export function useMeetingRoom({
       return;
     }
 
-    const meetingLanguages = resolveMeetingLanguages(
-      roomMeta?.meeting_languages,
-      roomMeta?.supported_languages,
-    );
+    const meetingLanguages = normalizeRoomLanguages(roomMeta);
     if (!meetingLanguages.includes(nextLanguage as MeetingLanguage)) {
       setConnectionError(
-        meetingLanguages.length === 2
-          ? `Language must match the room meeting languages: ${formatMeetingLanguagePair(meetingLanguages)}.`
-          : "Room meeting language pair is unavailable. Reload room snapshot or ask the host to recreate the room.",
+        meetingLanguages.length > 0
+          ? `Language must match the room languages: ${formatRoomLanguageList(meetingLanguages)}.`
+          : "Room languages are unavailable. Reload room snapshot or ask the host to recreate the room.",
       );
       return;
     }
@@ -1447,6 +1447,7 @@ export function useMeetingRoom({
     const snapshotBrseAudioExpected = isBrseAudioExpected(snapshotRoomForMode);
     brseEnabledRef.current = snapshotBrseEnabled;
 
+    const snapshotRoomLanguages = normalizeRoomLanguages(event.payload.room);
     setSelfState(event.payload.self);
     setParticipantsById(mapParticipants(event.payload.participants));
     syncLocalScreenShareState(event.payload.participants, event.payload.self.participant_id);
@@ -1461,10 +1462,10 @@ export function useMeetingRoom({
         event.payload.room.brse_output_mode ?? current?.brse_output_mode,
       participant_limit: event.payload.room.participant_limit,
       supported_languages: event.payload.room.supported_languages,
-      meeting_languages: resolveMeetingLanguages(
-        event.payload.room.meeting_languages,
-        event.payload.room.supported_languages,
-      ),
+      room_languages: snapshotRoomLanguages,
+      meeting_languages: event.payload.room.meeting_languages ?? snapshotRoomLanguages,
+      language_a: event.payload.room.language_a ?? snapshotRoomLanguages[0],
+      language_b: event.payload.room.language_b ?? snapshotRoomLanguages[1],
       meeting_mode: event.payload.room.meeting_mode ?? current?.meeting_mode,
       interpreter_mode:
         event.payload.room.interpreter_mode ?? current?.interpreter_mode,
@@ -1790,14 +1791,11 @@ export function useMeetingRoom({
     }
 
     if (event.payload.code === "invalid_language") {
-      const meetingLanguages = resolveMeetingLanguages(
-        roomMetaRef.current?.meeting_languages,
-        roomMetaRef.current?.supported_languages,
-      );
+      const meetingLanguages = normalizeRoomLanguages(roomMetaRef.current);
       setConnectionError(
-        meetingLanguages.length === 2
-          ? `Language must match the room meeting languages: ${formatMeetingLanguagePair(meetingLanguages)}.`
-          : "Language must match the room meeting languages for this room.",
+        meetingLanguages.length > 0
+          ? `Language must match the room languages: ${formatRoomLanguageList(meetingLanguages)}.`
+          : "Language must match the room languages for this room.",
       );
       return;
     }
@@ -2211,10 +2209,7 @@ export function useMeetingRoom({
   const relayStatuses = [...interpreterStatuses].sort((left, right) =>
     right.updatedAt.localeCompare(left.updatedAt),
   );
-  const meetingLanguages = resolveMeetingLanguages(
-    roomMeta?.meeting_languages,
-    roomMeta?.supported_languages,
-  );
+  const meetingLanguages = normalizeRoomLanguages(roomMeta ?? session?.room);
   const effectiveExpiresAt =
     roomMeta?.room_id === (session?.roomId ?? roomId)
       ? roomMeta.expires_at

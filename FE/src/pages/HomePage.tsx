@@ -10,16 +10,18 @@ import { useTextAnimations } from "../lib/textAnimations";
 import {
   BRSE_CREATE_MODE_OPTIONS,
   buildCreateBrsePayload,
+  getCreateModeDisabledReason,
+  getEffectiveOutputMode,
   type BrseCreateMode,
 } from "../lib/brseModes";
 import {
+  formatRoomLanguageList,
   getLanguageLabel,
   isMeetingLanguage,
   SUPPORTED_MEETING_LANGUAGES,
 } from "../lib/languages";
 import { extractRoomId } from "../lib/rooms";
 import type { MeetingLanguage } from "../types/api";
-import { CustomSelect, type CustomSelectOption } from "../components/CustomSelect";
 import { MotionButton } from "../components/MotionButton";
 
 // ─── Intro slideshow ─────────────────────────────────────────────────────────
@@ -896,6 +898,12 @@ function useHomeGsapAnimation(reducedMotion: boolean) {
           stagger: 0.055,
         },
         {
+          trigger: ".hp-language-picker",
+          targets: ".hp-language-toggle",
+          y: 8,
+          stagger: 0.035,
+        },
+        {
           trigger: ".hp-brse-mode",
           targets: ".hp-brse-mode-option",
           y: 8,
@@ -954,8 +962,7 @@ export function HomePage() {
   const pageMotionRef = useHomeGsapAnimation(reducedMotion);
   useTextAnimations(pageMotionRef);
   const [roomInput, setRoomInput] = useState("");
-  const [langA, setLangA] = useState<MeetingLanguage | "">("");
-  const [langB, setLangB] = useState<MeetingLanguage | "">("");
+  const [selectedLanguages, setSelectedLanguages] = useState<MeetingLanguage[]>([]);
   const [brseCreateMode, setBrseCreateMode] = useState<BrseCreateMode>(
     () => loadCreateBrseModePreference(),
   );
@@ -969,22 +976,22 @@ export function HomePage() {
     saveCreateBrseModePreference(brseCreateMode);
   }, [brseCreateMode]);
 
-  function handleLangAChange(lang: MeetingLanguage | "") {
-    setLangA(lang);
+  function toggleRoomLanguage(language: MeetingLanguage) {
+    setSelectedLanguages((current) =>
+      current.includes(language)
+        ? current.filter((item) => item !== language)
+        : [...current, language],
+    );
     setCreateError(null);
-    setValidationError(lang && lang === langB ? "Choose two different languages." : null);
-  }
-
-  function handleLangBChange(lang: MeetingLanguage | "") {
-    setLangB(lang);
-    setCreateError(null);
-    setValidationError(lang && lang === langA ? "Choose two different languages." : null);
+    setValidationError(null);
   }
 
   async function handleCreateRoom() {
-    if (!langA || !langB) { setValidationError("Please select both languages."); return; }
-    if (langA === langB) { setValidationError("Choose two different languages."); return; }
-    if (!isMeetingLanguage(langA) || !isMeetingLanguage(langB)) {
+    if (selectedLanguages.length === 0) {
+      setValidationError("Select at least one room language.");
+      return;
+    }
+    if (!selectedLanguages.every((language) => isMeetingLanguage(language))) {
       setValidationError("Invalid language selection."); return;
     }
 
@@ -994,8 +1001,8 @@ export function HomePage() {
 
     try {
       const res = await api.createRoom({
-        meeting_languages: [langA, langB],
-        ...buildCreateBrsePayload(brseCreateMode),
+        room_languages: selectedLanguages,
+        ...buildCreateBrsePayload(brseCreateMode, selectedLanguages),
       });
       navigate(`/rooms/${res.room.room_id}`);
     } catch (err) {
@@ -1014,14 +1021,12 @@ export function HomePage() {
     navigate(`/rooms/${roomId}`);
   }
 
-  const langOptions: Array<CustomSelectOption<MeetingLanguage | "">> = [
-    { value: "", label: "Select language" },
-    ...SUPPORTED_MEETING_LANGUAGES.map((l) => ({ value: l, label: getLanguageLabel(l) })),
-  ];
-
-  const canCreate = !!langA && !!langB && langA !== langB;
+  const languageCount = selectedLanguages.length;
+  const effectiveCreateMode = getEffectiveOutputMode(selectedLanguages, brseCreateMode);
+  const createModeHelper = getCreateModeHelper(languageCount);
+  const canCreate = languageCount > 0;
   const createAttentionKey = canCreate
-    ? `${langA}-${langB}-${brseCreateMode}`
+    ? `${selectedLanguages.join("-")}-${effectiveCreateMode}`
     : null;
 
   return (
@@ -1059,39 +1064,58 @@ export function HomePage() {
                   <span>room</span>
                 </h2>
                 <p className="hp-card-subtitle" data-text-animate="fade">
-                  Choose languages, then let MeetQ handle live voice and captions.
+                  Choose room languages, then let MeetQ handle captions and relay.
                 </p>
               </div>
             </div>
 
             <section className="hp-create-section hp-language-section hp-form-section">
               <div className="hp-section-heading">
-                <span data-text-animate="fade">Conversation pair</span>
-                <small>Languages for the real-time bridge</small>
+                <span data-text-animate="fade">Room languages</span>
+                <small>Select one or more languages for this meeting</small>
               </div>
-              <div className="hp-lang-row">
-                <div className="hp-lang-slot">
-                  <label className="hp-lang-label">From</label>
-                  <CustomSelect
-                    value={langA}
-                    options={langOptions}
-                    onChange={handleLangAChange}
-                    placeholder="Choose language"
-                    ariaLabel="Language A"
-                  />
-                </div>
-                <div className="hp-lang-divider" aria-hidden="true">↔</div>
-                <div className="hp-lang-slot">
-                  <label className="hp-lang-label">To</label>
-                  <CustomSelect
-                    value={langB}
-                    options={langOptions}
-                    onChange={handleLangBChange}
-                    placeholder="Choose language"
-                    ariaLabel="Language B"
-                  />
-                </div>
+              <div className="hp-language-picker" role="group" aria-label="Room languages">
+                {SUPPORTED_MEETING_LANGUAGES.map((language) => {
+                  const selected = selectedLanguages.includes(language);
+                  return (
+                    <MotionButton
+                      key={language}
+                      type="button"
+                      className={[
+                        "hp-language-toggle",
+                        selected ? "is-selected" : "",
+                      ].filter(Boolean).join(" ")}
+                      aria-pressed={selected}
+                      onClick={() => toggleRoomLanguage(language)}
+                    >
+                      {getLanguageLabel(language)}
+                    </MotionButton>
+                  );
+                })}
               </div>
+              <div className="hp-language-selected" aria-live="polite">
+                {selectedLanguages.length > 0 ? (
+                  selectedLanguages.map((language) => (
+                    <span className="hp-language-chip" key={language}>
+                      {getLanguageLabel(language)}
+                      <button
+                        type="button"
+                        onClick={() => toggleRoomLanguage(language)}
+                        aria-label={`Remove ${getLanguageLabel(language)}`}
+                      >
+                        X
+                      </button>
+                    </span>
+                  ))
+                ) : (
+                  <span className="hp-language-placeholder">No languages selected</span>
+                )}
+              </div>
+              <p className="hp-language-helper">
+                {selectedLanguages.length > 0
+                  ? `Selected: ${formatRoomLanguageList(selectedLanguages)}`
+                  : "Select at least one room language."}
+              </p>
             </section>
 
             <section className="hp-create-section hp-option-section hp-form-section hp-relay-section">
@@ -1100,22 +1124,31 @@ export function HomePage() {
                 <small>Pick what MeetQ sends back to the room</small>
               </div>
               <div className="hp-brse-mode" role="group" aria-label="BRSE output mode">
-                {BRSE_CREATE_MODE_OPTIONS.map((option) => (
-                  <MotionButton
-                    key={option.value}
-                    type="button"
-                    className={[
-                      "hp-brse-mode-option",
-                      option.value === brseCreateMode ? "is-active" : "",
-                    ].filter(Boolean).join(" ")}
-                    aria-label={`${option.label}: ${option.detail}`}
-                    aria-pressed={option.value === brseCreateMode}
-                    onClick={() => setBrseCreateMode(option.value)}
-                  >
-                    <strong>{option.label}</strong>
-                  </MotionButton>
-                ))}
+                {BRSE_CREATE_MODE_OPTIONS.map((option) => {
+                  const disabledReason = getCreateModeDisabledReason(languageCount, option.value);
+                  const disabled = !!disabledReason;
+                  const isActive = option.value === effectiveCreateMode;
+                  return (
+                    <MotionButton
+                      key={option.value}
+                      type="button"
+                      className={[
+                        "hp-brse-mode-option",
+                        isActive ? "is-active" : "",
+                        disabled ? "is-disabled" : "",
+                      ].filter(Boolean).join(" ")}
+                      aria-label={`${option.label}: ${disabledReason ?? option.detail}`}
+                      aria-pressed={isActive}
+                      disabled={disabled}
+                      title={disabledReason ?? option.detail}
+                      onClick={() => setBrseCreateMode(option.value)}
+                    >
+                      <strong>{option.label}</strong>
+                    </MotionButton>
+                  );
+                })}
               </div>
+              <p className="hp-brse-helper">{createModeHelper}</p>
             </section>
 
             {(validationError ?? createError) && (
@@ -1211,10 +1244,26 @@ function isBrseCreateMode(value: unknown): value is BrseCreateMode {
   return value === "voice_text" || value === "text_only" || value === "off";
 }
 
+function getCreateModeHelper(languageCount: number): string {
+  if (languageCount === 0) {
+    return "Select room languages to choose relay mode.";
+  }
+
+  if (languageCount === 1) {
+    return "Single-language rooms capture transcript/captions.";
+  }
+
+  if (languageCount === 2) {
+    return "Voice + Text, Text Only, and Off are available.";
+  }
+
+  return "Voice relay is available for up to 2 languages. Multi-language rooms use text relay.";
+}
+
 function mapCreateRoomError(error: ApiError): string {
-  if (error.code === "invalid_meeting_languages") {
-    if (error.details?.expected === 2) return "Choose exactly two meeting languages.";
-    if (error.details?.unique) return "Choose two different languages.";
+  if (error.code === "invalid_room_languages" || error.code === "invalid_meeting_languages") {
+    if (error.details?.min === 1 || error.details?.required) return "Select at least one room language.";
+    if (error.details?.unique) return "Remove duplicate languages.";
     const unsupported = error.details?.unsupported;
     if (Array.isArray(unsupported)) {
       const labels = unsupported
@@ -1222,7 +1271,7 @@ function mapCreateRoomError(error: ApiError): string {
         .map((l) => (isMeetingLanguage(l) ? getLanguageLabel(l) : l));
       return labels.length > 0 ? `Unsupported language: ${labels.join(", ")}.` : "Invalid language selection.";
     }
-    return "Invalid meeting languages.";
+    return "Invalid room languages.";
   }
   return error.message;
 }

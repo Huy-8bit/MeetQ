@@ -1,4 +1,5 @@
 import type { BrseMode, BrseOutputMode, RoomSummary } from "../types/api";
+import { normalizeLanguageList, normalizeRoomLanguages } from "./languages";
 
 export type BrseRoomMode = "off" | "voice_text" | "text_only" | "silent_summary";
 export type BrseCreateMode = "voice_text" | "text_only" | "off";
@@ -12,6 +13,11 @@ type BrseRoomLike =
         | "brse_output_mode"
         | "meeting_mode"
         | "audio_routing"
+        | "room_languages"
+        | "meeting_languages"
+        | "language_a"
+        | "language_b"
+        | "supported_languages"
       >
     > & {
       brse_mode?: BrseMode | string;
@@ -74,7 +80,9 @@ export function resolveBrseEnabled(room: BrseRoomLike): boolean {
 
 export function resolveBrseOutputMode(room: BrseRoomLike): BrseOutputMode {
   return normalizeBrseOutputMode(
-    room?.brse_output_mode ?? room?.audio_routing?.brse_output_mode,
+    room?.audio_routing?.effective_brse_output_mode ??
+      room?.brse_output_mode ??
+      room?.audio_routing?.brse_output_mode,
   );
 }
 
@@ -87,11 +95,20 @@ export function resolveBrseRoomMode(room: BrseRoomLike): BrseRoomMode {
     return "silent_summary";
   }
 
+  const roomLanguageCount = normalizeRoomLanguages(room).length;
+  if (roomLanguageCount > 0 && !isVoiceRelayAvailable(roomLanguageCount)) {
+    return "text_only";
+  }
+
   if (room?.audio_routing?.model === "brse_text_only_relay") {
     return "text_only";
   }
 
   if (room?.audio_routing?.ai_audio_output_enabled === false) {
+    return "text_only";
+  }
+
+  if (room?.audio_routing?.relay_audio_enabled === false) {
     return "text_only";
   }
 
@@ -107,11 +124,20 @@ export function isBrseAudioExpected(room: BrseRoomLike): boolean {
     return false;
   }
 
+  const roomLanguageCount = normalizeRoomLanguages(room).length;
+  if (roomLanguageCount > 0 && !isVoiceRelayAvailable(roomLanguageCount)) {
+    return false;
+  }
+
   if (room?.audio_routing?.model === "brse_text_only_relay") {
     return false;
   }
 
   if (room?.audio_routing?.ai_audio_output_enabled === false) {
+    return false;
+  }
+
+  if (room?.audio_routing?.relay_audio_enabled === false) {
     return false;
   }
 
@@ -155,14 +181,58 @@ export function getBrseModeDescription(mode: BrseRoomMode): string {
   }
 }
 
-export function buildCreateBrsePayload(mode: BrseCreateMode): {
+export function isVoiceRelayAvailable(languageCount: number): boolean {
+  return languageCount === 2;
+}
+
+export function getEffectiveOutputMode(
+  selectedLanguages: readonly unknown[] | null | undefined,
+  requestedMode: BrseCreateMode,
+): BrseCreateMode {
+  const languageCount = normalizeLanguageList(selectedLanguages).length;
+  return isVoiceRelayAvailable(languageCount)
+    ? requestedMode
+    : "text_only";
+}
+
+export function getCreateModeDisabledReason(
+  languageCount: number,
+  mode: BrseCreateMode,
+): string | null {
+  if (isVoiceRelayAvailable(languageCount)) {
+    return null;
+  }
+
+  if (mode === "text_only") {
+    return null;
+  }
+
+  if (languageCount === 1) {
+    return "Single-language rooms capture transcript/captions.";
+  }
+
+  if (languageCount > 2) {
+    return "Multi-language rooms use text relay only.";
+  }
+
+  return "Select at least one room language.";
+}
+
+export function buildCreateBrsePayload(
+  mode: BrseCreateMode,
+  selectedLanguages?: readonly unknown[] | null,
+): {
   brse_enabled: boolean;
   brse_mode: BrseMode;
   brse_output_mode: BrseOutputMode;
 } {
+  const effectiveMode = selectedLanguages
+    ? getEffectiveOutputMode(selectedLanguages, mode)
+    : mode;
+
   return {
-    brse_enabled: mode !== "off",
+    brse_enabled: effectiveMode !== "off",
     brse_mode: "relay",
-    brse_output_mode: mode === "text_only" ? "text_only" : "voice_text",
+    brse_output_mode: effectiveMode === "text_only" ? "text_only" : "voice_text",
   };
 }

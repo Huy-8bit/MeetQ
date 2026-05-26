@@ -1,6 +1,6 @@
 import { useEffect, useState, type FormEvent } from "react";
 import {
-  formatMeetingLanguageBridge,
+  formatRoomLanguageList,
   getLanguageLabel,
 } from "../lib/languages";
 import {
@@ -60,12 +60,22 @@ export function JoinRoomCard({
   const [validationError, setValidationError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (language && meetingLanguages.length === 2 && !meetingLanguages.includes(language)) {
+    if (meetingLanguages.length === 0) {
       setLanguage("");
+      return;
+    }
+
+    if (language && !meetingLanguages.includes(language)) {
+      setLanguage(meetingLanguages[0]);
+      return;
+    }
+
+    if (!language && meetingLanguages.length === 1) {
+      setLanguage(meetingLanguages[0]);
     }
   }, [language, meetingLanguages]);
 
-  const languagePairUnavailable = meetingLanguages.length !== 2;
+  const roomLanguagesUnavailable = meetingLanguages.length === 0;
   const humanParticipants = participants.filter(
     (participant) => isHumanParticipant(participant),
   );
@@ -75,11 +85,11 @@ export function JoinRoomCard({
   const brseRoomMode = resolveBrseRoomMode(room);
   const brseAudioExpected = isBrseAudioExpected(room);
   const languageOptions: Array<CustomSelectOption<MeetingLanguage | "">> =
-    languagePairUnavailable
+    roomLanguagesUnavailable
       ? [
           {
             value: language,
-            label: "Meeting language pair unavailable",
+            label: "Room languages unavailable",
             disabled: true,
           },
         ]
@@ -113,21 +123,21 @@ export function JoinRoomCard({
       return;
     }
 
-    if (languagePairUnavailable) {
+    if (roomLanguagesUnavailable) {
       setValidationError(
-        "Room meeting language pair is unavailable. Reload room snapshot or ask the host to recreate the room.",
+        "Room languages are unavailable. Reload room snapshot or ask the host to recreate the room.",
       );
       return;
     }
 
     if (!language) {
-      setValidationError("Choose your language from the room meeting pair.");
+      setValidationError("Choose your language from the room languages.");
       return;
     }
 
     if (!meetingLanguages.includes(language)) {
       setValidationError(
-        `Choose one of the room meeting languages: ${formatMeetingLanguageBridge(meetingLanguages)}.`,
+        `Choose one of the room languages: ${formatRoomLanguageList(meetingLanguages)}.`,
       );
       return;
     }
@@ -151,7 +161,7 @@ export function JoinRoomCard({
             <span className="product-kicker" data-text-animate="fade">Room access</span>
             <h1 data-text-animate="line">Enter MeetQ room</h1>
             <p data-text-animate="fade">
-              Confirm your name and language before joining the live AI relay.
+              Confirm your name and room language before joining.
             </p>
           </div>
 
@@ -163,7 +173,7 @@ export function JoinRoomCard({
 
         <div className="join-room-context-strip" data-join-motion>
           <CompactMeta label="Languages" value={formatLanguageBridge(meetingLanguages)} />
-          <RoomModeBadge mode={brseRoomMode} />
+          <RoomModeBadge mode={brseRoomMode} languageCount={meetingLanguages.length} />
           {expirySummary ? <CompactMeta label="Time" value={expirySummary} danger={isExpired} /> : null}
         </div>
 
@@ -206,10 +216,10 @@ export function JoinRoomCard({
                       setLanguage(nextLanguage);
                       setValidationError(null);
                     }}
-                    disabled={languagePairUnavailable}
+                    disabled={roomLanguagesUnavailable}
                     placeholder={
-                      languagePairUnavailable
-                        ? "Meeting language pair unavailable"
+                      roomLanguagesUnavailable
+                        ? "Room languages unavailable"
                         : "Select language"
                     }
                     ariaLabel="Your language"
@@ -219,7 +229,7 @@ export function JoinRoomCard({
                 <MotionButton
                   className="join-room-cta"
                   type="submit"
-                  disabled={isSubmitting || languagePairUnavailable}
+                  disabled={isSubmitting || roomLanguagesUnavailable || !displayName.trim() || !language}
                   attentionKey={joinAttentionKey}
                   data-text-animate="cta"
                 >
@@ -227,9 +237,9 @@ export function JoinRoomCard({
                 </MotionButton>
               </form>
 
-              {languagePairUnavailable ? (
+              {roomLanguagesUnavailable ? (
                 <div className="inline-error">
-                  Room meeting language pair is unavailable. Reload room snapshot or ask the host to recreate the room.
+                  Room languages are unavailable. Reload room snapshot or ask the host to recreate the room.
                 </div>
               ) : null}
 
@@ -270,9 +280,16 @@ function CompactMeta({
   );
 }
 
-function RoomModeBadge({ mode }: { mode: BrseRoomMode }) {
+function RoomModeBadge({
+  mode,
+  languageCount,
+}: {
+  mode: BrseRoomMode;
+  languageCount: number;
+}) {
   const isBrse = mode !== "off";
   const isTextOnly = mode === "text_only";
+  const label = isTextOnly && languageCount === 1 ? "Captions" : getBrseModeLabel(mode);
 
   return (
     <div
@@ -284,7 +301,7 @@ function RoomModeBadge({ mode }: { mode: BrseRoomMode }) {
       data-join-motion
     >
       <span data-text-animate="fade">Mode</span>
-      <strong data-text-animate="fade">{getBrseModeLabel(mode)}</strong>
+      <strong data-text-animate="fade">{label}</strong>
     </div>
   );
 }
@@ -382,9 +399,7 @@ function isHumanParticipant(participant: ParticipantSnapshot): boolean {
 }
 
 function formatLanguageBridge(meetingLanguages: MeetingLanguage[]): string {
-  return meetingLanguages.length === 2
-    ? formatMeetingLanguageBridge(meetingLanguages)
-    : "Meeting languages unavailable";
+  return formatRoomLanguageList(meetingLanguages);
 }
 
 function formatParticipantStatus(status: ParticipantSnapshot["status"]): string {

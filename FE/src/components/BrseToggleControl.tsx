@@ -8,6 +8,7 @@ import { MotionButton } from "./MotionButton";
 interface BrseToggleControlProps {
   enabled: boolean;
   mode: BrseRoomMode;
+  languageCount?: number;
   pending?: boolean;
   disabled?: boolean;
   onToggle: (nextEnabled: boolean) => void;
@@ -16,12 +17,14 @@ interface BrseToggleControlProps {
 export function BrseToggleControl({
   enabled,
   mode,
+  languageCount = 0,
   pending = false,
   disabled = false,
   onToggle,
 }: BrseToggleControlProps) {
-  const label = getBrseModeLabel(mode);
-  const description = getBrseModeDescription(mode);
+  const isCaptionOnly = enabled && mode === "text_only" && languageCount === 1;
+  const label = isCaptionOnly ? "Captions" : getBrseModeLabel(mode);
+  const description = isCaptionOnly ? "Transcript/captions" : getBrseModeDescription(mode);
 
   return (
     <MotionButton

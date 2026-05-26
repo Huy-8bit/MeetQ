@@ -1,5 +1,73 @@
 # Backend Implementation State
 
+## Turn Update: 2026-05-26 Flexible Room Languages Runtime Completion
+
+- Time: 2026-05-26T(current session)
+- Mode: CODE
+- Status: implemented
+
+### Product Change
+
+- `room_languages` is the canonical room language model and can contain one or
+  more supported languages.
+- `meeting_languages` and legacy `language_a` / `language_b` remain accepted as
+  backward-compatible aliases and are mapped into `room_languages`.
+- Participant `language` remains per-user and must belong to the configured
+  `room_languages`.
+
+### Output Mode Rules
+
+- One-language rooms are source transcript/caption rooms. Runtime suppresses
+  cross-language translation and BRSE voice relay because there is no target
+  language.
+- Two-language rooms preserve the existing happy path: `voice_text` keeps BRSE
+  text + audio relay, while `text_only` suppresses relay audio.
+- Rooms with more than two languages force effective `brse_output_mode` to
+  `text_only`. Create/join/snapshot responses reflect the effective mode, and
+  `audio_routing.output_mode_downgrade_reason` is
+  `multi_language_text_only`.
+
+### Runtime Routing
+
+- BRSE LiveKit runtime now receives room languages at manager construction so
+  the virtual BRSE participant does not get audio publish permission for
+  one-language or 3+ language rooms.
+- For 3+ language rooms, speaker audio is used for source transcript capture,
+  then backend publishes text/caption translations to active audience languages
+  in `room_languages - {speaker_language}`.
+- Multi-language text translation uses the text-only caption path and publishes
+  relay transcript events with disabled audio metadata; no Realtime audio
+  response or LiveKit relay audio track is created.
+
+### Files Modified
+
+- `BE/server/meeting_modes.py`
+- `BE/server/models.py`
+- `BE/server/service/gateway/room_service.py`
+- `BE/server/service/gateway/room_store.py`
+- `BE/server/service/brain_runtime/daemon.py`
+- `BE/server/service/brain_runtime/delivery.py`
+- `BE/server/service/brain_runtime/room_manager.py`
+- `BE/server/service/brain_runtime/text_translation.py`
+- `BE/tests/conftest.py`
+- `BE/tests/test_gateway_api.py`
+- `BE/tests/test_gateway_room_store.py`
+- `docs/backend/API_CONTRACT.md`
+- `docs/backend/IMPLEMENTATION_STATE.md`
+- `docs/backend/INTERPRETER_DESIGN.md`
+- `docs/backend/README.md`
+
+### Verification
+
+- Added targeted Gateway API smoke coverage for one-language, two-language,
+  multi-language downgrade, participant language rejection, and legacy
+  `language_a` / `language_b` create payloads.
+- Lightweight compile check passed for touched backend/runtime/test files.
+- `PYTHONPATH=BE python3 -m pytest BE/tests/test_gateway_api.py BE/tests/test_gateway_room_store.py -q`
+  passed: 10 tests, 1 expected test-key length warning.
+
+---
+
 ## Turn Update: 2026-05-11 OpenAI Realtime Temperature Hotfix
 
 - Time: 2026-05-11T(current session)
@@ -155,9 +223,10 @@ languages, while preserving current 2-language production behavior.
 - Relay route resolution no longer means "target = the other language":
   - same-language / one-language room: capture source transcript and suppress
     relay translation/audio as `same_language_no_translation_required`;
-  - multi-language room: choose target from active listener languages first;
-  - if no listener language is available yet, fall back to room language order
-    for deterministic behavior.
+  - two-language room: choose target from active listener languages first, then
+    fall back to room language order for deterministic legacy behavior;
+  - room with more than two languages: force text/caption-only and publish text
+    translations for active audience languages, with BRSE audio disabled.
 - `RoomAudioRouting` now exposes `bridge_strategy="participant_language_preference"`
   and `relay_language_targets`; `relay_language_map` is retained only for exact
   two-language legacy clients.

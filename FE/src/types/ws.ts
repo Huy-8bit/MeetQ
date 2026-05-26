@@ -40,7 +40,10 @@ export type RoomSnapshotEvent = WsEnvelope<
       participant_limit: number | null;
       expires_at?: string;
       supported_languages: Language[];
+      room_languages?: MeetingLanguage[];
       meeting_languages?: MeetingLanguage[];
+      language_a?: MeetingLanguage;
+      language_b?: MeetingLanguage;
       meeting_mode?: "direct_translation" | "brse_relay" | "brse_silent_summary";
       interpreter_mode?: "per_listener" | "brse_participant";
       audio_routing?: AudioRouting;

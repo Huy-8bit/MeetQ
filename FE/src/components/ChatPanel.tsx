@@ -55,7 +55,7 @@ export function ChatPanel({
   const listRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const latestMessageId = messages[messages.length - 1]?.message_id ?? null;
-  // Only useful when room has a 2-lang pair and translation can be meaningful.
+  // Only useful when the room has more than one language.
   const canTranslate = !meetingLanguages || meetingLanguages.length >= 2;
   const textMotionRef = useTextAnimationRoot<HTMLElement>({
     dependencies: [embedded, messages.length === 0, canTranslate],

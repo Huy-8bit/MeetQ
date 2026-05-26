@@ -90,6 +90,11 @@ Room language routing is no longer pair-only. One-language rooms are valid for
 chat, transcript, summary, and BRSE source capture; translation relay only runs
 when the route has a real cross-language target.
 
+Rooms with more than two configured languages are text/caption translation
+rooms. Backend downgrades requested `voice_text` output to effective
+`text_only`, keeps source transcript capture, translates text for active
+cross-language audience languages, and does not publish BRSE relay audio.
+
 ### System Diagram
 
 ```mermaid

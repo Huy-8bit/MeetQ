@@ -52,11 +52,7 @@ export function formatMeetingLanguagePair(
     return "Unavailable";
   }
 
-  if (languages.length === 1) {
-    return getLanguageLabel(languages[0]);
-  }
-
-  return `${getLanguageLabel(languages[0])} and ${getLanguageLabel(languages[1])}`;
+  return formatRoomLanguageList(languages);
 }
 
 export function formatMeetingLanguageBridge(
@@ -66,32 +62,79 @@ export function formatMeetingLanguageBridge(
     return "Unavailable";
   }
 
-  return languages.map((language) => getLanguageLabel(language)).join(" <-> ");
+  return formatRoomLanguageList(languages);
+}
+
+export function formatRoomLanguageList(
+  languages: readonly MeetingLanguage[] | null | undefined,
+): string {
+  const normalized = normalizeLanguageList(languages);
+  if (normalized.length === 0) {
+    return "Unavailable";
+  }
+
+  if (normalized.length === 1) {
+    return getLanguageLabel(normalized[0]);
+  }
+
+  return normalized.map((language) => getLanguageLabel(language)).join(", ");
+}
+
+export function normalizeLanguageList(
+  languages: readonly unknown[] | null | undefined,
+): MeetingLanguage[] {
+  const normalized: MeetingLanguage[] = [];
+  for (const language of languages ?? []) {
+    if (typeof language !== "string" || !isMeetingLanguage(language)) {
+      continue;
+    }
+    if (!normalized.includes(language)) {
+      normalized.push(language);
+    }
+  }
+
+  return normalized;
+}
+
+interface RoomLanguageSource {
+  room_languages?: readonly unknown[] | null;
+  meeting_languages?: readonly unknown[] | null;
+  language_a?: unknown;
+  language_b?: unknown;
+  supported_languages?: readonly unknown[] | null;
+}
+
+export function normalizeRoomLanguages(
+  room: RoomLanguageSource | null | undefined,
+): MeetingLanguage[] {
+  const roomLanguages = normalizeLanguageList(room?.room_languages);
+  if (roomLanguages.length > 0) {
+    return roomLanguages;
+  }
+
+  const meetingLanguages = normalizeLanguageList(room?.meeting_languages);
+  if (meetingLanguages.length > 0) {
+    return meetingLanguages;
+  }
+
+  const legacyPair = normalizeLanguageList([room?.language_a, room?.language_b]);
+  if (legacyPair.length > 0) {
+    return legacyPair;
+  }
+
+  const supportedLanguages = normalizeLanguageList(room?.supported_languages);
+  return supportedLanguages.length <= 2 ? supportedLanguages : [];
 }
 
 export function resolveMeetingLanguages(
   meetingLanguages: RoomSnapshotResponse["room"]["meeting_languages"] | undefined,
   supportedLanguages: RoomSnapshotResponse["room"]["supported_languages"] | undefined,
 ): MeetingLanguage[] {
-  const directPair = (meetingLanguages ?? []).filter(
-    (language): language is MeetingLanguage => isMeetingLanguage(language),
-  );
-
-  if (directPair.length === 2 && directPair[0] !== directPair[1]) {
-    return directPair;
+  const directLanguages = normalizeLanguageList(meetingLanguages);
+  if (directLanguages.length > 0) {
+    return directLanguages;
   }
 
-  const fallbackPair = [
-    ...new Set(
-      (supportedLanguages ?? []).filter((language): language is MeetingLanguage =>
-        isMeetingLanguage(language),
-      ),
-    ),
-  ];
-
-  if (fallbackPair.length === 2 && fallbackPair[0] !== fallbackPair[1]) {
-    return fallbackPair;
-  }
-
-  return [];
+  const fallbackLanguages = normalizeLanguageList(supportedLanguages);
+  return fallbackLanguages.length <= 2 ? fallbackLanguages : [];
 }

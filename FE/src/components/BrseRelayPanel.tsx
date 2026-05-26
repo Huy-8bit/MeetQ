@@ -24,6 +24,7 @@ export function BrseRelayPanel({
   brseRoomMode,
   brseAudioExpected,
   transcripts,
+  meetingLanguages,
 }: BrseRelayPanelProps) {
   const listRef = useRef<HTMLDivElement | null>(null);
   const emptyMotionRef = useRevealMotion<HTMLDivElement>({
@@ -31,10 +32,10 @@ export function BrseRelayPanel({
     distance: 8,
     duration: 280,
     stagger: 36,
-    dependencies: [brseEnabled, brseRoomMode, brseAudioExpected],
+    dependencies: [brseEnabled, brseRoomMode, brseAudioExpected, meetingLanguages.length],
   });
   useTextAnimations(emptyMotionRef, {
-    dependencies: [brseEnabled, brseRoomMode, brseAudioExpected],
+    dependencies: [brseEnabled, brseRoomMode, brseAudioExpected, meetingLanguages.length],
   });
   const isNearBottomRef = useRef(true);
 
@@ -70,6 +71,7 @@ export function BrseRelayPanel({
       brseEnabled,
       brseRoomMode,
       brseAudioExpected,
+      languageCount: meetingLanguages.length,
     });
 
     return (
@@ -98,10 +100,12 @@ function getRelayEmptyCopy({
   brseEnabled,
   brseRoomMode,
   brseAudioExpected,
+  languageCount,
 }: {
   brseEnabled: boolean;
   brseRoomMode: BrseRoomMode;
   brseAudioExpected: boolean;
+  languageCount: number;
 }) {
   if (!brseEnabled) {
     return {
@@ -111,6 +115,20 @@ function getRelayEmptyCopy({
   }
 
   if (brseRoomMode === "text_only" || !brseAudioExpected) {
+    if (languageCount === 1) {
+      return {
+        title: "Caption mode",
+        detail: "Single-language captions will appear here. AI voice is off.",
+      };
+    }
+
+    if (languageCount > 2) {
+      return {
+        title: "Waiting for speech",
+        detail: "Multi-language text relay will appear here. AI voice is off.",
+      };
+    }
+
     return {
       title: "Waiting for speech",
       detail: "Text relay will appear here. AI voice is off.",

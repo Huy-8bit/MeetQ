@@ -29,6 +29,8 @@ from server.meeting_modes import (
     meeting_mode_for_brse_mode,
     normalize_brse_mode,
     normalize_brse_output_mode,
+    resolve_effective_brse_output_mode,
+    room_language_route_strategy,
 )
 from server.models import (
     ChatMessage,
@@ -434,7 +436,22 @@ class RoomService:
             )
 
         supported = set(SUPPORTED_MEETING_LANGUAGES)
-        invalid = [lang for lang in room_languages if lang not in supported]
+        invalid: List[Any] = []
+        normalized: List[MeetingLanguage] = []
+        duplicates: List[str] = []
+        for raw_language in room_languages:
+            if not isinstance(raw_language, str):
+                invalid.append(raw_language)
+                continue
+            language = raw_language.strip().lower()
+            if language not in supported:
+                invalid.append(raw_language)
+                continue
+            if language in normalized:
+                duplicates.append(language)
+                continue
+            normalized.append(language)  # type: ignore[arg-type]
+
         if invalid:
             raise InvalidMeetingLanguagesError(
                 "room_languages contains unsupported language",
@@ -445,18 +462,12 @@ class RoomService:
                 },
             )
 
-        normalized: List[MeetingLanguage] = []
-        duplicates: List[str] = []
-        for language in room_languages:
-            if language in normalized:
-                duplicates.append(language)
-                continue
-            normalized.append(language)
-
         if duplicates:
-            raise InvalidMeetingLanguagesError(
-                "room_languages must contain distinct languages",
-                details={"field": "room_languages", "duplicates": duplicates},
+            logger.info(
+                "room_languages duplicates removed: requested=%s duplicates=%s normalized=%s",
+                room_languages,
+                duplicates,
+                normalized,
             )
 
         if not normalized:
@@ -674,13 +685,41 @@ class RoomService:
         exp = self._exp_str()
         normalized_room_languages = self._normalize_room_languages(room_languages)
         normalized_brse_mode = normalize_brse_mode(brse_mode)
-        normalized_brse_output_mode = normalize_brse_output_mode(brse_output_mode)
+        requested_brse_output_mode = normalize_brse_output_mode(brse_output_mode)
+        normalized_brse_output_mode, downgrade_reason = resolve_effective_brse_output_mode(
+            normalized_room_languages,
+            requested_brse_output_mode,
+        )
+        audio_routing = build_brse_audio_routing(
+            normalized_room_languages,
+            normalized_brse_mode,
+            requested_brse_output_mode,
+        )
         logger.info(
-            "room language config resolved: room_id=%s room_languages=%s legacy_meeting_languages=%s",
+            "room language config resolved: room_id=%s room_languages=%s legacy_meeting_languages=%s "
+            "participant_language=%s requested_output_mode=%s effective_output_mode=%s "
+            "downgrade_reason=%s relay_audio_enabled=%s relay_text_enabled=%s route_strategy=%s",
             room_id,
             normalized_room_languages,
             normalized_room_languages,
+            "-",
+            requested_brse_output_mode,
+            normalized_brse_output_mode,
+            downgrade_reason or "-",
+            audio_routing.get("ai_audio_output_enabled"),
+            audio_routing.get("relay_text_output_enabled"),
+            audio_routing.get("route_strategy"),
         )
+        if downgrade_reason:
+            logger.info(
+                "room output mode downgraded: room_id=%s room_languages=%s requested_output_mode=%s "
+                "effective_output_mode=%s reason=%s",
+                room_id,
+                normalized_room_languages,
+                requested_brse_output_mode,
+                normalized_brse_output_mode,
+                downgrade_reason,
+            )
 
         room = RoomState(
             room_id=room_id,
@@ -696,18 +735,14 @@ class RoomService:
             meeting_languages=normalized_room_languages,
             meeting_mode=meeting_mode_for_brse_mode(normalized_brse_mode),
             interpreter_mode=INTERPRETER_MODE_BRSE_PARTICIPANT,
-            audio_routing=build_brse_audio_routing(
-                normalized_room_languages,
-                normalized_brse_mode,
-                normalized_brse_output_mode,
-            ),
+            audio_routing=audio_routing,
             virtual_participants=(
                 self._build_brse_virtual_participants(
                     room_id,
                     now,
                     normalized_room_languages,
                     normalized_brse_mode,
-                    normalized_brse_output_mode,
+                    requested_brse_output_mode,
                 )
                 if brse_enabled
                 else []
@@ -771,9 +806,28 @@ class RoomService:
         now = self._now_str()
         room_languages = self._room_languages_from_snapshot(snapshot)
         brse_mode = normalize_brse_mode(getattr(snapshot.room, "brse_mode", DEFAULT_BRSE_MODE))
-        brse_output_mode = normalize_brse_output_mode(
+        requested_brse_output_mode = normalize_brse_output_mode(
             getattr(snapshot.room, "brse_output_mode", DEFAULT_BRSE_OUTPUT_MODE)
         )
+        brse_output_mode, downgrade_reason = resolve_effective_brse_output_mode(
+            room_languages,
+            requested_brse_output_mode,
+        )
+        audio_routing = build_brse_audio_routing(
+            room_languages,
+            brse_mode,
+            requested_brse_output_mode,
+        )
+        if downgrade_reason:
+            logger.info(
+                "room output mode downgraded on BRSE toggle: room_id=%s room_languages=%s "
+                "requested_output_mode=%s effective_output_mode=%s reason=%s",
+                room_id,
+                room_languages,
+                requested_brse_output_mode,
+                brse_output_mode,
+                downgrade_reason,
+            )
         patch: Dict[str, Any] = {
             "brse_enabled": brse_enabled,
             "brse_mode": brse_mode,
@@ -782,14 +836,14 @@ class RoomService:
             "interpreter_mode": INTERPRETER_MODE_BRSE_PARTICIPANT,
             "room_languages": room_languages,
             "meeting_languages": room_languages,
-            "audio_routing": build_brse_audio_routing(room_languages, brse_mode, brse_output_mode),
+            "audio_routing": audio_routing,
             "virtual_participants": (
                 self._build_brse_virtual_participants(
                     room_id,
                     now,
                     room_languages,
                     brse_mode,
-                    brse_output_mode,
+                    requested_brse_output_mode,
                 )
                 if brse_enabled
                 else []
@@ -1271,6 +1325,21 @@ class RoomService:
                     "meeting_languages": room_languages,
                 },
             )
+        audio_routing = snapshot.room.audio_routing
+        logger.info(
+            "room join language/output resolved: room_id=%s room_languages=%s participant_language=%s "
+            "requested_output_mode=%s effective_output_mode=%s downgrade_reason=%s "
+            "relay_audio_enabled=%s relay_text_enabled=%s route_strategy=%s",
+            room_id,
+            room_languages,
+            language,
+            getattr(audio_routing, "requested_brse_output_mode", snapshot.room.brse_output_mode),
+            snapshot.room.brse_output_mode,
+            getattr(audio_routing, "output_mode_downgrade_reason", None) or "-",
+            getattr(audio_routing, "ai_audio_output_enabled", None),
+            getattr(audio_routing, "relay_text_output_enabled", None),
+            getattr(audio_routing, "route_strategy", room_language_route_strategy(room_languages)),
+        )
 
         now = self._now_str()
         if snapshot.room.state in {"created", "empty"}:

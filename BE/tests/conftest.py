@@ -68,6 +68,10 @@ class FakeRedis:
 
     async def hget(self, name: str, key: str) -> Any:
         return self.data.get(name, {}).get(key)
+
+    async def hdel(self, name: str, key: str) -> None:
+        if name in self.data:
+            self.data[name].pop(key, None)
         
     async def hgetall(self, name: str) -> Dict[str, str]:
         return self.data.get(name, {})

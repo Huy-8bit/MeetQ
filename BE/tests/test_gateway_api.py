@@ -71,3 +71,70 @@ def test_join_room_invalid_language(gateway_app: TestClient):
     res = gateway_app.post(f"/api/rooms/{room_id}/join", json=join_payload)
     assert res.status_code == 422
     assert res.json()["error"]["code"] == "invalid_language"
+
+
+def test_create_one_language_room_disables_voice_relay(gateway_app: TestClient):
+    res = gateway_app.post(
+        "/api/rooms",
+        json={"room_languages": ["vi"], "brse_output_mode": "voice_text"},
+    )
+    assert res.status_code == 200
+    room = res.json()["room"]
+    assert room["room_languages"] == ["vi"]
+    assert room["meeting_languages"] == ["vi"]
+    assert room["audio_routing"]["ai_audio_output_enabled"] is False
+    assert room["audio_routing"]["route_strategy"] == "single_language_source_capture"
+
+
+def test_create_two_language_room_preserves_voice_text(gateway_app: TestClient):
+    res = gateway_app.post(
+        "/api/rooms",
+        json={"room_languages": ["vi", "en"], "brse_output_mode": "voice_text"},
+    )
+    assert res.status_code == 200
+    room = res.json()["room"]
+    assert room["room_languages"] == ["vi", "en"]
+    assert room["brse_output_mode"] == "voice_text"
+    assert room["audio_routing"]["ai_audio_output_enabled"] is True
+    assert room["audio_routing"]["route_strategy"] == "two_language_relay"
+
+
+def test_create_multi_language_room_downgrades_voice_to_text_only(gateway_app: TestClient):
+    res = gateway_app.post(
+        "/api/rooms",
+        json={"room_languages": ["vi", "en", "ja"], "brse_output_mode": "voice_text"},
+    )
+    assert res.status_code == 200
+    room = res.json()["room"]
+    assert room["room_languages"] == ["vi", "en", "ja"]
+    assert room["meeting_languages"] == ["vi", "en", "ja"]
+    assert room["brse_output_mode"] == "text_only"
+    assert room["audio_routing"]["requested_brse_output_mode"] == "voice_text"
+    assert room["audio_routing"]["output_mode_downgrade_reason"] == "multi_language_text_only"
+    assert room["audio_routing"]["ai_audio_output_enabled"] is False
+    assert room["audio_routing"]["route_strategy"] == "multi_language_text_caption"
+
+
+def test_join_language_must_belong_to_room_languages(gateway_app: TestClient):
+    res = gateway_app.post("/api/rooms", json={"room_languages": ["vi", "en"]})
+    room_id = res.json()["room"]["room_id"]
+
+    res = gateway_app.post(
+        f"/api/rooms/{room_id}/join",
+        json={"display_name": "Test User", "language": "ja"},
+    )
+    assert res.status_code == 422
+    body = res.json()
+    assert body["error"]["code"] == "invalid_language"
+    assert body["error"]["details"]["room_languages"] == ["vi", "en"]
+
+
+def test_create_room_legacy_language_pair_payload(gateway_app: TestClient):
+    res = gateway_app.post(
+        "/api/rooms",
+        json={"language_a": "vi", "language_b": "en"},
+    )
+    assert res.status_code == 200
+    room = res.json()["room"]
+    assert room["room_languages"] == ["vi", "en"]
+    assert room["meeting_languages"] == ["vi", "en"]

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { api, ApiError } from "../lib/api";
 import {
-  formatMeetingLanguagePair,
+  formatRoomLanguageList,
 } from "../lib/languages";
 import { getBrseModeDescription } from "../lib/brseModes";
 import { useSessionStore } from "../state/session";
@@ -203,7 +203,10 @@ export function RoomPage() {
       )
     : null;
   const roomMeetingLanguages = meeting.meetingLanguages;
-  const brseModeDescription = getBrseModeDescription(meeting.brseRoomMode);
+  const brseModeDescription =
+    roomMeetingLanguages.length === 1 && meeting.brseRoomMode === "text_only"
+      ? "Transcript/captions"
+      : getBrseModeDescription(meeting.brseRoomMode);
   const relayStatusLabel = meeting.brseEnabled
     ? meeting.interpreterStatuses[0]?.status
       ? formatRelayStatus(meeting.interpreterStatuses[0].status)
@@ -304,16 +307,16 @@ export function RoomPage() {
       return;
     }
 
-    if (roomMeetingLanguages.length !== 2) {
+    if (roomMeetingLanguages.length === 0) {
       setJoinError(
-        "Room meeting language pair is unavailable. Reload room snapshot or ask the host to recreate the room.",
+        "Room languages are unavailable. Reload room snapshot or ask the host to recreate the room.",
       );
       return;
     }
 
     if (!roomMeetingLanguages.includes(payload.language)) {
       setJoinError(
-        `Choose one of the room meeting languages: ${formatMeetingLanguagePair(roomMeetingLanguages)}.`,
+        `Choose one of the room languages: ${formatRoomLanguageList(roomMeetingLanguages)}.`,
       );
       return;
     }
@@ -693,9 +696,9 @@ function mapJoinError(error: ApiError, meetingLanguages: MeetingLanguage[]): str
     return "Display name must be 1 to 40 characters.";
   }
   if (error.code === "invalid_language") {
-    return meetingLanguages.length === 2
-      ? `Your language must match the room meeting languages: ${formatMeetingLanguagePair(meetingLanguages)}.`
-      : "Your language must match one of the room meeting languages.";
+    return meetingLanguages.length > 0
+      ? `Your language must match the room languages: ${formatRoomLanguageList(meetingLanguages)}.`
+      : "Your language must match one of the room languages.";
   }
   return error.message;
 }

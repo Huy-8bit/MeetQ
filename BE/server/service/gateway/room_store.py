@@ -3,7 +3,7 @@ from typing import Any, Dict, List, Optional
 
 import redis.asyncio as redis
 
-from server.meeting_modes import BRSE_MODE_SILENT_SUMMARY
+from server.meeting_modes import BRSE_MODE_SILENT_SUMMARY, active_human_participant_count
 from server.models import (
     ChatMessage,
     ParticipantSnapshot,
@@ -95,7 +95,7 @@ class RoomStore:
                 for payload in room_state.virtual_participants
             )
 
-        participant_count = sum(1 for participant in participants if participant.status != "disconnected")
+        participant_count = active_human_participant_count(participants)
 
         trans_data = await self.client.lrange(self._trans_key(room_id), 0, -1)
         transcripts = [TranscriptEvent.model_validate_json(t) for t in trans_data]

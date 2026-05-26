@@ -5,11 +5,18 @@ from dataclasses import dataclass
 from typing import Dict
 
 from server.meeting_modes import (
+    BRSE_AUDIO_SUPPRESSED_ONE_LANGUAGE,
+    BRSE_AUDIO_SUPPRESSED_SILENT_SUMMARY,
+    BRSE_AUDIO_SUPPRESSED_TEXT_ONLY,
     BRSE_MODE_SILENT_SUMMARY,
+    ROUTE_STRATEGY_SINGLE_LANGUAGE,
     brse_audio_output_enabled,
     brse_relay_text_enabled,
     normalize_brse_mode,
     normalize_brse_output_mode,
+    normalize_room_languages_for_runtime,
+    resolve_effective_brse_output_mode,
+    room_language_route_strategy,
 )
 
 logger = logging.getLogger(__name__)
@@ -42,15 +49,29 @@ class RelayDeliveryController:
     controlled by BRSE mode and output mode.
     """
 
-    def __init__(self, *, room_id: str, brse_mode: str, brse_output_mode: str) -> None:
+    def __init__(
+        self,
+        *,
+        room_id: str,
+        brse_mode: str,
+        brse_output_mode: str,
+        room_languages=None,
+    ) -> None:
         self.room_id = room_id
+        self.room_languages = normalize_room_languages_for_runtime(room_languages)
         self.brse_mode = normalize_brse_mode(brse_mode)
-        self.brse_output_mode = normalize_brse_output_mode(brse_output_mode)
+        self.requested_brse_output_mode = normalize_brse_output_mode(brse_output_mode)
+        self.brse_output_mode, self.output_mode_downgrade_reason = resolve_effective_brse_output_mode(
+            self.room_languages,
+            self.requested_brse_output_mode,
+        )
+        self.route_strategy = room_language_route_strategy(self.room_languages)
         self.relay_text_enabled = brse_relay_text_enabled(True, self.brse_mode)
         self.relay_audio_enabled = brse_audio_output_enabled(
             True,
             self.brse_mode,
             self.brse_output_mode,
+            meeting_languages=self.room_languages,
         )
         self.relay_output_enabled = self.relay_text_enabled
         self.silent_summary_mode = self.brse_mode == BRSE_MODE_SILENT_SUMMARY
@@ -58,14 +79,22 @@ class RelayDeliveryController:
 
     @property
     def suppressed_audio_reason(self) -> str:
+        if self.output_mode_downgrade_reason:
+            return self.output_mode_downgrade_reason
+        if self.route_strategy == ROUTE_STRATEGY_SINGLE_LANGUAGE:
+            return BRSE_AUDIO_SUPPRESSED_ONE_LANGUAGE
         if self.text_only_output_mode:
-            return "brse_text_only_output_mode"
-        return "brse_silent_summary_mode"
+            return BRSE_AUDIO_SUPPRESSED_TEXT_ONLY
+        return BRSE_AUDIO_SUPPRESSED_SILENT_SUMMARY
 
     def describe(self) -> dict[str, object]:
         return {
             "brse_mode": self.brse_mode,
+            "requested_brse_output_mode": self.requested_brse_output_mode,
             "brse_output_mode": self.brse_output_mode,
+            "output_mode_downgrade_reason": self.output_mode_downgrade_reason,
+            "room_languages": self.room_languages,
+            "route_strategy": self.route_strategy,
             "relay_text_enabled": self.relay_text_enabled,
             "relay_audio_enabled": self.relay_audio_enabled,
             "relay_output_enabled": self.relay_output_enabled,
@@ -76,10 +105,16 @@ class RelayDeliveryController:
     def log_startup(self) -> None:
         logger.info(
             "BRSE delivery startup room=%s brse_mode=%s brse_output_mode=%s "
-            "relay_text_enabled=%s relay_audio_enabled=%s",
+            "requested_output_mode=%s effective_output_mode=%s downgrade_reason=%s "
+            "room_languages=%s route_strategy=%s relay_text_enabled=%s relay_audio_enabled=%s",
             self.room_id,
             self.brse_mode,
             self.brse_output_mode,
+            self.requested_brse_output_mode,
+            self.brse_output_mode,
+            self.output_mode_downgrade_reason or "-",
+            ",".join(self.room_languages),
+            self.route_strategy,
             self.relay_text_enabled,
             self.relay_audio_enabled,
         )

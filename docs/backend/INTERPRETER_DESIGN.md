@@ -11,8 +11,9 @@
 > consumes canonical `room_languages` through the legacy `meeting_languages`
 > parameter path for compatibility. One-language rooms are valid and run as
 > source transcript / same-language assist with relay translation disabled.
-> Multi-language rooms choose a relay target from active listener language
-> context first, then from room language ordering as a deterministic fallback.
+> Two-language rooms preserve the existing relay target behavior. Rooms with
+> more than two languages are forced to text/caption translation only and never
+> publish BRSE relay audio.
 >
 > Update note (2026-05-03): backend AI/model-facing code lives under `server.brain`; backend orchestration around room lifecycle, Redis control, and LiveKit media lives under `server.service`. Historical references below may describe the pre-refactor `server/interpreter` layout; active runtime modules are documented in `docs/backend/FILE_STRUCTURE.md`.
 >
@@ -145,8 +146,9 @@ Route resolution hiện tại là conservative:
 
 1. Nếu speaker language không thuộc `room_languages`, room runtime tạm dừng route cho speaker đó.
 2. Nếu room chỉ có một language, runtime capture source transcript và không tạo relay translation/audio vô nghĩa.
-3. Nếu room có nhiều languages, target được chọn theo ngôn ngữ listener active khác speaker trước; nếu chưa có listener, backend dùng thứ tự `room_languages` làm fallback để giữ behavior deterministic cho room 2 ngôn ngữ cũ.
-4. Full personalized many-to-many voice fanout cho mọi participant/language chưa là mục tiêu của runtime hiện tại.
+3. Nếu room có đúng hai languages, target được chọn theo ngôn ngữ listener active khác speaker trước; nếu chưa có listener, backend dùng thứ tự `room_languages` làm fallback để giữ behavior deterministic cho room 2 ngôn ngữ cũ.
+4. Nếu room có nhiều hơn hai languages, backend force text/caption-only: capture source transcript, tạo text translation cho active audience languages khác speaker, và không tạo TTS/audio relay hay publish LiveKit BRSE audio track.
+5. Full personalized many-to-many voice fanout cho mọi participant/language chưa là mục tiêu của runtime hiện tại.
 
 ### Interpreter Participant
 

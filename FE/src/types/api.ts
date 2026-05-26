@@ -36,6 +36,10 @@ export type AiRelayAudioPolicy =
   | "listener_private_track"
   | "virtual_participant_track"
   | "disabled";
+export type RelayRouteStrategy =
+  | "single_language_source_capture"
+  | "two_language_relay"
+  | "multi_language_text_caption";
 
 export type ParticipantStatus =
   | "joining"
@@ -61,13 +65,21 @@ export interface AudioRouting {
   same_language_policy: SameLanguagePolicy;
   ai_relay_audio?: AiRelayAudioPolicy;
   ai_audio_output_enabled?: boolean;
+  relay_audio_enabled?: boolean;
+  relay_text_enabled?: boolean;
   relay_text_output_enabled?: boolean;
   ai_audio_suppressed_reason?: string | null;
   source_transcript_capture?: boolean;
   relay_transcript_policy?: "publish_realtime" | "source_only_internal";
   interpreter_mode?: InterpreterMode;
-  bridge_strategy?: "speaker_language_map";
+  bridge_strategy?: "speaker_language_map" | "participant_language_preference";
   relay_language_map?: Partial<Record<SelectableLanguage, SelectableLanguage>>;
+  relay_language_targets?: Partial<Record<SelectableLanguage, SelectableLanguage[]>>;
+  requested_brse_output_mode?: BrseOutputMode;
+  effective_brse_output_mode?: BrseOutputMode;
+  output_mode_downgrade_reason?: string | null;
+  room_language_count?: number;
+  route_strategy?: RelayRouteStrategy;
   virtual_participant_id?: string;
 }
 
@@ -138,14 +150,20 @@ export interface RoomSummary {
   brse_output_mode?: BrseOutputMode;
   participant_limit: number | null;
   supported_languages: Language[];
+  room_languages?: MeetingLanguage[];
   meeting_languages?: MeetingLanguage[];
+  language_a?: MeetingLanguage;
+  language_b?: MeetingLanguage;
   meeting_mode?: MeetingMode;
   interpreter_mode?: InterpreterMode;
   audio_routing?: AudioRouting;
 }
 
 export interface CreateRoomRequest {
-  meeting_languages: [MeetingLanguage, MeetingLanguage];
+  room_languages: MeetingLanguage[];
+  meeting_languages?: MeetingLanguage[];
+  language_a?: MeetingLanguage;
+  language_b?: MeetingLanguage;
   brse_enabled?: boolean;
   brse_mode?: BrseMode;
   brse_output_mode?: BrseOutputMode;

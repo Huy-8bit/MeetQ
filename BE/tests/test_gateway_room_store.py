@@ -51,7 +51,7 @@ async def test_room_lifecycle(fake_redis):
     # Test leave
     await store.mark_participant_left(room_id, "pt_1", now)
     snapshot = await store.get_room_snapshot(room_id)
-    assert snapshot.participants[0].status == "disconnected"
+    assert snapshot.participants == []
     assert snapshot.room.participant_count == 0  # Since count checks non-left participants
     
     # Test mark empty

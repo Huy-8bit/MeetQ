@@ -41,7 +41,7 @@ export function RoomTopBar({
   onToggleBrse,
 }: RoomTopBarProps) {
   const languageOptions =
-    meetingLanguages.length === 2 ? meetingLanguages : [currentLanguage];
+    meetingLanguages.length > 0 ? meetingLanguages : [currentLanguage];
   const selectOptions: Array<CustomSelectOption<Language>> = languageOptions.map((item) => ({
     value: item,
     label: getLanguageLabel(item),
@@ -80,7 +80,7 @@ export function RoomTopBar({
           className="topbar-lang-select"
           value={currentLanguage}
           options={selectOptions}
-          disabled={meetingLanguages.length !== 2}
+          disabled={meetingLanguages.length === 0}
           onChange={onChangeLanguage}
           ariaLabel="Your language"
           size="compact"
@@ -91,6 +91,7 @@ export function RoomTopBar({
         <BrseToggleControl
           enabled={brseEnabled}
           mode={brseRoomMode}
+          languageCount={meetingLanguages.length}
           pending={isTogglingBrse}
           disabled={!canToggleBrse}
           onToggle={onToggleBrse}

@@ -135,12 +135,28 @@ class InterpreterDaemon:
             return None
 
         brse_mode = getattr(snapshot.room, "brse_mode", "relay")
-        brse_output_mode = getattr(snapshot.room, "brse_output_mode", DEFAULT_BRSE_OUTPUT_MODE)
+        effective_brse_output_mode = getattr(snapshot.room, "brse_output_mode", DEFAULT_BRSE_OUTPUT_MODE)
+        audio_routing = getattr(snapshot.room, "audio_routing", None)
+        if isinstance(audio_routing, dict):
+            requested_brse_output_mode = audio_routing.get(
+                "requested_brse_output_mode",
+                effective_brse_output_mode,
+            )
+        else:
+            requested_brse_output_mode = getattr(
+                audio_routing,
+                "requested_brse_output_mode",
+                effective_brse_output_mode,
+            )
+        room_languages = _snapshot_room_languages(snapshot)
         logger.info(
-            "Spawning interpreter manager for room %s brse_mode=%s brse_output_mode=%s",
+            "Spawning interpreter manager for room %s brse_mode=%s requested_output_mode=%s "
+            "effective_output_mode=%s room_languages=%s",
             room_id,
             brse_mode,
-            brse_output_mode,
+            requested_brse_output_mode,
+            effective_brse_output_mode,
+            room_languages,
         )
         publisher = RedisEventPublisher(self.redis, room_id, self.interpreter_events_channel)
         manager = RoomInterpreterManager(
@@ -148,7 +164,8 @@ class InterpreterDaemon:
             self.settings,
             publisher,
             brse_mode=brse_mode,
-            brse_output_mode=brse_output_mode,
+            brse_output_mode=requested_brse_output_mode,
+            room_languages=room_languages,
         )
         self.managers[room_id] = manager
 
@@ -156,7 +173,7 @@ class InterpreterDaemon:
             await manager.start()
             manager.bootstrap_participants(
                 snapshot.participants,
-                meeting_languages=_snapshot_room_languages(snapshot),
+                meeting_languages=room_languages,
             )
             return manager
         except Exception:

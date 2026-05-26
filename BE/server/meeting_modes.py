@@ -16,6 +16,14 @@ DEFAULT_BRSE_MODE = BRSE_MODE_RELAY
 BRSE_OUTPUT_MODE_VOICE_TEXT = "voice_text"
 BRSE_OUTPUT_MODE_TEXT_ONLY = "text_only"
 DEFAULT_BRSE_OUTPUT_MODE = BRSE_OUTPUT_MODE_VOICE_TEXT
+BRSE_OUTPUT_DOWNGRADE_MULTI_LANGUAGE = "multi_language_text_only"
+BRSE_AUDIO_SUPPRESSED_ONE_LANGUAGE = "one_language_no_cross_language_voice_relay"
+BRSE_AUDIO_SUPPRESSED_TEXT_ONLY = "brse_text_only_output_mode"
+BRSE_AUDIO_SUPPRESSED_SILENT_SUMMARY = "brse_silent_summary_mode"
+
+ROUTE_STRATEGY_SINGLE_LANGUAGE = "single_language_source_capture"
+ROUTE_STRATEGY_TWO_LANGUAGE = "two_language_relay"
+ROUTE_STRATEGY_MULTI_LANGUAGE_TEXT = "multi_language_text_caption"
 
 INTERPRETER_MODE_PER_LISTENER = "per_listener"
 INTERPRETER_MODE_BRSE_PARTICIPANT = "brse_participant"
@@ -53,6 +61,45 @@ def normalize_brse_output_mode(value: Optional[str]) -> str:
     return BRSE_OUTPUT_MODE_VOICE_TEXT
 
 
+def normalize_room_languages_for_runtime(meeting_languages: Optional[Iterable[str]]) -> list[str]:
+    normalized: list[str] = []
+    supported = set(SUPPORTED_MEETING_LANGUAGES)
+    for lang in meeting_languages or []:
+        if not isinstance(lang, str):
+            continue
+        language = lang.strip().lower()
+        if language not in supported or language in normalized:
+            continue
+        normalized.append(language)
+    return normalized or list(DEFAULT_ROOM_MEETING_LANGUAGES)
+
+
+def room_language_route_strategy(meeting_languages: Optional[Iterable[str]]) -> str:
+    room_languages = normalize_room_languages_for_runtime(meeting_languages)
+    if len(room_languages) == 1:
+        return ROUTE_STRATEGY_SINGLE_LANGUAGE
+    if len(room_languages) == 2:
+        return ROUTE_STRATEGY_TWO_LANGUAGE
+    return ROUTE_STRATEGY_MULTI_LANGUAGE_TEXT
+
+
+def resolve_effective_brse_output_mode(
+    meeting_languages: Optional[Iterable[str]],
+    brse_output_mode: Optional[str] = DEFAULT_BRSE_OUTPUT_MODE,
+) -> tuple[str, Optional[str]]:
+    requested_output_mode = normalize_brse_output_mode(brse_output_mode)
+    room_languages = normalize_room_languages_for_runtime(meeting_languages)
+    if len(room_languages) > 2 and requested_output_mode == BRSE_OUTPUT_MODE_VOICE_TEXT:
+        return BRSE_OUTPUT_MODE_TEXT_ONLY, BRSE_OUTPUT_DOWNGRADE_MULTI_LANGUAGE
+    return requested_output_mode, None
+
+
+def brse_voice_relay_allowed_for_room_languages(
+    meeting_languages: Optional[Iterable[str]],
+) -> bool:
+    return len(normalize_room_languages_for_runtime(meeting_languages)) == 2
+
+
 def meeting_mode_for_brse_mode(brse_mode: Optional[str]) -> str:
     if normalize_brse_mode(brse_mode) == BRSE_MODE_SILENT_SUMMARY:
         return MEETING_MODE_BRSE_SILENT_SUMMARY
@@ -67,7 +114,13 @@ def brse_audio_output_enabled(
     brse_enabled: bool,
     brse_mode: Optional[str],
     brse_output_mode: Optional[str] = DEFAULT_BRSE_OUTPUT_MODE,
+    *,
+    meeting_languages: Optional[Iterable[str]] = None,
 ) -> bool:
+    if meeting_languages is not None and not brse_voice_relay_allowed_for_room_languages(
+        meeting_languages
+    ):
+        return False
     return bool(
         brse_relay_text_enabled(brse_enabled, brse_mode)
         and normalize_brse_output_mode(brse_output_mode) == BRSE_OUTPUT_MODE_VOICE_TEXT
@@ -91,9 +144,18 @@ def build_brse_virtual_participant(
 ) -> Dict[str, Any]:
     room_languages = normalize_room_languages_for_runtime(meeting_languages)
     normalized_mode = normalize_brse_mode(brse_mode)
-    normalized_output_mode = normalize_brse_output_mode(brse_output_mode)
+    requested_output_mode = normalize_brse_output_mode(brse_output_mode)
+    normalized_output_mode, downgrade_reason = resolve_effective_brse_output_mode(
+        room_languages,
+        requested_output_mode,
+    )
     relay_text_enabled = brse_relay_text_enabled(True, normalized_mode)
-    audio_enabled = brse_audio_output_enabled(True, normalized_mode, normalized_output_mode)
+    audio_enabled = brse_audio_output_enabled(
+        True,
+        normalized_mode,
+        normalized_output_mode,
+        meeting_languages=room_languages,
+    )
     return {
         "participant_id": BRSE_PARTICIPANT_ID,
         "display_name": BRSE_PARTICIPANT_DISPLAY_NAME,
@@ -107,9 +169,12 @@ def build_brse_virtual_participant(
             "meeting_mode": meeting_mode_for_brse_mode(normalized_mode),
             "brse_mode": normalized_mode,
             "brse_output_mode": normalized_output_mode,
+            "requested_brse_output_mode": requested_output_mode,
+            "output_mode_downgrade_reason": downgrade_reason,
             "interpreter_mode": INTERPRETER_MODE_BRSE_PARTICIPANT,
             "room_languages": room_languages,
             "meeting_languages": room_languages,
+            "route_strategy": room_language_route_strategy(room_languages),
             "publishes_audio": audio_enabled,
             "publishes_text": relay_text_enabled,
             "publishes_video": False,
@@ -118,16 +183,6 @@ def build_brse_virtual_participant(
             "relay_transcript_policy": "publish_realtime" if relay_text_enabled else "source_only_internal",
         },
     }
-
-
-def normalize_room_languages_for_runtime(meeting_languages: Optional[Iterable[str]]) -> list[str]:
-    normalized: list[str] = []
-    supported = set(SUPPORTED_MEETING_LANGUAGES)
-    for lang in meeting_languages or []:
-        if not isinstance(lang, str) or lang not in supported or lang in normalized:
-            continue
-        normalized.append(lang)
-    return normalized or list(DEFAULT_ROOM_MEETING_LANGUAGES)
 
 
 def build_relay_language_targets(meeting_languages: Iterable[str]) -> Dict[str, list[str]]:
@@ -192,9 +247,18 @@ def build_brse_audio_routing(
     relay_map = build_relay_language_map(room_languages)
     relay_targets = build_relay_language_targets(room_languages)
     normalized_mode = normalize_brse_mode(brse_mode)
-    normalized_output_mode = normalize_brse_output_mode(brse_output_mode)
+    requested_output_mode = normalize_brse_output_mode(brse_output_mode)
+    normalized_output_mode, downgrade_reason = resolve_effective_brse_output_mode(
+        room_languages,
+        requested_output_mode,
+    )
     relay_text_enabled = brse_relay_text_enabled(True, normalized_mode)
-    audio_enabled = brse_audio_output_enabled(True, normalized_mode, normalized_output_mode)
+    audio_enabled = brse_audio_output_enabled(
+        True,
+        normalized_mode,
+        normalized_output_mode,
+        meeting_languages=room_languages,
+    )
     if normalized_mode == BRSE_MODE_SILENT_SUMMARY:
         model = "brse_silent_listener"
     elif audio_enabled:
@@ -202,10 +266,14 @@ def build_brse_audio_routing(
     else:
         model = "brse_text_only_relay"
     suppressed_reason = None
-    if relay_text_enabled and not audio_enabled:
-        suppressed_reason = "brse_text_only_output_mode"
-    elif normalized_mode == BRSE_MODE_SILENT_SUMMARY:
-        suppressed_reason = "brse_silent_summary_mode"
+    if normalized_mode == BRSE_MODE_SILENT_SUMMARY:
+        suppressed_reason = BRSE_AUDIO_SUPPRESSED_SILENT_SUMMARY
+    elif downgrade_reason:
+        suppressed_reason = downgrade_reason
+    elif relay_text_enabled and len(room_languages) == 1 and not audio_enabled:
+        suppressed_reason = BRSE_AUDIO_SUPPRESSED_ONE_LANGUAGE
+    elif relay_text_enabled and not audio_enabled:
+        suppressed_reason = BRSE_AUDIO_SUPPRESSED_TEXT_ONLY
     return {
         "model": model,
         "cross_language_remote_audio": "human_original_plus_brse" if audio_enabled else "human_original_only",
@@ -219,11 +287,15 @@ def build_brse_audio_routing(
         "virtual_participant_id": BRSE_PARTICIPANT_ID,
         "brse_mode": normalized_mode,
         "brse_output_mode": normalized_output_mode,
+        "requested_brse_output_mode": requested_output_mode,
+        "output_mode_downgrade_reason": downgrade_reason,
         "ai_audio_output_enabled": audio_enabled,
         "relay_text_output_enabled": relay_text_enabled,
         "ai_audio_suppressed_reason": suppressed_reason,
         "source_transcript_capture": True,
         "relay_transcript_policy": "publish_realtime" if relay_text_enabled else "source_only_internal",
+        "route_strategy": room_language_route_strategy(room_languages),
+        "room_language_count": len(room_languages),
     }
 
 

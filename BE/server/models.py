@@ -17,6 +17,9 @@ from server.meeting_modes import (
     MEETING_MODE_BRSE_RELAY,
     PARTICIPANT_KIND_HUMAN,
     SUPPORTED_MEETING_LANGUAGES,
+    build_brse_audio_routing,
+    normalize_room_languages_for_runtime,
+    resolve_effective_brse_output_mode,
 )
 
 
@@ -68,11 +71,19 @@ class RoomAudioRouting(BaseModel):
     virtual_participant_id: str = BRSE_PARTICIPANT_ID
     brse_mode: BrseMode = BRSE_MODE_RELAY
     brse_output_mode: BrseOutputMode = BRSE_OUTPUT_MODE_VOICE_TEXT
+    requested_brse_output_mode: BrseOutputMode = BRSE_OUTPUT_MODE_VOICE_TEXT
+    output_mode_downgrade_reason: Optional[str] = None
     ai_audio_output_enabled: bool = True
     relay_text_output_enabled: bool = True
     ai_audio_suppressed_reason: Optional[str] = None
     source_transcript_capture: bool = True
     relay_transcript_policy: RelayTranscriptPolicy = "publish_realtime"
+    route_strategy: Literal[
+        "single_language_source_capture",
+        "two_language_relay",
+        "multi_language_text_caption",
+    ] = "two_language_relay"
+    room_language_count: int = 2
 
 
 class ParticipantState(BaseModel):
@@ -167,6 +178,32 @@ class RoomState(BaseModel):
                 normalized.get("room_languages")
                 or legacy_pair
                 or list(DEFAULT_ROOM_MEETING_LANGUAGES)
+            )
+        room_languages = normalize_room_languages_for_runtime(
+            normalized.get("room_languages")
+        )
+        normalized["room_languages"] = room_languages
+        normalized["meeting_languages"] = room_languages
+        requested_output_mode = normalized.get(
+            "brse_output_mode",
+            DEFAULT_BRSE_OUTPUT_MODE,
+        )
+        effective_output_mode, _downgrade_reason = resolve_effective_brse_output_mode(
+            room_languages,
+            requested_output_mode,
+        )
+        normalized["brse_output_mode"] = effective_output_mode
+        audio_routing = normalized.get("audio_routing")
+        if (
+            audio_routing is None
+            or not isinstance(audio_routing, dict)
+            or audio_routing.get("brse_output_mode") != effective_output_mode
+            or audio_routing.get("room_language_count") != len(room_languages)
+        ):
+            normalized["audio_routing"] = build_brse_audio_routing(
+                room_languages,
+                normalized.get("brse_mode", DEFAULT_BRSE_MODE),
+                requested_output_mode,
             )
         return normalized
 

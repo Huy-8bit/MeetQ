@@ -22,6 +22,7 @@ from server.service.brain_runtime.overlap import (
     OverlapManager,
 )
 from server.service.brain_runtime.policy import ConversationPolicyEngine
+from server.service.brain_runtime.text_translation import translate_caption_text
 from server.brain.realtime.interpreter_client import InterpreterRealtimeClient
 from server.service.media.livekit_runtime import LiveKitRuntime
 from server.brain.realtime.session_config import (
@@ -148,14 +149,20 @@ class RoomInterpreterManager:
         *,
         brse_mode: str = DEFAULT_BRSE_MODE,
         brse_output_mode: str = DEFAULT_BRSE_OUTPUT_MODE,
+        room_languages: Optional[Iterable[str]] = None,
     ):
         self.room_id = room_id
         self.settings = settings
         self.publisher = publisher
+        self.room_languages: tuple[str, ...] = tuple(DEFAULT_ROOM_MEETING_LANGUAGES)
+        self.meeting_languages: tuple[str, ...] = self.room_languages
+        self._meeting_languages_ready = False
+        self._set_meeting_languages(room_languages)
         self.delivery = RelayDeliveryController(
             room_id=room_id,
             brse_mode=brse_mode,
             brse_output_mode=brse_output_mode,
+            room_languages=self.room_languages,
         )
         self.brse_mode = self.delivery.brse_mode
         self.brse_output_mode = self.delivery.brse_output_mode
@@ -209,9 +216,6 @@ class RoomInterpreterManager:
         self.relay_focus_started_at: Optional[float] = None
         self.relay_focus_cooldown_until: Optional[float] = None
         self.relay_focus_release_task: Optional[asyncio.Task] = None
-        self.room_languages: tuple[str, ...] = tuple(DEFAULT_ROOM_MEETING_LANGUAGES)
-        self.meeting_languages: tuple[str, ...] = self.room_languages
-        self._meeting_languages_ready = False
         self._closed = False
         self.public_relay_approved_count = 0
         self.public_relay_suppressed_count = 0
@@ -413,6 +417,48 @@ class RoomInterpreterManager:
                     f"Speaker {speaker_id} uses language {speaker_lang}, but room_languages is "
                     f"{', '.join(self.room_languages)}."
                 ),
+            )
+
+        if len(self.room_languages) > 2:
+            target_languages = self._multi_language_text_target_languages(
+                speaker_id,
+                speaker_lang,
+            )
+            audience_ids = frozenset(
+                participant_id
+                for target_language in target_languages
+                for participant_id in self._audience_ids_for_target(
+                    speaker_id,
+                    target_language,
+                )
+            )
+            routing_mode = (
+                "multi_language_text_caption"
+                if target_languages
+                else "multi_language_source_capture_no_audience"
+            )
+            logger.info(
+                "BRSE route chosen room=%s speaker=%s speaker_language=%s target_languages=%s "
+                "room_languages=%s audience_ids=%s routing_mode=%s relay_enabled=False "
+                "relay_text_enabled=%s relay_audio_enabled=%s",
+                self.room_id,
+                speaker_id,
+                speaker_lang,
+                ",".join(target_languages) or "-",
+                ",".join(self.room_languages),
+                ",".join(sorted(audience_ids)) or "-",
+                routing_mode,
+                self.relay_text_enabled,
+                self.relay_audio_enabled,
+            )
+            return _RoutingResolution(
+                plan=_RoutingPlan(
+                    src_lang=speaker_lang,
+                    tgt_lang=target_languages[0] if target_languages else speaker_lang,
+                    audience_ids=audience_ids,
+                    relay_enabled=False,
+                    routing_mode=routing_mode,
+                )
             )
 
         audience_languages = self._audience_languages_for_speaker(speaker_id)
@@ -1943,6 +1989,24 @@ class RoomInterpreterManager:
                         generation,
                     )
                 )
+                if state.get("route_mode") == "multi_language_text_caption":
+                    asyncio.create_task(
+                        self._publish_multi_language_text_translations(
+                            speaker_id=speaker_id,
+                            utterance_id=state["utterance_id"],
+                            generation=generation,
+                        )
+                    )
+                elif state.get("route_mode") == "multi_language_source_capture_no_audience":
+                    logger.info(
+                        "BRSE multi-language text relay skipped room=%s speaker=%s utterance=%s "
+                        "src=%s room_languages=%s reason=no_active_cross_language_audience",
+                        self.room_id,
+                        speaker_id,
+                        state["utterance_id"],
+                        src_lang,
+                        ",".join(self.room_languages),
+                    )
             else:
                 router.clear_queue()
                 logger.info(
@@ -2604,6 +2668,157 @@ class RoomInterpreterManager:
             overlap=self._overlap_payload(speaker_id),
         )
 
+    async def _publish_multi_language_text_translations(
+        self,
+        *,
+        speaker_id: str,
+        utterance_id: str,
+        generation: int,
+    ) -> None:
+        if not self.relay_text_enabled:
+            logger.info(
+                "BRSE multi-language text relay skipped room=%s speaker=%s utterance=%s "
+                "reason=relay_text_disabled brse_mode=%s",
+                self.room_id,
+                speaker_id,
+                utterance_id,
+                self.brse_mode,
+            )
+            return
+
+        state = self._transcript_state_for_publish(speaker_id, utterance_id, generation)
+        if state is None or not self._source_state_is_valid_for_output(state):
+            return
+
+        source_text = str(state.get("source_text") or "").strip()
+        src_lang = str(state.get("src_lang") or "")
+        if not source_text or src_lang not in self.room_languages:
+            return
+
+        target_languages = self._multi_language_text_target_languages(speaker_id, src_lang)
+        if not target_languages:
+            logger.info(
+                "BRSE multi-language text relay skipped room=%s speaker=%s utterance=%s "
+                "src=%s room_languages=%s reason=no_active_cross_language_audience",
+                self.room_id,
+                speaker_id,
+                utterance_id,
+                src_lang,
+                ",".join(self.room_languages),
+            )
+            return
+
+        logger.info(
+            "BRSE multi-language text relay translating room=%s speaker=%s utterance=%s "
+            "src=%s targets=%s relay_audio_enabled=%s brse_output_mode=%s",
+            self.room_id,
+            speaker_id,
+            utterance_id,
+            src_lang,
+            ",".join(target_languages),
+            self.relay_audio_enabled,
+            self.brse_output_mode,
+        )
+
+        published_targets: list[str] = []
+        for target_lang in target_languages:
+            audience_ids = sorted(self._audience_ids_for_target(speaker_id, target_lang))
+            if not audience_ids:
+                continue
+
+            translated_text = await translate_caption_text(
+                text=source_text,
+                src_lang=src_lang,
+                tgt_lang=target_lang,
+                api_key=self.settings.openai_api_key,
+            )
+            if not translated_text:
+                logger.warning(
+                    "BRSE multi-language text relay translation empty room=%s speaker=%s "
+                    "utterance=%s src=%s target=%s",
+                    self.room_id,
+                    speaker_id,
+                    utterance_id,
+                    src_lang,
+                    target_lang,
+                )
+                continue
+
+            delivery_plan = self.delivery.plan_publish(
+                speaker_id=speaker_id,
+                utterance_id=utterance_id,
+                relay_style="normal",
+                final=True,
+                policy_reason="multi_language_text_caption",
+            )
+            if not delivery_plan.text_enabled:
+                return
+
+            latency_ms = int(max(0.0, time.monotonic() - state["started_at"]) * 1000)
+            relay_decision = {
+                "approved": True,
+                "reason": "multi_language_text_caption",
+                "relay_style": "normal",
+                "overlap_level": state.get("public_relay_overlap_level", _OVERLAP_LEVEL_SINGLE),
+                "candidate_reason": "multi_language_text_caption",
+            }
+            await self.publisher.publish_relay_transcript_final(
+                transcript_id=f"{utterance_id}::relay::{target_lang}",
+                utterance_id=utterance_id,
+                speaker_id=speaker_id,
+                speaker_name=self._speaker_name(speaker_id),
+                src_lang=src_lang,
+                target_lang=target_lang,
+                source_text=source_text,
+                brse_text=translated_text,
+                created_at=state["created_at"],
+                brse_livekit_identity=self.runtime.livekit_identity,
+                audio_track_name=None,
+                audio_track=self._disabled_audio_track_descriptor(
+                    speaker_id=speaker_id,
+                    src_lang=src_lang,
+                    target_lang=target_lang,
+                ),
+                audience_participant_ids=audience_ids,
+                latency_ms=latency_ms,
+                relay_style="normal",
+                relay_focus=self._relay_focus_payload(speaker_id),
+                overlap=self._overlap_payload(speaker_id),
+                relay_decision=relay_decision,
+                delivery=delivery_plan.as_payload(),
+            )
+            self.room_context.record_relay_output(
+                utterance_id=utterance_id,
+                speaker_id=speaker_id,
+                target_lang=target_lang,
+                text=translated_text,
+                relay_style="normal",
+                created_at=state["created_at"],
+            )
+            self.room_context.record_relay_decision(
+                utterance_id=utterance_id,
+                speaker_id=speaker_id,
+                relay_style="normal",
+                decision="publish_final",
+                reason=delivery_plan.reason,
+                overlap_level=str(state.get("public_relay_overlap_level") or _OVERLAP_LEVEL_SINGLE),
+                delivery_mode=delivery_plan.delivery_mode,
+            )
+            published_targets.append(target_lang)
+
+        if published_targets:
+            state["relay_final_published"] = True
+            state["delivery_mode"] = "text_only"
+            logger.info(
+                "BRSE multi-language text relay published room=%s speaker=%s utterance=%s "
+                "targets=%s source_chars=%d relay_audio_enabled=False",
+                self.room_id,
+                speaker_id,
+                utterance_id,
+                ",".join(published_targets),
+                len(source_text),
+            )
+
     async def _publish_partial(
         self,
         speaker_id: str,
@@ -2837,6 +3052,20 @@ class RoomInterpreterManager:
             and payload.get("language") in self.room_languages
         }
 
+    def _multi_language_text_target_languages(
+        self,
+        speaker_id: str,
+        src_lang: str,
+    ) -> tuple[str, ...]:
+        if len(self.room_languages) <= 2:
+            return tuple()
+        audience_languages = self._audience_languages_for_speaker(speaker_id)
+        return tuple(
+            language
+            for language in self.room_languages
+            if language != src_lang and language in audience_languages
+        )
+
     def _speaker_name(self, speaker_id: str) -> str:
         return self.participants.get(speaker_id, {}).get("display_name", speaker_id)
 
@@ -2855,6 +3084,38 @@ class RoomInterpreterManager:
             self.speaker_generations.get(speaker_id) == generation
             and self.routers.get(speaker_id) is router
         )
+
+    def _disabled_audio_track_descriptor(
+        self,
+        *,
+        speaker_id: str,
+        src_lang: str,
+        target_lang: str,
+    ) -> Dict[str, Any]:
+        return {
+            "model": "brse_text_only_relay",
+            "mode": "disabled",
+            "canonical": False,
+            "track_available": False,
+            "track_name": None,
+            "track_sid": None,
+            "participant_id": BRSE_PARTICIPANT_ID,
+            "participant_kind": "virtual_brse",
+            "livekit_identity": self.runtime.livekit_identity,
+            "speaker_id": speaker_id,
+            "source_language": src_lang,
+            "target_language": target_lang,
+            "output_suppressed": True,
+            "suppressed_reason": self.delivery.suppressed_audio_reason,
+            "relay_audio_enabled": False,
+            "brse_output_mode": self.brse_output_mode,
+            "stats": {
+                "output_enabled": False,
+                "output_suppressed": True,
+                "suppressed_reason": self.delivery.suppressed_audio_reason,
+                "brse_output_mode": self.brse_output_mode,
+            },
+        }
 
     def _transcript_state_for_publish(
         self,
@@ -2975,21 +3236,25 @@ class RoomInterpreterManager:
         for lang in meeting_languages:
             if not isinstance(lang, str):
                 continue
-            if lang not in _SUPPORTED_LANGS:
+            language = lang.strip().lower()
+            if language not in _SUPPORTED_LANGS:
                 invalid.append(lang)
                 continue
-            if lang in normalized:
-                duplicates.append(lang)
+            if language in normalized:
+                duplicates.append(language)
                 continue
-            normalized.append(lang)
+            normalized.append(language)
 
         if invalid:
             return self._mark_meeting_languages_not_ready(
                 f"unsupported room_languages={invalid!r}"
             )
         if duplicates:
-            return self._mark_meeting_languages_not_ready(
-                f"duplicate room_languages={duplicates!r}"
+            logger.info(
+                "Room %s BRSE duplicate room_languages removed: duplicates=%s normalized=%s",
+                self.room_id,
+                duplicates,
+                normalized,
             )
         if not normalized:
             return self._mark_meeting_languages_not_ready(

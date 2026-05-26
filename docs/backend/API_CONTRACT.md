@@ -4,6 +4,8 @@
 >
 > Update note (2026-05-10): room language config is now list-based. `room_languages` is the canonical room-level supported language list and may contain 1 or more distinct supported languages. `meeting_languages` remains a backward-compatible alias for existing clients; legacy `language_a` / `language_b` request or persisted fields are mapped into `room_languages`. `participant.language` remains the participant's selected language and must be one of the room languages.
 >
+> Update note (2026-05-26): `room_languages.length > 2` forces effective `brse_output_mode="text_only"` even when the request asks for `voice_text`; snapshots and create/join responses return the effective mode. In that mode BRSE does not publish a LiveKit audio relay track and only emits source transcript plus text/caption translations. One-language rooms are valid source transcript/caption rooms and suppress cross-language voice relay.
+>
 > Update note (2026-05-01): rooms now expose explicit `brse_enabled`. Create-room can set it, snapshots/events expose it, and `brse_enabled=false` means a normal human-only meeting: no `brse_ai` virtual participant, no BRSE interpreter runtime, no BRSE transcript/audio output.
 >
 > Update note (2026-05-05): create-room also accepts additive `brse_mode="relay" | "silent_summary"`. `brse_enabled=true` with `relay` preserves existing BRSE audio relay behavior. `brse_enabled=true` with `silent_summary` starts BRSE as a silent listener: it subscribes to human audio and archives source transcripts for post-meeting summary, but suppresses relay audio and realtime relay transcript fan-out.
@@ -247,7 +249,7 @@ Tạo room trống.
 Rules:
 
 1. `room_languages` là canonical và có thể có 1 hoặc nhiều phần tử.
-2. Các ngôn ngữ phải distinct.
+2. Các ngôn ngữ được normalize theo thứ tự request và duplicate sẽ bị loại bỏ.
 3. Chỉ nhận `vi | en | ja | zh | ko | fr | es`.
 4. `meeting_languages` vẫn được nhận như legacy alias; nếu cả hai cùng có thì `room_languages` được ưu tiên.
 5. Legacy `language_a` + `language_b` vẫn được map vào `room_languages` khi client cũ gửi payload dạng pair.
@@ -256,8 +258,13 @@ Rules:
 8. `brse_mode` optional; nếu omitted, backend mặc định `relay`. Chỉ có hiệu lực khi `brse_enabled=true`.
 9. `brse_output_mode` optional; nếu omitted, backend mặc định `voice_text`. Chỉ tách audio/text khi `brse_enabled=true` và `brse_mode="relay"`.
 10. `brse_output_mode="text_only"` nghĩa là BRSE vẫn nghe, vẫn publish source/relay text realtime khi có cross-language route, nhưng không publish BRSE audio track.
+11. Nếu `room_languages.length == 1`, backend vẫn capture source transcript/caption nhưng không tạo cross-language translation hoặc voice relay.
+12. Nếu `room_languages.length == 2`, backend giữ behavior hiện tại: `voice_text` publish relay text + BRSE audio nếu mode cho phép; `text_only` chỉ publish text.
+13. Nếu `room_languages.length > 2`, backend downgrade request `voice_text` thành effective `text_only`; response/snapshot trả `brse_output_mode="text_only"` và `audio_routing.output_mode_downgrade_reason="multi_language_text_only"`.
 
 One-language rooms are valid. In that case create/join/chat/transcript/summary remain usable; translation relay degrades to source transcript / same-language assist with no cross-language relay target.
+
+Multi-language rooms with more than two languages use text/caption translation only. When a speaker uses language `X`, backend emits text translations for active audience languages in `room_languages - {X}` and suppresses AI voice speaking / LiveKit relay audio.
 
 ### Response JSON Schema
 

@@ -17,6 +17,7 @@ import type {
   RoomSnapshotResponse,
   TranslationTestSessionResponse,
 } from "../types/api";
+import { normalizeLanguageList } from "./languages";
 import { buildApiUrl } from "./urls";
 
 export { buildApiUrl, getApiBaseUrl } from "./urls";
@@ -110,9 +111,18 @@ async function requestJson<T>(
 
 export const api = {
   createRoom(body: CreateRoomRequest) {
+    const roomLanguages = normalizeLanguageList(body.room_languages);
+    const payload: CreateRoomRequest = {
+      ...body,
+      room_languages: roomLanguages,
+      meeting_languages: body.meeting_languages ?? roomLanguages,
+      language_a: body.language_a ?? roomLanguages[0],
+      language_b: body.language_b ?? roomLanguages[1],
+    };
+
     return requestJson<CreateRoomResponse>("/api/rooms", {
       method: "POST",
-      body: JSON.stringify(body),
+      body: JSON.stringify(payload),
     });
   },
 
