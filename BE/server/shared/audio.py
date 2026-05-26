@@ -22,7 +22,7 @@ import sounddevice as sd
 
 
 # Default capture parameters
-DEFAULT_SAMPLE_RATE = 16000   # Hz  (16kHz — Realtime API accepts this)
+DEFAULT_SAMPLE_RATE = 24000   # Hz  (GA Realtime PCM expects 24kHz mono)
 DEFAULT_CHANNELS = 1           # mono
 CHUNK_MS = 20                  # ms per chunk
 DTYPE = "int16"                # 16-bit PCM
@@ -106,7 +106,7 @@ class AudioInput(abc.ABC):
     input device, e.g. BlackHole/Loopback virtual devices for meeting capture).
 
     Usage:
-        inp = MicInput(device=0, sample_rate=16000)
+        inp = MicInput(device=0, sample_rate=24000)
         inp.start()
         for chunk in inp.stream_frames():
             # chunk is PCM16 bytes (~20ms worth)
@@ -219,7 +219,7 @@ class DeviceLoopbackInput(AudioInput):
     Usage:
         # List devices: python app.py --list-input-devices
         # Pick the virtual device index shown, e.g. 4 for BlackHole 2ch
-        inp = DeviceLoopbackInput(device=4, sample_rate=16000)
+        inp = DeviceLoopbackInput(device=4, sample_rate=24000)
         inp.start()
         for chunk in inp.stream_frames():
             process(chunk)
@@ -308,7 +308,7 @@ class MicCapture:
     Captures microphone audio and exposes it as an iterable of PCM16 byte chunks.
 
     Usage:
-        cap = MicCapture(device=0, sample_rate=16000)
+        cap = MicCapture(device=0, sample_rate=24000)
         cap.start()
         for chunk in cap.iter_chunks():
             # chunk is bytes of PCM16 data (~20ms worth)

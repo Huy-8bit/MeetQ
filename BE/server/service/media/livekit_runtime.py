@@ -91,7 +91,7 @@ class LiveKitRuntime:
             audio_stream = rtc.AudioStream.from_track(
                 track=track,
                 loop=loop,
-                sample_rate=getattr(self.settings, "realtime_input_sample_rate", 16000),
+                sample_rate=getattr(self.settings, "realtime_input_sample_rate", 24000),
                 num_channels=1,
                 frame_size_ms=20,
             )

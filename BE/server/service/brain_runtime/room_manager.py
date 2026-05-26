@@ -541,7 +541,7 @@ class RoomInterpreterManager:
         audio_input = LiveKitAudioInput(
             speaker_id,
             stream,
-            sample_rate=getattr(self.settings, "realtime_input_sample_rate", 16000),
+            sample_rate=getattr(self.settings, "realtime_input_sample_rate", 24000),
             loop=asyncio.get_running_loop(),
             queue_maxsize=_INPUT_QUEUE_MAXSIZE,
             warmup_chunks=_INPUT_WARMUP_CHUNKS,

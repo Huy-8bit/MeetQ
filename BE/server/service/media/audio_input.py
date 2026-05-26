@@ -31,7 +31,7 @@ class LiveKitAudioInput(AudioInput):
         self,
         participant_id: str,
         audio_stream: rtc.AudioStream,
-        sample_rate: int = 16000,
+        sample_rate: int = 24000,
         *,
         loop: Optional[asyncio.AbstractEventLoop] = None,
         channels: int = 1,

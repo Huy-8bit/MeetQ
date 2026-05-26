@@ -26,10 +26,9 @@ from server.brain.realtime.session_config import (
     INTERPRETER_INPUT_TRANSCRIPTION_MODEL,
     INTERPRETER_INPUT_TRANSCRIPTION_PROMPT,
     build_interpreter_instructions,
+    build_realtime_session_update,
     INTERPRETER_TEMPERATURE,
     INTERPRETER_VAD_CONFIG,
-    prepare_input_audio_transcription_prompt,
-    prepare_realtime_session_temperature,
 )
 
 logger = logging.getLogger(__name__)
@@ -40,7 +39,7 @@ _TEST_VAD_CONFIG = {
     "silence_duration_ms": 400,  # faster commit for test utterances
 }
 
-_SAMPLE_RATE = 16000
+_SAMPLE_RATE = 24000
 _CHANNELS = 1
 _BYTES_PER_SAMPLE = 2
 
@@ -101,33 +100,17 @@ class _QueueAudioInput(AudioInput):
 
 def _build_test_session_update(src_lang: str, tgt_lang: str) -> dict:
     """Build OpenAI session.update for text-only translation test mode."""
-    from server.brain.realtime.session_config import (
-        INTERPRETER_MAX_RESPONSE_OUTPUT_TOKENS,
-    )
-
     instructions = build_interpreter_instructions(src_lang, tgt_lang)
-    return {
-        "type": "session.update",
-        "session": {
-            "modalities": ["text"],  # text-only; no audio output for test mode
-            "instructions": instructions,
-            "input_audio_format": "pcm16",
-            "input_audio_transcription": {
-                "model": INTERPRETER_INPUT_TRANSCRIPTION_MODEL,
-                "prompt": prepare_input_audio_transcription_prompt(
-                    INTERPRETER_INPUT_TRANSCRIPTION_PROMPT,
-                    context="translation_test_session_update",
-                ),
-                "language": src_lang,
-            },
-            "turn_detection": dict(_TEST_VAD_CONFIG),
-            "temperature": prepare_realtime_session_temperature(
-                INTERPRETER_TEMPERATURE,
-                context="translation_test_session_update",
-            ),
-            "max_response_output_tokens": INTERPRETER_MAX_RESPONSE_OUTPUT_TOKENS,
-        },
-    }
+    return build_realtime_session_update(
+        instructions=instructions,
+        enable_audio=False,
+        input_transcription_model=INTERPRETER_INPUT_TRANSCRIPTION_MODEL,
+        input_transcription_prompt=INTERPRETER_INPUT_TRANSCRIPTION_PROMPT,
+        input_language=src_lang,
+        temperature=INTERPRETER_TEMPERATURE,
+        turn_detection=_TEST_VAD_CONFIG,
+        context="translation_test_session_update",
+    )
 
 
 class TranslationTestClient:

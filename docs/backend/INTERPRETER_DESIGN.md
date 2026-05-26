@@ -127,7 +127,7 @@ LIVEKIT_WS_URL_INTERNAL=ws://livekit:7880
 INTERPRETER_IDENTITY_PREFIX=interp
 INTERPRETER_CONNECT_TIMEOUT_SECONDS=10
 REALTIME_OUTPUT_SAMPLE_RATE=24000
-REALTIME_INPUT_SAMPLE_RATE=16000
+REALTIME_INPUT_SAMPLE_RATE=24000
 REALTIME_FRAME_MS=20
 SESSION_IDLE_TTL_SECONDS=60
 SESSION_MAX_NO_AUDIO_SECONDS=2
@@ -290,7 +290,7 @@ Interpreter tạo stream như sau:
 ```python
 audio_stream = rtc.AudioStream.from_track(
     track=remote_audio_track,
-    sample_rate=16000,
+    sample_rate=24000,
     num_channels=1,
     frame_size_ms=20,
 )
@@ -301,7 +301,7 @@ audio_input = LiveKitAudioInput(
 )
 ```
 
-LiveKit tự resample từ incoming WebRTC audio xuống 16kHz mono.
+LiveKit tự resample từ incoming WebRTC audio xuống 24kHz mono cho GA Realtime PCM.
 
 ### Class Shape
 
@@ -722,7 +722,7 @@ Lý do: không trộn một nửa audio realtime với một nửa fallback text
 
 ### Fallback Flow
 
-1. `InterpretationSession` luôn append source PCM16 16kHz vào `utterance_buffer` trong lúc `capturing`
+1. `InterpretationSession` luôn append source PCM16 24kHz vào `utterance_buffer` trong lúc `capturing`
 2. Khi trigger fallback:
    - freeze buffer của utterance hiện tại
    - cancel realtime generation cho utterance đó

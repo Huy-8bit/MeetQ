@@ -59,9 +59,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument(
         "--input-rate",
         type=int,
-        default=16000,
+        default=24000,
         metavar="HZ",
-        help=f"Sample rate for audio input in Hz (default 16000). Common: {VALID_INPUT_RATES}.",
+        help=f"Sample rate for audio input in Hz (default 24000). Common: {VALID_INPUT_RATES}.",
     )
     p.add_argument(
         "--list-input-devices",

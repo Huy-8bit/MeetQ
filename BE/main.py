@@ -103,7 +103,7 @@ def run_realtime(args: argparse.Namespace, api_key: str) -> int:
     from server.brain.prompts.language import parse_pairs
     from server.brain.realtime.client import RealtimeClient
 
-    audio_input = MicInput(device=args.device, sample_rate=16000)
+    audio_input = MicInput(device=args.device, sample_rate=24000)
     enable_speaker = not args.no_speaker
 
     client = RealtimeClient(

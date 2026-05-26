@@ -34,8 +34,8 @@ from server.brain.prompts.language import (
 )
 from server.brain.prompts.technical_terms import build_technical_transcription_prompt
 from server.brain.realtime.session_config import (
-    prepare_input_audio_transcription_prompt,
-    prepare_realtime_session_temperature,
+    INTERPRETER_INPUT_TRANSCRIPTION_MODEL,
+    build_realtime_session_update,
 )
 from server.shared.logging_utils import get_logger, print_translation
 
@@ -45,7 +45,7 @@ from server.shared.logging_utils import get_logger, print_translation
 
 REALTIME_URL_TEMPLATE = "wss://api.openai.com/v1/realtime?model={model}"
 DEFAULT_MODEL = "gpt-realtime"
-SAMPLE_RATE = 16000
+SAMPLE_RATE = 24000
 SPEAKER_SAMPLE_RATE = 24000   # Realtime API outputs PCM16 at 24kHz
 MAX_RECONNECT_ATTEMPTS = 5
 RECONNECT_BASE_DELAY = 1.0
@@ -63,36 +63,22 @@ def _build_session_update(
     *,
     input_language: Optional[str] = None,
 ) -> dict:
-    modalities = ["text", "audio"] if enable_audio else ["text"]
-    transcription_prompt = prepare_input_audio_transcription_prompt(
-        build_technical_transcription_prompt(),
-        context="realtime_client_session_update",
-    )
-    temperature = prepare_realtime_session_temperature(
-        0.8,
-        context="realtime_client_session_update",
-    )
-    session: dict = {
-        "modalities": modalities,
-        "instructions": instructions,
-        "input_audio_format": "pcm16",
-        "input_audio_transcription": {
-            "model": "gpt-4o-transcribe",
-            "prompt": transcription_prompt,
-            **({"language": input_language} if input_language and input_language != "auto" else {}),
-        },
-        "turn_detection": {
+    return build_realtime_session_update(
+        instructions=instructions,
+        enable_audio=enable_audio,
+        input_transcription_model=INTERPRETER_INPUT_TRANSCRIPTION_MODEL,
+        input_transcription_prompt=build_technical_transcription_prompt(),
+        input_language=input_language,
+        temperature=0.8,
+        turn_detection={
             "type": "server_vad",
             "threshold": 0.5,
             "prefix_padding_ms": 300,
             "silence_duration_ms": 700,
         },
-        "temperature": temperature,
-    }
-    if enable_audio:
-        session["output_audio_format"] = "pcm16"
-        session["voice"] = "alloy"
-    return {"type": "session.update", "session": session}
+        voice="alloy",
+        context="realtime_client_session_update",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -236,7 +222,6 @@ class RealtimeClient:
         url = REALTIME_URL_TEMPLATE.format(model=self.model)
         headers = {
             "Authorization": f"Bearer {self.api_key}",
-            "OpenAI-Beta": "realtime=v1",
         }
 
         # Reset per-session observability counters
@@ -422,19 +407,19 @@ class RealtimeClient:
             self._dbg(f"lifecycle: {etype}")
 
         # ---- Text output (translation) ----
-        elif etype == "response.text.delta":
+        elif etype in ("response.text.delta", "response.output_text.delta"):
             delta = event.get("delta", "")
             self._dbg(f"text_delta={delta!r}")
             print_translation(delta, end="")
 
-        elif etype == "response.text.done":
+        elif etype in ("response.text.done", "response.output_text.done"):
             text = event.get("text", "").strip()
             self._stat_translations += 1
             self._log(f"response.text.done #{self._stat_translations} text={text!r}")
             print_translation("\n", end="")
 
         # ---- Audio output ----
-        elif etype == "response.audio.delta":
+        elif etype in ("response.audio.delta", "response.output_audio.delta"):
             encoded = event.get("delta", "")
             if encoded and self._player:
                 self._stat_audio_chunks += 1
@@ -449,15 +434,15 @@ class RealtimeClient:
                         "Translation text is still printed to stdout."
                     )
 
-        elif etype == "response.audio.done":
+        elif etype in ("response.audio.done", "response.output_audio.done"):
             self._dbg("response.audio.done")
             if self._player:
                 self._player.flush()
 
-        elif etype == "response.audio_transcript.delta":
+        elif etype in ("response.audio_transcript.delta", "response.output_audio_transcript.delta"):
             self._dbg(f"audio_transcript.delta={event.get('delta', '')!r}")
 
-        elif etype == "response.audio_transcript.done":
+        elif etype in ("response.audio_transcript.done", "response.output_audio_transcript.done"):
             self._dbg(f"audio_transcript.done={event.get('transcript', '')!r}")
 
         # ---- Response done ----

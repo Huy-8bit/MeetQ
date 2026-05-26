@@ -218,7 +218,7 @@ The Discord bot reuses the existing realtime translation pipeline:
 Discord Voice Channel
     ↓ (48kHz stereo PCM)
 DiscordAudioInput (audio.py)
-    ↓ (convert to 16kHz mono, 20ms chunks)
+    ↓ (convert to 24kHz mono, 20ms chunks)
 RealtimeClient (existing translation engine)
     ↓ (translation text)
 print_translation (hooked)

@@ -41,7 +41,7 @@ class Settings(BaseSettings):
     public_app_url: str = "http://localhost:3000"
     public_gateway_url: str = "http://localhost:8000"
     public_gateway_ws_url: Optional[str] = None
-    realtime_input_sample_rate: int = 16000
+    realtime_input_sample_rate: int = 24000
     realtime_output_sample_rate: int = 24000
     ws_stale_timeout_seconds: int = 90
     ws_stale_sweep_interval_seconds: int = 15

@@ -290,7 +290,7 @@ Khi đã subscribed, convert raw frames:
 ```python
 audio_stream = rtc.AudioStream.from_track(
     track=remote_audio_track,
-    sample_rate=16000,
+    sample_rate=24000,
     num_channels=1,
     frame_size_ms=20,
 )

@@ -14,6 +14,7 @@ logger = logging.getLogger(__name__)
 OPENAI_INPUT_AUDIO_TRANSCRIPTION_PROMPT_MAX_CHARS = 1024
 INPUT_AUDIO_TRANSCRIPTION_PROMPT_WARN_CHARS = 900
 OPENAI_REALTIME_SESSION_TEMPERATURE_MIN = 0.6
+OPENAI_REALTIME_PCM_SAMPLE_RATE = 24000
 
 
 def _compact_prompt_whitespace(prompt: str) -> str:
@@ -117,6 +118,62 @@ def prepare_realtime_session_temperature(
         OPENAI_REALTIME_SESSION_TEMPERATURE_MIN,
     )
     return value
+
+
+def realtime_audio_format() -> dict:
+    return {"type": "audio/pcm", "rate": OPENAI_REALTIME_PCM_SAMPLE_RATE}
+
+
+def build_realtime_session_update(
+    *,
+    instructions: str,
+    enable_audio: bool,
+    input_transcription_model: str,
+    input_transcription_prompt: str,
+    input_language: Optional[str] = None,
+    temperature: float = OPENAI_REALTIME_SESSION_TEMPERATURE_MIN,
+    max_output_tokens: int | str = "inf",
+    turn_detection: Optional[dict] = None,
+    voice: str = "alloy",
+    context: str = "realtime_session_update",
+) -> dict:
+    safe_transcription_prompt = prepare_input_audio_transcription_prompt(
+        input_transcription_prompt,
+        context=context,
+    )
+    safe_temperature = prepare_realtime_session_temperature(
+        temperature,
+        context=context,
+    )
+    transcription = {
+        "model": input_transcription_model,
+        "prompt": safe_transcription_prompt,
+        **({"language": input_language} if input_language and input_language != "auto" else {}),
+    }
+    audio: dict = {
+        "input": {
+            "format": realtime_audio_format(),
+            "transcription": transcription,
+            "turn_detection": dict(turn_detection or INTERPRETER_VAD_CONFIG),
+        },
+    }
+    if enable_audio:
+        audio["output"] = {
+            "format": realtime_audio_format(),
+            "voice": voice,
+        }
+
+    return {
+        "type": "session.update",
+        "session": {
+            "type": "realtime",
+            "instructions": instructions,
+            "output_modalities": ["audio"] if enable_audio else ["text"],
+            "audio": audio,
+            "temperature": safe_temperature,
+            "max_output_tokens": max_output_tokens,
+        },
+    }
 
 
 INTERPRETER_VAD_CONFIG = {
@@ -347,29 +404,15 @@ def build_interpreter_session_update(
     input_language: Optional[str] = None,
     temperature: float = INTERPRETER_TEMPERATURE,
 ) -> dict:
-    modalities = ["text", "audio"] if enable_audio else ["text"]
-    safe_transcription_prompt = prepare_input_audio_transcription_prompt(
-        input_transcription_prompt,
+    return build_realtime_session_update(
+        instructions=instructions,
+        enable_audio=enable_audio,
+        input_transcription_model=input_transcription_model,
+        input_transcription_prompt=input_transcription_prompt,
+        input_language=input_language,
+        temperature=temperature,
+        max_output_tokens=INTERPRETER_MAX_RESPONSE_OUTPUT_TOKENS,
+        turn_detection=INTERPRETER_VAD_CONFIG,
+        voice=INTERPRETER_VOICE,
         context="build_interpreter_session_update",
     )
-    safe_temperature = prepare_realtime_session_temperature(
-        temperature,
-        context="build_interpreter_session_update",
-    )
-    session: dict = {
-        "modalities": modalities,
-        "instructions": instructions,
-        "input_audio_format": "pcm16",
-        "input_audio_transcription": {
-            "model": input_transcription_model,
-            "prompt": safe_transcription_prompt,
-            **({"language": input_language} if input_language and input_language != "auto" else {}),
-        },
-        "turn_detection": dict(INTERPRETER_VAD_CONFIG),
-        "temperature": safe_temperature,
-        "max_response_output_tokens": INTERPRETER_MAX_RESPONSE_OUTPUT_TOKENS,
-    }
-    if enable_audio:
-        session["output_audio_format"] = "pcm16"
-        session["voice"] = INTERPRETER_VOICE
-    return {"type": "session.update", "session": session}

@@ -18,6 +18,7 @@ from server.brain.realtime.session_config import (
     INTERPRETER_INPUT_TRANSCRIPTION_PROMPT,
     INTERPRETER_SOURCE_QUALITY_HOLD_MS,
     INTERPRETER_VAD_CONFIG,
+    INTERPRETER_VOICE,
     INTERPRETER_SEND_QUEUE_MAXSIZE,
     OPENAI_INPUT_AUDIO_TRANSCRIPTION_PROMPT_MAX_CHARS,
     OPENAI_REALTIME_SESSION_TEMPERATURE_MIN,
@@ -25,6 +26,7 @@ from server.brain.realtime.session_config import (
     build_interpreter_silent_listener_instructions,
     build_interpreter_summary_instructions,
     build_interpreter_session_update,
+    realtime_audio_format,
 )
 from server.brain.realtime.source_policy import source_transcript_needs_quality_hold
 from server.brain.realtime.term_detector import detect_terms
@@ -115,7 +117,6 @@ class InterpreterRealtimeClient(RealtimeClient):
         url = REALTIME_URL_TEMPLATE.format(model=self.model)
         headers = {
             "Authorization": f"Bearer {self.api_key}",
-            "OpenAI-Beta": "realtime=v1",
         }
 
         self._stat_transcripts = 0
@@ -160,18 +161,13 @@ class InterpreterRealtimeClient(RealtimeClient):
                 self._log(f"ws_connected model={self.model}")
                 session_update_payload = self._session_update_payload()
                 await ws.send(json.dumps(session_update_payload))
-                transcription_config = (
-                    session_update_payload.get("session", {}).get(
-                        "input_audio_transcription",
-                        {},
-                    )
+                transcription_config = self._input_transcription_config(
+                    session_update_payload,
                 )
                 effective_transcription_prompt = str(
                     transcription_config.get("prompt") or ""
                 )
-                effective_temperature = session_update_payload.get("session", {}).get(
-                    "temperature"
-                )
+                effective_temperature = session_update_payload.get("session", {}).get("temperature")
                 raw_transcription_prompt = str(self.input_transcription_prompt or "")
                 max_prompt_chars = OPENAI_INPUT_AUDIO_TRANSCRIPTION_PROMPT_MAX_CHARS
                 self._log(
@@ -521,7 +517,7 @@ class InterpreterRealtimeClient(RealtimeClient):
             self._audio_transcript_text_parts = []
             self._log(f"response.created id={self._current_response_id}")
 
-        elif etype == "response.text.delta":
+        elif etype in ("response.text.delta", "response.output_text.delta"):
             if self._should_drop_response_event(etype, event):
                 return
             if self._using_audio_transcript_text:
@@ -548,7 +544,7 @@ class InterpreterRealtimeClient(RealtimeClient):
                 self._log("first_text_delta " + " ".join(metric_bits))
             self.on_text_delta(delta)
 
-        elif etype == "response.text.done":
+        elif etype in ("response.text.done", "response.output_text.done"):
             if self._should_drop_response_event(etype, event):
                 return
             if self._using_audio_transcript_text:
@@ -558,7 +554,7 @@ class InterpreterRealtimeClient(RealtimeClient):
             self._text_done_emitted = True
             self.on_text_done(text)
 
-        elif etype == "response.audio.delta":
+        elif etype in ("response.audio.delta", "response.output_audio.delta"):
             if self._should_drop_response_event(etype, event):
                 return
             encoded = event.get("delta", "")
@@ -586,13 +582,13 @@ class InterpreterRealtimeClient(RealtimeClient):
                     self.on_status_change("playing")
                 self.on_audio_delta(encoded)
 
-        elif etype == "response.audio.done":
+        elif etype in ("response.audio.done", "response.output_audio.done"):
             if self._should_drop_response_event(etype, event):
                 return
             self._log(f"response.audio.done chunks={self._response_audio_chunks}")
             self.on_audio_done()
 
-        elif etype == "response.audio_transcript.delta":
+        elif etype in ("response.audio_transcript.delta", "response.output_audio_transcript.delta"):
             if self._should_drop_response_event(etype, event):
                 return
             if not self._current_response_had_text and not self._text_done_emitted:
@@ -610,7 +606,7 @@ class InterpreterRealtimeClient(RealtimeClient):
                         )
                     self.on_text_delta(delta)
 
-        elif etype == "response.audio_transcript.done":
+        elif etype in ("response.audio_transcript.done", "response.output_audio_transcript.done"):
             if self._should_drop_response_event(etype, event):
                 return
             if not self._current_response_had_text and not self._text_done_emitted:
@@ -748,7 +744,7 @@ class InterpreterRealtimeClient(RealtimeClient):
         self._pending_response_source_id = relay_source_id
         self._active_response_source_id = None
         self._suppress_response_output = False
-        modalities = ["text", "audio"] if self.request_audio_output else ["text"]
+        output_modalities = ["audio"] if self.request_audio_output else ["text"]
         if relay_style == "summary":
             instructions = (
                 build_interpreter_summary_instructions(
@@ -795,7 +791,7 @@ class InterpreterRealtimeClient(RealtimeClient):
             "type": "response.create",
             "response": {
                 "conversation": "none",
-                "modalities": modalities,
+                "output_modalities": output_modalities,
                 "instructions": instructions,
                 "input": [
                     {
@@ -816,13 +812,21 @@ class InterpreterRealtimeClient(RealtimeClient):
                     "target_language": self.tgt_lang,
                     "relay_style": relay_style,
                 },
+                "max_output_tokens": INTERPRETER_MAX_RESPONSE_OUTPUT_TOKENS,
             },
         }
+        if self.request_audio_output:
+            payload["response"]["audio"] = {
+                "output": {
+                    "format": realtime_audio_format(),
+                    "voice": INTERPRETER_VOICE,
+                },
+            }
         await ws.send(json.dumps(payload))
         self._log(
             "response.create_from_validated_transcript "
             f"source_id={relay_source_id} chars={len(source_text)} "
-            f"modalities={','.join(modalities)} relay_style={relay_style}"
+            f"modalities={','.join(output_modalities)} relay_style={relay_style}"
         )
 
     async def _hold_for_turn_completion(self, *, relay_style: str) -> None:
@@ -973,12 +977,7 @@ class InterpreterRealtimeClient(RealtimeClient):
             await self._prune_conversation(ws)
         session_update_payload = self._session_update_payload()
         await ws.send(json.dumps(session_update_payload))
-        transcription_config = (
-            session_update_payload.get("session", {}).get(
-                "input_audio_transcription",
-                {},
-            )
-        )
+        transcription_config = self._input_transcription_config(session_update_payload)
         effective_transcription_prompt = str(
             transcription_config.get("prompt") or ""
         )
@@ -1003,6 +1002,20 @@ class InterpreterRealtimeClient(RealtimeClient):
             input_transcription_prompt=self.input_transcription_prompt,
             input_language=self.src_lang,
         )
+
+    def _input_transcription_config(self, session_update_payload: dict[str, Any]) -> dict[str, Any]:
+        session = session_update_payload.get("session")
+        if not isinstance(session, dict):
+            return {}
+        audio = session.get("audio")
+        if isinstance(audio, dict):
+            audio_input = audio.get("input")
+            if isinstance(audio_input, dict):
+                transcription = audio_input.get("transcription")
+                if isinstance(transcription, dict):
+                    return transcription
+        legacy_transcription = session.get("input_audio_transcription")
+        return legacy_transcription if isinstance(legacy_transcription, dict) else {}
 
     async def _cancel_response(self, ws) -> None:
         response_id = self._current_response_id
