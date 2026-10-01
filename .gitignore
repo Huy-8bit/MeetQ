@@ -1,6 +1,7 @@
 .env
 .env.*
 !.env.example
+!.env.local.example
 !**/.env.example
 !FE/.env.development
 !FE/.env.production

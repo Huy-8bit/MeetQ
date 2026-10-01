@@ -108,6 +108,18 @@ docker compose --env-file .env.production -f docker-compose.prod.yml up -d
 docker compose --env-file .env.production -f docker-compose.prod.yml ps
 ```
 
+Equivalent Makefile aliases:
+
+```bash
+make prod
+make ps-prod
+make logs-prod
+make down-prod
+```
+
+`make prod` uses the existing `docker-compose.prod.yml` flow and requires
+`.env.production`. It does not delete Docker volumes or data.
+
 ## Smoke Checks
 
 ```bash

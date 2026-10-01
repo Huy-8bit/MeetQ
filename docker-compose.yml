@@ -37,7 +37,7 @@ services:
     build:
       context: ./BE
     restart: unless-stopped
-    command: ["-m", "uvicorn", "server.service.gateway.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    command: ["-m", "uvicorn", "server.service.gateway.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
     working_dir: /app
     volumes:
       - ./BE:/app
