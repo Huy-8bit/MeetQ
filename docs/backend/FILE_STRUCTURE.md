@@ -58,6 +58,13 @@ BE/
 │   │   │   ├── daemon.py                   # Redis control consumer, room manager lifecycle
 │   │   │   ├── events.py                   # Redis event publisher/envelope adapter
 │   │   │   └── room_manager.py             # room-level orchestration around brain clients
+│   │   ├── livekit_lines/                  # isolated per-speaker audio lines (crosstalk/bleed muting)
+│   │   │   ├── __init__.py
+│   │   │   ├── analysis.py                 # level, VAD, per-line clock, spectral band fingerprint
+│   │   │   ├── config.py                   # LineIsolationConfig tuning knobs
+│   │   │   ├── crosstalk.py                # CrosstalkArbiter: is this line bleed of another line?
+│   │   │   ├── hub.py                      # SpeakerLineHub: one line per subscribed mic track
+│   │   │   └── speaker_line.py             # SpeakerLine pump + SpeakerLineStream consumer view
 │   │   ├── media/
 │   │   │   ├── __init__.py
 │   │   │   ├── audio_input.py              # LiveKit AudioStream -> generic AudioInput adapter

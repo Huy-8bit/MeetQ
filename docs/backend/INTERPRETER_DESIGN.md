@@ -1,5 +1,14 @@
 # Interpreter Service Design
 
+> Update note (2026-10-02): mic audio now passes through
+> `server.service.livekit_lines` before reaching `LiveKitAudioInput`. LiveKit
+> already forwards one unmixed track per participant; the remaining "mixing"
+> is acoustic (co-located mics hear each other). `SpeakerLineHub` keeps one
+> `SpeakerLine` per subscribed mic track and mutes frames that are bleed of a
+> louder participant (spectral-fingerprint match + containment + level gap),
+> so each realtime session only hears its own speaker. Toggle with
+> `LIVEKIT_LINE_ISOLATION_ENABLED`. See `BE/server/service/livekit_lines/README.md`.
+>
 > Update note (2026-05-10): active BRSE room runtime now has explicit
 > Perception / Understanding / Policy / Delivery boundaries inside
 > `server.service.brain_runtime`. `RoomInterpreterManager` still owns the room

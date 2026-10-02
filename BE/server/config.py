@@ -43,6 +43,11 @@ class Settings(BaseSettings):
     public_gateway_ws_url: Optional[str] = None
     realtime_input_sample_rate: int = 24000
     realtime_output_sample_rate: int = 24000
+    # Per-speaker line isolation (server.service.livekit_lines)
+    livekit_line_isolation_enabled: bool = True
+    livekit_line_lookahead_ms: int = 120
+    livekit_line_crosstalk_correlation: float = 0.75
+    livekit_line_crosstalk_dominance_db: float = 4.0
     ws_stale_timeout_seconds: int = 90
     ws_stale_sweep_interval_seconds: int = 15
 

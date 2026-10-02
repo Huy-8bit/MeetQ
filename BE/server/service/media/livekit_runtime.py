@@ -1,11 +1,12 @@
 import asyncio
 import logging
-from typing import Callable, Dict, Optional
+from typing import AsyncIterable, Callable, Dict, Optional
 
 import livekit.rtc as rtc
 
 from server.config import Settings
 from server.service.gateway.livekit_tokens import generate_livekit_token
+from server.service.livekit_lines import LineIsolationConfig, SpeakerLineHub
 from server.meeting_modes import (
     BRSE_PARTICIPANT_DISPLAY_NAME,
     BRSE_PARTICIPANT_ID,
@@ -22,7 +23,7 @@ class LiveKitRuntime:
         settings: Settings,
         on_media_connected: Callable[[str], None],
         on_media_disconnected: Callable[[str], None],
-        on_audio_stream: Callable[[str, rtc.AudioStream], None],
+        on_audio_stream: Callable[[str, AsyncIterable[rtc.AudioFrameEvent]], None],
         output_audio_enabled: bool = True,
     ):
         self.room_id = room_id
@@ -32,9 +33,13 @@ class LiveKitRuntime:
         self.on_media_connected = on_media_connected
         self.on_media_disconnected = on_media_disconnected
         self.on_audio_stream = on_audio_stream
-        self._streams: Dict[str, rtc.AudioStream] = {}
+        self._streams: Dict[str, AsyncIterable[rtc.AudioFrameEvent]] = {}
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self.livekit_identity = build_brse_livekit_identity(room_id)
+        line_config = LineIsolationConfig.from_settings(settings)
+        self.lines: Optional[SpeakerLineHub] = (
+            SpeakerLineHub(room_id, line_config) if line_config.enabled else None
+        )
 
         self.room.on("track_subscribed", self._on_track_subscribed)
         self.room.on("track_published", self._on_track_published)
@@ -64,6 +69,8 @@ class LiveKitRuntime:
         )
 
     async def disconnect(self):
+        if self.lines is not None:
+            await self.lines.close_all()
         await self.room.disconnect()
         logger.info("BRSE runtime disconnected from LiveKit room %s", self.room_id)
 
@@ -95,8 +102,11 @@ class LiveKitRuntime:
                 num_channels=1,
                 frame_size_ms=20,
             )
-            self._streams[participant.identity] = audio_stream
-            self.on_audio_stream(participant.identity, audio_stream)
+            stream: AsyncIterable[rtc.AudioFrameEvent] = audio_stream
+            if self.lines is not None:
+                stream = self.lines.open_line(participant.identity, audio_stream)
+            self._streams[participant.identity] = stream
+            self.on_audio_stream(participant.identity, stream)
             self.on_media_connected(participant.identity)
         except Exception:
             logger.exception("Failed to bind BRSE audio stream for %s", participant.identity)
@@ -127,12 +137,22 @@ class LiveKitRuntime:
         if self._is_human_microphone_audio(participant, publication):
             logger.info("Unsubscribed from human mic track of %s", participant.identity)
             self._streams.pop(participant.identity, None)
+            self._close_line(participant.identity)
             self.on_media_disconnected(participant.identity)
 
     def _on_participant_disconnected(self, participant: rtc.RemoteParticipant):
         if not participant.identity.startswith("interp::"):
             self._streams.pop(participant.identity, None)
+            self._close_line(participant.identity)
             self.on_media_disconnected(participant.identity)
+
+    def _close_line(self, identity: str) -> None:
+        if self.lines is None or self.lines.get(identity) is None:
+            return
+        loop = self._loop
+        if loop is None or loop.is_closed():
+            return
+        loop.create_task(self.lines.close_line(identity))
 
     def _sync_existing_audio_tracks(self) -> None:
         participants = getattr(self.room, "remote_participants", {}) or {}
