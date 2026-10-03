@@ -1,21 +1,25 @@
 import { useEffect, useState, type FormEvent } from "react";
+import { Link } from "react-router-dom";
+import { Clock } from "lucide-react";
 import {
   formatRoomLanguageList,
   getLanguageLabel,
 } from "../lib/languages";
 import {
-  getBrseModeLabel,
+  getBrseModeDescription,
   isBrseAudioExpected,
   resolveBrseRoomMode,
   type BrseRoomMode,
 } from "../lib/brseModes";
 import { formatExpiresAtHuman, useRoomExpiry } from "../features/room/useRoomExpiry";
 import { loadUserPrefs, saveUserPrefs } from "../lib/userPrefs";
-import { useRevealMotion } from "../lib/motion";
-import { useTextAnimations } from "../lib/textAnimations";
 import type { MeetingLanguage, ParticipantSnapshot, RoomSnapshotResponse } from "../types/api";
 import { CustomSelect, type CustomSelectOption } from "./CustomSelect";
-import { MotionButton } from "./MotionButton";
+import { Alert } from "./ui/Alert";
+import { Badge } from "./ui/Badge";
+import { Button, buttonClassName } from "./ui/Button";
+import { EmptyState } from "./ui/EmptyState";
+import { Field } from "./ui/Field";
 
 interface JoinRoomCardProps {
   room: RoomSnapshotResponse["room"];
@@ -37,21 +41,6 @@ export function JoinRoomCard({
   error,
 }: JoinRoomCardProps) {
   const prefs = loadUserPrefs();
-  const joinMotionRef = useRevealMotion<HTMLDivElement>({
-    selector: "[data-join-motion]",
-    distance: 14,
-    duration: 460,
-    stagger: 54,
-    scaleFrom: 0.992,
-  });
-  useTextAnimations(joinMotionRef, {
-    dependencies: [
-      room.room_id,
-      isExpired,
-      participants.length,
-      meetingLanguages.join("-"),
-    ],
-  });
   const savedLang = meetingLanguages.includes(prefs.language as MeetingLanguage)
     ? (prefs.language as MeetingLanguage)
     : "";
@@ -70,10 +59,16 @@ export function JoinRoomCard({
       return;
     }
 
-    if (!language && meetingLanguages.length === 1) {
-      setLanguage(meetingLanguages[0]);
+    if (!language) {
+      // Room languages can arrive after mount; restore the remembered choice then.
+      const remembered = meetingLanguages.find((item) => item === prefs.language);
+      if (remembered) {
+        setLanguage(remembered);
+      } else if (meetingLanguages.length === 1) {
+        setLanguage(meetingLanguages[0]);
+      }
     }
-  }, [language, meetingLanguages]);
+  }, [language, meetingLanguages, prefs.language]);
 
   const roomLanguagesUnavailable = meetingLanguages.length === 0;
   const humanParticipants = participants.filter(
@@ -108,8 +103,6 @@ export function JoinRoomCard({
     isExpired,
     remainingLabel,
   });
-  const joinAttentionKey =
-    !isExpired && displayName.trim() && language ? `${displayName.trim()}-${language}` : null;
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -150,66 +143,82 @@ export function JoinRoomCard({
     });
   }
 
+  const isCaptionOnly = brseRoomMode === "text_only" && meetingLanguages.length === 1;
+  const relayLabel = brseRoomMode === "off"
+    ? "Off"
+    : isCaptionOnly
+      ? "Captions"
+      : getBrseModeDescription(brseRoomMode);
+
   return (
-    <section className="join-room-shell">
-      <div className="join-room-card join-room-card-minimal join-room-card-premium" ref={joinMotionRef}>
-        <span className="join-room-ambient-sweep join-room-ambient-sweep-a" aria-hidden="true" />
-        <span className="join-room-ambient-sweep join-room-ambient-sweep-b" aria-hidden="true" />
+    <div className="lobby">
+      <header className="lobby-nav">
+        <Link to="/" className="brand" aria-label="MeetQ home">
+          <span className="brand-mark" aria-hidden="true">MQ</span>
+          MeetQ
+        </Link>
+      </header>
 
-        <div className="join-room-topline join-room-hero-line" data-join-motion>
-          <div className="join-room-title-block">
-            <span className="product-kicker" data-text-animate="fade">Room access</span>
-            <h1 data-text-animate="line">Enter MeetQ room</h1>
-            <p data-text-animate="fade">
-              Confirm your name and room language before joining.
-            </p>
-          </div>
-
-          <div className="join-room-id-badge" aria-label={`Room ${room.room_id}`} data-text-animate="fade">
-            <span>Room ID</span>
-            <strong>{room.room_id}</strong>
-          </div>
-        </div>
-
-        <div className="join-room-context-strip" data-join-motion>
-          <CompactMeta label="Languages" value={formatLanguageBridge(meetingLanguages)} />
-          <RoomModeBadge mode={brseRoomMode} languageCount={meetingLanguages.length} />
-          {expirySummary ? <CompactMeta label="Time" value={expirySummary} danger={isExpired} /> : null}
-        </div>
-
-        {isExpired ? (
-          <div className="room-expired-state" data-join-motion>
-            <span className="room-expired-icon" aria-hidden="true">⏱</span>
-            <strong data-text-animate="fade">Meeting ended</strong>
-            <p data-text-animate="fade">Room expired.</p>
-          </div>
-        ) : (
-          <div className="join-room-body-grid">
-            <div className="join-room-form-card" data-join-motion>
-              <div className="join-form-header">
-                <span data-text-animate="fade">Profile</span>
-                <h2 data-text-animate="fade">Join as participant</h2>
+      <main className="lobby-main">
+        <section className="card lobby-card" aria-labelledby="lobby-title">
+          <div className="lobby-summary">
+            <h1 id="lobby-title" className="lobby-title">
+              {isExpired ? "Meeting ended" : "Join meeting"}
+            </h1>
+            <dl className="meta-list">
+              <div className="meta-item">
+                <dt>Room</dt>
+                <dd className="mono">{room.room_id}</dd>
               </div>
+              <div className="meta-item">
+                <dt>Languages</dt>
+                <dd>{formatLanguageBridge(meetingLanguages)}</dd>
+              </div>
+              <div className="meta-item">
+                <dt>AI relay</dt>
+                <dd>{relayLabel}</dd>
+              </div>
+              {expirySummary ? (
+                <div className="meta-item">
+                  <dt>Time left</dt>
+                  <dd className={isExpired ? "text-danger" : undefined}>{expirySummary}</dd>
+                </div>
+              ) : null}
+            </dl>
+          </div>
 
-              <form className="join-form redesigned-join-form" onSubmit={(event) => void handleSubmit(event)}>
-                <label className="join-input-field">
-                  <span data-text-animate="fade">Your name</span>
+          {isExpired ? (
+            <EmptyState
+              icon={<Clock size={20} />}
+              title="This meeting has ended"
+              description="The room reached its time limit and no longer accepts participants."
+              action={<Link to="/" className={buttonClassName({ variant: "secondary" })}>Back to home</Link>}
+            />
+          ) : (
+            <div className="lobby-body">
+              <form className="lobby-form" onSubmit={(event) => void handleSubmit(event)} noValidate>
+                <Field label="Your name" htmlFor="lobby-name">
                   <input
+                    id="lobby-name"
+                    className="input"
                     value={displayName}
                     onChange={(event) => {
                       setDisplayName(event.target.value);
                       setValidationError(null);
                     }}
                     maxLength={40}
-                    placeholder="Display name"
+                    autoComplete="name"
                     required
                   />
-                </label>
+                </Field>
 
-                <label className="join-input-field">
-                  <span data-text-animate="fade">Your language</span>
+                <Field
+                  label="Your language"
+                  htmlFor="lobby-language"
+                  helper="You'll hear and read others in this language."
+                >
                   <CustomSelect
-                    className="join-language-select"
+                    id="lobby-language"
                     value={language}
                     options={languageOptions}
                     onChange={(nextLanguage) => {
@@ -224,84 +233,38 @@ export function JoinRoomCard({
                     }
                     ariaLabel="Your language"
                   />
-                </label>
+                </Field>
 
-                <MotionButton
-                  className="join-room-cta"
+                {roomLanguagesUnavailable ? (
+                  <Alert tone="danger">
+                    Room languages are unavailable. Reload the page or ask the host to recreate the room.
+                  </Alert>
+                ) : null}
+                {validationError ? <Alert tone="danger">{validationError}</Alert> : null}
+                {error ? <Alert tone="danger">{error}</Alert> : null}
+
+                <Button
                   type="submit"
-                  disabled={isSubmitting || roomLanguagesUnavailable || !displayName.trim() || !language}
-                  attentionKey={joinAttentionKey}
-                  data-text-animate="cta"
+                  variant="primary"
+                  size="lg"
+                  block
+                  loading={isSubmitting}
+                  disabled={roomLanguagesUnavailable || !displayName.trim() || !language}
                 >
-                  {isSubmitting ? "Joining..." : "Join Meeting"}
-                </MotionButton>
+                  {isSubmitting ? "Joining…" : "Join meeting"}
+                </Button>
               </form>
 
-              {roomLanguagesUnavailable ? (
-                <div className="inline-error">
-                  Room languages are unavailable. Reload room snapshot or ask the host to recreate the room.
-                </div>
-              ) : null}
-
-              {validationError ? <div className="inline-error">{validationError}</div> : null}
-              {error ? <div className="inline-error">{error}</div> : null}
+              <ParticipantPreviewList
+                humanParticipants={humanParticipants}
+                virtualParticipants={virtualParticipants}
+                brseRoomMode={brseRoomMode}
+                brseAudioExpected={brseAudioExpected}
+              />
             </div>
-
-            <ParticipantPreviewList
-              humanParticipants={humanParticipants}
-              virtualParticipants={virtualParticipants}
-              brseRoomMode={brseRoomMode}
-              brseAudioExpected={brseAudioExpected}
-            />
-          </div>
-        )}
-      </div>
-    </section>
-  );
-}
-
-function CompactMeta({
-  label,
-  value,
-  danger = false,
-}: {
-  label: string;
-  value: string;
-  danger?: boolean;
-}) {
-  return (
-    <div
-      className={danger ? "join-room-quick-stat is-expired" : "join-room-quick-stat"}
-      data-join-motion
-    >
-      <span data-text-animate="fade">{label}</span>
-      <strong data-text-animate="fade">{value}</strong>
-    </div>
-  );
-}
-
-function RoomModeBadge({
-  mode,
-  languageCount,
-}: {
-  mode: BrseRoomMode;
-  languageCount: number;
-}) {
-  const isBrse = mode !== "off";
-  const isTextOnly = mode === "text_only";
-  const label = isTextOnly && languageCount === 1 ? "Captions" : getBrseModeLabel(mode);
-
-  return (
-    <div
-      className={[
-        "join-mode-badge",
-        isBrse ? "is-brse" : "",
-        isTextOnly ? "is-text-only" : "",
-      ].filter(Boolean).join(" ")}
-      data-join-motion
-    >
-      <span data-text-animate="fade">Mode</span>
-      <strong data-text-animate="fade">{label}</strong>
+          )}
+        </section>
+      </main>
     </div>
   );
 }
@@ -317,17 +280,6 @@ function ParticipantPreviewList({
   brseRoomMode: BrseRoomMode;
   brseAudioExpected: boolean;
 }) {
-  const previewMotionRef = useRevealMotion<HTMLElement>({
-    selector: "[data-preview-motion]",
-    distance: 8,
-    duration: 320,
-    stagger: 36,
-    scaleFrom: 0.996,
-    dependencies: [humanParticipants.length, virtualParticipants.length, brseRoomMode, brseAudioExpected],
-  });
-  useTextAnimations(previewMotionRef, {
-    dependencies: [humanParticipants.length, virtualParticipants.length, brseRoomMode, brseAudioExpected],
-  });
   const visibleHumans = humanParticipants.slice(0, 5);
   const hiddenHumanCount = Math.max(0, humanParticipants.length - visibleHumans.length);
   const brseParticipant = virtualParticipants.find(
@@ -335,63 +287,54 @@ function ParticipantPreviewList({
   );
 
   return (
-    <section className="join-participant-preview" ref={previewMotionRef} data-join-motion>
-      <div className="join-panel-header" data-preview-motion>
-        <span data-text-animate="fade">Already inside</span>
-        <strong data-text-animate="fade">{humanParticipants.length}</strong>
-      </div>
+    <section className="lobby-people" aria-labelledby="lobby-people-title">
+      <h2 className="section-title" id="lobby-people-title">
+        In this room <span className="text-tertiary">{humanParticipants.length}</span>
+      </h2>
 
       {humanParticipants.length === 0 ? (
-        <div className="participant-empty-compact" data-preview-motion>
-          <strong data-text-animate="fade">No one yet</strong>
-          {brseParticipant ? (
-            <span className="virtual-participant-chip" data-text-animate="fade">
-              {getVirtualParticipantBadge(brseRoomMode, brseAudioExpected)}
-            </span>
-          ) : null}
-        </div>
-      ) : (
-        <div className="participant-preview-list">
-          {visibleHumans.map((participant) => (
-            <div
-              className="participant-preview"
-              key={participant.participant_id}
-              data-preview-motion
-            >
-              <div>
-                <strong data-text-animate="fade">{participant.display_name}</strong>
-                <p data-text-animate="fade">{formatParticipantStatus(participant.status)}</p>
-              </div>
-              <div className="participant-row-tags">
-                {participant.is_host ? <span className="badge badge-host">Host</span> : null}
-                <span className="language-pill">
-                  {getLanguageLabel(participant.language)}
-                </span>
-              </div>
-            </div>
-          ))}
+        <p className="section-description">No one has joined yet. You'll be the first.</p>
+      ) : null}
 
-          {hiddenHumanCount > 0 ? (
-            <div className="participant-preview participant-preview-more" data-preview-motion>
-              <strong data-text-animate="fade">{hiddenHumanCount} more participant{hiddenHumanCount === 1 ? "" : "s"}</strong>
+      <ul className="people-list people-list--compact">
+        {visibleHumans.map((participant) => (
+          <li className="people-row" key={participant.participant_id}>
+            <span className="avatar" aria-hidden="true">{getInitials(participant.display_name)}</span>
+            <div className="people-main">
+              <p className="people-name">
+                {participant.display_name}
+                {participant.is_host ? <Badge>Host</Badge> : null}
+              </p>
+              <p className="people-details">
+                {getLanguageLabel(participant.language)} · {formatParticipantStatus(participant.status)}
+              </p>
             </div>
-          ) : null}
+          </li>
+        ))}
 
-          {brseParticipant ? (
-            <div className="participant-preview virtual-participant-preview" data-preview-motion>
-              <div>
-                <strong data-text-animate="fade">{brseParticipant.display_name || "AI Relay"}</strong>
-                <p data-text-animate="fade">{getVirtualParticipantCopy(brseRoomMode, brseAudioExpected)}</p>
-              </div>
-              <span className="badge kind" data-text-animate="fade">
-                {getVirtualParticipantBadge(brseRoomMode, brseAudioExpected)}
-              </span>
+        {hiddenHumanCount > 0 ? (
+          <li className="people-more">
+            +{hiddenHumanCount} more participant{hiddenHumanCount === 1 ? "" : "s"}
+          </li>
+        ) : null}
+
+        {brseParticipant ? (
+          <li className="people-row">
+            <span className="avatar avatar--ai" aria-hidden="true">AI</span>
+            <div className="people-main">
+              <p className="people-name">{brseParticipant.display_name || "AI Relay"}</p>
+              <p className="people-details">{getVirtualParticipantCopy(brseRoomMode, brseAudioExpected)}</p>
             </div>
-          ) : null}
-        </div>
-      )}
+          </li>
+        ) : null}
+      </ul>
     </section>
   );
+}
+
+function getInitials(displayName: string): string {
+  const parts = displayName.trim().split(/\s+/).slice(0, 2);
+  return parts.map((part) => part[0]?.toUpperCase()).join("") || "?";
 }
 
 function isHumanParticipant(participant: ParticipantSnapshot): boolean {
@@ -428,25 +371,6 @@ function getVirtualParticipantCopy(
   return "Voice + text relay participant";
 }
 
-function getVirtualParticipantBadge(
-  mode: BrseRoomMode,
-  brseAudioExpected: boolean,
-): string {
-  if (mode === "off") {
-    return "BRSE off";
-  }
-
-  if (mode === "text_only" || !brseAudioExpected) {
-    return "BRSE text";
-  }
-
-  if (mode === "silent_summary") {
-    return "BRSE summary";
-  }
-
-  return "AI relay";
-}
-
 function getExpirySummary({
   expiresLabel,
   isExpired,
@@ -461,7 +385,7 @@ function getExpirySummary({
   }
 
   if (remainingLabel) {
-    return remainingLabel;
+    return `${remainingLabel} left`;
   }
 
   return expiresLabel;

@@ -1,5 +1,6 @@
 import type { AppThemeMode, RoomLayoutMode } from "../lib/uiPreferences";
-import { MotionButton } from "./MotionButton";
+import { Field } from "./ui/Field";
+import { SegmentedControl } from "./ui/SegmentedControl";
 
 interface MeetingViewPanelProps {
   themeMode: AppThemeMode;
@@ -17,17 +18,17 @@ const LAYOUT_OPTIONS: Array<{ value: RoomLayoutMode; label: string; helper: stri
   {
     value: "stage-focus",
     label: "Wide stage",
-    helper: "More space for video and shared screen.",
+    helper: "More space for video and shared screens.",
   },
   {
     value: "balanced",
     label: "Balanced",
-    helper: "Keep stage and panels evenly weighted.",
+    helper: "Stage and side panel share the space evenly.",
   },
   {
     value: "compact",
-    label: "Compact panel",
-    helper: "Give the panel a tighter working width.",
+    label: "Compact",
+    helper: "A narrower side panel.",
   },
 ];
 
@@ -37,54 +38,32 @@ export function MeetingViewPanel({
   onThemeChange,
   onLayoutChange,
 }: MeetingViewPanelProps) {
+  const layoutHelper = LAYOUT_OPTIONS.find((option) => option.value === layoutMode)?.helper;
+
   return (
-    <section className="meeting-view-panel panel-section" aria-labelledby="meeting-view-title">
-      <div className="panel-header compact">
-        <h3 id="meeting-view-title" data-text-animate="fade">View</h3>
-        <p data-text-animate="fade">Theme and room layout.</p>
+    <section className="drawer-section" aria-labelledby="view-settings-title">
+      <div className="drawer-section-header">
+        <h3 className="section-title" id="view-settings-title">View</h3>
       </div>
 
-      <div className="view-setting-block">
-        <div className="view-setting-label">
-          <strong data-text-animate="fade">Theme</strong>
-          <span data-text-animate="fade">Choose the meeting color mode.</span>
-        </div>
-        <div className="segmented-control" role="group" aria-label="Theme mode">
-          {THEME_OPTIONS.map((option) => (
-            <MotionButton
-              key={option.value}
-              className={themeMode === option.value ? "is-active" : ""}
-              type="button"
-              onClick={() => onThemeChange(option.value)}
-              aria-pressed={themeMode === option.value}
-              data-text-animate="cta"
-            >
-              {option.label}
-            </MotionButton>
-          ))}
-        </div>
-      </div>
+      <div className="drawer-section-body">
+        <Field asGroup labelId="theme-mode-label" label="Theme">
+          <SegmentedControl
+            ariaLabelledBy="theme-mode-label"
+            value={themeMode}
+            options={THEME_OPTIONS}
+            onChange={onThemeChange}
+          />
+        </Field>
 
-      <div className="view-setting-block">
-        <div className="view-setting-label">
-          <strong data-text-animate="fade">Layout</strong>
-          <span data-text-animate="fade">Adjust the meeting room balance.</span>
-        </div>
-        <div className="layout-option-grid" role="group" aria-label="Meeting layout">
-          {LAYOUT_OPTIONS.map((option) => (
-            <MotionButton
-              key={option.value}
-              className={layoutMode === option.value ? "layout-option is-active" : "layout-option"}
-              type="button"
-              onClick={() => onLayoutChange(option.value)}
-              aria-pressed={layoutMode === option.value}
-              data-text-animate="cta"
-            >
-              <strong>{option.label}</strong>
-              <span>{option.helper}</span>
-            </MotionButton>
-          ))}
-        </div>
+        <Field asGroup labelId="layout-mode-label" label="Layout" helper={layoutHelper}>
+          <SegmentedControl
+            ariaLabelledBy="layout-mode-label"
+            value={layoutMode}
+            options={LAYOUT_OPTIONS.map(({ value, label }) => ({ value, label }))}
+            onChange={onLayoutChange}
+          />
+        </Field>
       </div>
     </section>
   );

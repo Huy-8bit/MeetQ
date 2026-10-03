@@ -14,7 +14,7 @@ export function MicLevelMeter({ level, peak = 0, db = null }: MicLevelMeterProps
   const peakBar = Math.round(peak * BAR_COUNT);
 
   return (
-    <div className="mic-level-meter" role="meter" aria-valuenow={Math.round(level * 100)} aria-valuemin={0} aria-valuemax={100}>
+    <div className="mic-level-meter" role="meter" aria-label="Microphone level" aria-valuenow={Math.round(level * 100)} aria-valuemin={0} aria-valuemax={100}>
       <div className="mic-level-bars">
         {Array.from({ length: BAR_COUNT }, (_, i) => {
           const barIndex = i + 1;

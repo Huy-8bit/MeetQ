@@ -1,63 +1,55 @@
-import type { ReactNode } from "react";
-import { useDrawerRevealMotion } from "../lib/motion";
-import { useTextAnimations } from "../lib/textAnimations";
-import { MotionButton } from "./MotionButton";
+import { useEffect, useRef, type ReactNode } from "react";
+import { X } from "lucide-react";
+import { Button } from "./ui/Button";
 
 interface SettingsDrawerProps {
   open: boolean;
   onClose: () => void;
   children: ReactNode;
-  eyebrow?: string;
   title?: string;
 }
 
-export function SettingsDrawer({
-  open,
-  onClose,
-  children,
-  eyebrow = "Settings",
-  title = "Devices",
-}: SettingsDrawerProps) {
-  const drawerMotionRef = useDrawerRevealMotion<HTMLDivElement>(open);
-  useTextAnimations(drawerMotionRef, {
-    dependencies: [open, eyebrow, title],
-  });
+/** Right-side modal drawer. Closes on Esc / backdrop; restores focus on close. */
+export function SettingsDrawer({ open, onClose, children, title = "Settings" }: SettingsDrawerProps) {
+  const closeRef = useRef<HTMLButtonElement | null>(null);
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
+
+    const previouslyFocused = document.activeElement as HTMLElement | null;
+    closeRef.current?.focus();
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        onCloseRef.current();
+      }
+    };
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("keydown", handleKeyDown);
+      previouslyFocused?.focus?.();
+    };
+  }, [open]);
 
   if (!open) {
     return null;
   }
 
   return (
-    <div className="settings-drawer-layer" role="presentation" ref={drawerMotionRef}>
-      <button
-        className="settings-drawer-backdrop"
-        type="button"
-        aria-label="Close settings"
-        onClick={onClose}
-      />
-      <aside
-        className="settings-drawer"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="settings-drawer-title"
-      >
-        <header className="settings-drawer-header">
-          <div>
-            <span data-text-animate="highlight">{eyebrow}</span>
-            <h2 id="settings-drawer-title" data-text-animate="line">{title}</h2>
-          </div>
-          <MotionButton
-            className="settings-drawer-close"
-            type="button"
-            onClick={onClose}
-            aria-label="Close settings"
-            data-text-animate="cta"
-          >
-            Close
-          </MotionButton>
-        </header>
-        <div className="settings-drawer-content">{children}</div>
-      </aside>
+    <div className="drawer-layer">
+      <button className="drawer-backdrop" type="button" tabIndex={-1} aria-label="Close settings" onClick={onClose} />
+      <div className="drawer" role="dialog" aria-modal="true" aria-labelledby="settings-drawer-title">
+        <div className="drawer-header">
+          <h2 className="drawer-title" id="settings-drawer-title">
+            {title}
+          </h2>
+          <Button ref={closeRef} variant="ghost" iconOnly icon={<X size={18} />} aria-label="Close settings" onClick={onClose} />
+        </div>
+        <div className="drawer-body">{children}</div>
+      </div>
     </div>
   );
 }

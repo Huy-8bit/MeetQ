@@ -1,22 +1,25 @@
 import type { GatewayConnectionState } from "../types/livekit";
+import { Badge, type BadgeTone } from "./ui/Badge";
 
 interface ConnectionBadgeProps {
   state: GatewayConnectionState;
 }
 
-const LABELS: Record<GatewayConnectionState, string> = {
-  idle: "Idle",
-  connecting: "Connecting",
-  connected: "Connected",
-  reconnecting: "Reconnecting",
-  disconnected: "Disconnected",
+const STATES: Record<GatewayConnectionState, { label: string; tone: BadgeTone; pulse?: boolean }> = {
+  idle: { label: "Idle", tone: "neutral" },
+  connecting: { label: "Connecting", tone: "warning", pulse: true },
+  connected: { label: "Connected", tone: "success" },
+  reconnecting: { label: "Reconnecting", tone: "warning", pulse: true },
+  disconnected: { label: "Disconnected", tone: "danger" },
 };
 
 export function ConnectionBadge({ state }: ConnectionBadgeProps) {
+  const { label, tone, pulse } = STATES[state];
   return (
-    <div className={`connection-badge connection-${state}`}>
-      <span className="connection-dot" />
-      <span>{LABELS[state]}</span>
-    </div>
+    <span className="connection-badge" role="status" aria-live="polite">
+      <Badge tone={tone} dot pulse={pulse}>
+        {label}
+      </Badge>
+    </span>
   );
 }

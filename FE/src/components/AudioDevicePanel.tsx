@@ -1,6 +1,8 @@
 import type { AudioDeviceOption } from "../types/livekit";
 import { CustomSelect, type CustomSelectOption } from "./CustomSelect";
-import { MotionButton } from "./MotionButton";
+import { Alert } from "./ui/Alert";
+import { Field } from "./ui/Field";
+import { Switch } from "./ui/Switch";
 
 interface AudioDevicePanelProps {
   isMicMuted: boolean;
@@ -39,71 +41,61 @@ export function AudioDevicePanel({
   isSwitchingAudioOutput,
   audioOutputError,
   onSelectAudioOutput,
-  embedded = false,
 }: AudioDevicePanelProps) {
   const inputDeviceOptions = buildDeviceOptions(
     audioInputDevices,
     "No microphone devices found",
   );
   const outputDeviceOptions: CustomSelectOption[] = !audioOutputSupported
-    ? [{ value: "", label: "Browser does not support output selection", disabled: true }]
+    ? [{ value: "", label: "System default", disabled: true }]
     : buildDeviceOptions(audioOutputDevices, "No speaker devices found");
 
   return (
-    <section className={embedded ? "audio-settings-panel panel-section" : "panel audio-settings-panel"}>
-      <div className="panel-header">
-        <div>
-          <h3 data-text-animate="fade">Audio Settings</h3>
-          <p data-text-animate="fade">Control microphone and playback devices for this room session.</p>
-        </div>
+    <section className="drawer-section" aria-labelledby="audio-settings-title">
+      <div className="drawer-section-header">
+        <h3 className="section-title" id="audio-settings-title">Audio</h3>
       </div>
 
-      <div className="audio-settings-grid">
-        <div className="audio-setting-row">
-          <span className="audio-setting-label" data-text-animate="fade">Microphone</span>
-          <MotionButton
-            className={isMicMuted ? "button-secondary" : "button-primary"}
-            onClick={onToggleMic}
+      <div className="drawer-section-body">
+        <div className="settings-row">
+          <div>
+            <p className="field-label">Microphone</p>
+            <p className="field-helper">
+              {isMutedByHost && isMicMuted ? "The host muted you." : isMicMuted ? "Muted" : "On"}
+            </p>
+          </div>
+          <Switch
+            checked={!isMicMuted}
+            onChange={onToggleMic}
             disabled={isTogglingMic || (isMutedByHost && isMicMuted)}
-            data-text-animate="cta"
-          >
-            {isTogglingMic
-              ? "Updating..."
-              : isMutedByHost && isMicMuted
-                ? "Muted by host"
-                : isMicMuted
-                  ? "Unmute mic"
-                  : "Mute mic"}
-          </MotionButton>
+            label="Microphone"
+            hideLabel
+          />
         </div>
+        {micToggleError ? <Alert tone="danger">{micToggleError}</Alert> : null}
 
-        {micToggleError ? (
-          <div className="inline-error audio-setting-error">{micToggleError}</div>
-        ) : null}
-
-        <label className="field audio-setting-field">
-          <span data-text-animate="fade">Input Device</span>
+        <Field label="Input device" htmlFor="audio-input-device" error={audioInputError}>
           <CustomSelect
-            className="audio-device-select"
+            id="audio-input-device"
             value={selectedAudioInputDeviceId}
             options={inputDeviceOptions}
             disabled={isSwitchingAudioInput || audioInputDevices.length === 0}
             onChange={onSelectAudioInput}
             placeholder={
-              audioInputDevices.length === 0 ? "No microphone devices found" : "Select microphone"
+              audioInputDevices.length === 0 ? "No microphone found" : "Select microphone"
             }
             ariaLabel="Input device"
           />
-        </label>
+        </Field>
 
-        {audioInputError ? (
-          <div className="inline-error audio-setting-error">{audioInputError}</div>
-        ) : null}
-
-        <label className="field audio-setting-field">
-          <span data-text-animate="fade">Output Device</span>
+        <Field
+          label="Output device"
+          htmlFor="audio-output-device"
+          error={audioOutputError}
+          helper={audioOutputSupported ? undefined : "This browser can't change the output device."}
+        >
           <CustomSelect
-            className="audio-device-select"
+            id="audio-output-device"
             value={selectedAudioOutputDeviceId}
             options={outputDeviceOptions}
             disabled={
@@ -114,24 +106,14 @@ export function AudioDevicePanel({
             onChange={onSelectAudioOutput}
             placeholder={
               !audioOutputSupported
-                ? "Browser does not support output selection"
+                ? "System default"
                 : audioOutputDevices.length === 0
-                  ? "No speaker devices found"
+                  ? "No speaker found"
                   : "Select speaker"
             }
             ariaLabel="Output device"
           />
-        </label>
-
-        {!audioOutputSupported ? (
-          <div className="audio-setting-hint" data-text-animate="fade">
-            This browser does not support changing audio output device.
-          </div>
-        ) : null}
-
-        {audioOutputError ? (
-          <div className="inline-error audio-setting-error">{audioOutputError}</div>
-        ) : null}
+        </Field>
       </div>
     </section>
   );

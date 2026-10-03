@@ -1,5 +1,57 @@
 # Frontend Implementation State
 
+## Turn Update: 2026-10-03 Design System and UI Refactor
+
+- Time: 2026-10-03T00:00:00+07:00
+- Mode: CODE + VERIFY
+- Status: implemented
+- Testing: `npm run build` (tsc + vite), Playwright screenshots at 1440/1180/820/390px in
+  light and dark, axe-core audit (0 violations), scripted regression of create/join/lobby/
+  settings/tab flows with mocked gateway API
+
+### Objective
+
+Replace the layered "redesign pass" stylesheet (18.5k lines, 163 `:root` blocks,
+1.3k `!important`) with a token-based design system and rebuild every screen on
+shared components, without changing API calls, room/session logic, LiveKit, relay,
+chat or summary behavior.
+
+### What changed
+
+- Styles now live in `src/styles/`: `tokens.css` (color, type, spacing, radius,
+  shadow, motion for light + dark), `base.css`, `components.css`, `home.css`,
+  `room.css`, `pages.css`. `src/index.css` only imports them. CSS bundle 324 KB → 41 KB.
+- Shared UI components in `src/components/ui/`: `Button` (+`buttonClassName` for links),
+  `Badge`, `Field`, `Alert`, `EmptyState`, `Spinner`/`SkeletonLines`,
+  `SegmentedControl` (radio group, arrow keys), `Switch`.
+- Removed decorative motion stack: `gsap`, `animejs`, `motion` dependencies,
+  `lib/motion.ts`, `lib/textAnimations.ts`, `MotionButton`, `PageTransition`.
+  Route changes use a 180 ms CSS fade; `prefers-reduced-motion` disables animation.
+- Removed unused components `TranscriptPanel` and `InterpreterStatusPanel`.
+- Home: product headline + three features + create card (language chips, relay
+  segmented control, one primary action) + secondary join card. Mobile puts the
+  create form directly under the headline.
+- Lobby: single card with room metadata, name/language form and "In this room" list.
+  Restores the remembered language when room languages load after mount.
+- Room: header (language bridge title, room ID, people, time left, connection,
+  language, AI relay switch), consolidated alert stack, stage grid sized with
+  container queries (largest 16:9 tiles for the participant count), control bar
+  (mic/camera/share; panel/settings/leave), side panel with accessible tabs.
+  Side panel starts closed below 1024 px, overlays the stage on tablet (stopping
+  above the control bar) and is full-screen on mobile. It stays mounted while
+  hidden so a chat draft survives closing it.
+- Settings drawer: Esc / backdrop close, focus moves in and returns to the trigger.
+- Meeting ended: page header + readable final summary (previous version had
+  near-invisible summary text).
+- Device check (`/test`): English copy to match the rest of the product.
+
+### Known follow-ups
+
+- No automated FE test suite exists; flows were verified with Playwright against a
+  mocked gateway, not a live LiveKit room.
+- JS bundle is still 821 KB (mostly `livekit-client`); route-level code splitting
+  would help first load.
+
 ## Turn Update: 2026-05-10 Meeting Controls Cleanup and Stage Pinning
 
 - Time: 2026-05-10T00:00:00+07:00

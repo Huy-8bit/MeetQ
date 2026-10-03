@@ -42,7 +42,7 @@ export function formatLanguageFlow(
   sourceLanguage: Language | null | undefined,
   targetLanguage: Language | null | undefined,
 ): string {
-  return `${getLanguageLabel(sourceLanguage ?? "auto")} -> ${getLanguageLabel(targetLanguage ?? "auto")}`;
+  return `${getLanguageLabel(sourceLanguage ?? "auto")} → ${getLanguageLabel(targetLanguage ?? "auto")}`;
 }
 
 export function formatMeetingLanguagePair(

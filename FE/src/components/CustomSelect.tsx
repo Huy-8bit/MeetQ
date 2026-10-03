@@ -5,10 +5,9 @@ import {
   useRef,
   useState,
   type KeyboardEvent,
-  type MutableRefObject,
 } from "react";
 import { createPortal } from "react-dom";
-import { useDropdownMotion } from "../lib/motion";
+import { Check, ChevronDown } from "lucide-react";
 
 export interface CustomSelectOption<TValue extends string = string> {
   value: TValue;
@@ -26,6 +25,8 @@ interface CustomSelectProps<TValue extends string = string> {
   ariaLabel?: string;
   className?: string;
   size?: "standard" | "compact";
+  /** id for the trigger button, so a <label htmlFor> can point at it. */
+  id?: string;
 }
 
 export function CustomSelect<TValue extends string = string>({
@@ -37,20 +38,14 @@ export function CustomSelect<TValue extends string = string>({
   ariaLabel,
   className,
   size = "standard",
+  id,
 }: CustomSelectProps<TValue>) {
   const listboxId = useId();
   const rootRef = useRef<HTMLDivElement | null>(null);
   const triggerRef = useRef<HTMLButtonElement | null>(null);
   const menuRef = useRef<HTMLDivElement | null>(null);
   const [open, setOpen] = useState(false);
-  const menuMotionRef = useDropdownMotion<HTMLDivElement>(open);
   const [activeIndex, setActiveIndex] = useState(-1);
-
-  // Merge motion ref and our own menuRef
-  const setMenuRef = (node: HTMLDivElement | null) => {
-    menuRef.current = node;
-    (menuMotionRef as MutableRefObject<HTMLDivElement | null>).current = node;
-  };
 
   const selectedOption = useMemo(
     () => options.find((o) => o.value === value),
@@ -179,8 +174,8 @@ export function CustomSelect<TValue extends string = string>({
   const menuContent = open ? (
     <div
       id={listboxId}
-      ref={setMenuRef}
-      className="custom-select-menu custom-select-menu--portal"
+      ref={menuRef}
+      className="custom-select-menu"
       role="listbox"
       aria-label={ariaLabel}
       aria-activedescendant={
@@ -212,7 +207,7 @@ export function CustomSelect<TValue extends string = string>({
             {option.helper ? (
               <span className="custom-select-option-helper">{option.helper}</span>
             ) : null}
-            {isSelected ? <span className="custom-select-check" aria-hidden="true" /> : null}
+            {isSelected ? <Check className="custom-select-check" size={14} aria-hidden="true" /> : null}
           </button>
         );
       })}
@@ -239,12 +234,13 @@ export function CustomSelect<TValue extends string = string>({
     >
       <button
         ref={triggerRef}
+        id={id}
         type="button"
         className="custom-select-trigger"
         aria-haspopup="listbox"
         aria-expanded={open}
         aria-controls={listboxId}
-        aria-label={ariaLabel}
+        aria-label={id ? undefined : ariaLabel}
         disabled={disabled}
         onClick={() => { if (!disabled) setOpen((c) => !c); }}
         onKeyDown={handleKeyDown}
@@ -252,10 +248,7 @@ export function CustomSelect<TValue extends string = string>({
         <span className={hasSelection ? "custom-select-value" : "custom-select-placeholder"}>
           {currentLabel}
         </span>
-        <span className="custom-select-chevrons" aria-hidden="true">
-          <span />
-          <span />
-        </span>
+        <ChevronDown className="custom-select-chevron" size={16} aria-hidden="true" />
       </button>
 
       {typeof document !== "undefined"

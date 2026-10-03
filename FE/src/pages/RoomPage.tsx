@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams } from "react-router-dom";
+import { AlertCircle } from "lucide-react";
 import { api, ApiError } from "../lib/api";
 import {
   formatRoomLanguageList,
@@ -35,9 +36,14 @@ import {
   type AppThemeMode,
   type RoomLayoutMode,
 } from "../lib/uiPreferences";
-import { useTextAnimationRoot } from "../lib/textAnimations";
+import { Alert } from "../components/ui/Alert";
+import { buttonClassName } from "../components/ui/Button";
+import { EmptyState } from "../components/ui/EmptyState";
+import { Spinner } from "../components/ui/Spinner";
 
 const APP_VERSION = "0.1.0";
+// Below this width the side panel overlays the stage, so start with it closed.
+const SIDE_PANEL_INLINE_MIN_WIDTH = 1024;
 
 export function RoomPage() {
   const navigate = useNavigate();
@@ -51,29 +57,15 @@ export function RoomPage() {
   const [joining, setJoining] = useState(false);
   const [joinError, setJoinError] = useState<string | null>(null);
   const [activePanel, setActivePanel] = useState<RoomPanelTab>("relay");
-  const [sidePanelOpen, setSidePanelOpen] = useState(true);
+  const [sidePanelOpen, setSidePanelOpen] = useState(
+    () => typeof window === "undefined" || window.innerWidth >= SIDE_PANEL_INLINE_MIN_WIDTH,
+  );
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [showEndedSummary, setShowEndedSummary] = useState(false);
   const [themeMode, setThemeMode] = useState<AppThemeMode>(() => loadThemePreference());
   const [layoutMode, setLayoutMode] = useState<RoomLayoutMode>(() => loadRoomLayoutPreference());
   const [pinnedStageTarget, setPinnedStageTarget] = useState<PinnedStageTarget | null>(null);
   const session = getSession(roomId);
-  const roomTextMotionRef = useTextAnimationRoot<HTMLElement>({
-    selector: [
-      ".room-boot .empty-state > [data-text-animate]",
-      ".room-ended-copy > [data-text-animate]",
-      ".room-topbar [data-text-animate]",
-      ".room-alert-stack [data-text-animate]",
-    ].join(", "),
-    dependencies: [
-      loadingSnapshot,
-      snapshotError,
-      snapshotExpired,
-      showEndedSummary,
-      Boolean(session),
-      Boolean(roomSnapshot),
-    ],
-  });
   const handleSessionInvalidated = useCallback(() => {
     clearSession(roomId);
   }, [clearSession, roomId]);
@@ -350,57 +342,60 @@ export function RoomPage() {
     }
   }
 
+  const roomAlerts: Array<{ tone: "danger" | "warning"; message: string }> = [
+    isRoomExpired ? { tone: "danger" as const, message: "This meeting has ended. The room time limit has been reached." } : null,
+    meeting.isMutedByHost ? { tone: "danger" as const, message: "The host muted your microphone." } : null,
+    meeting.connectionError ? { tone: "danger" as const, message: meeting.connectionError } : null,
+    meeting.brseToggleError ? { tone: "warning" as const, message: meeting.brseToggleError } : null,
+    meeting.mediaError ? { tone: "warning" as const, message: meeting.mediaError } : null,
+    meeting.screenShareError ? { tone: "warning" as const, message: meeting.screenShareError } : null,
+    meeting.micToggleError ? { tone: "warning" as const, message: meeting.micToggleError } : null,
+    meeting.cameraToggleError ? { tone: "warning" as const, message: meeting.cameraToggleError } : null,
+    meeting.moderationError ? { tone: "warning" as const, message: meeting.moderationError } : null,
+  ].filter((alert): alert is { tone: "danger" | "warning"; message: string } => alert !== null);
+
   if (loadingSnapshot && !roomSnapshot && !session) {
     return (
-      <main className="room-boot" ref={roomTextMotionRef}>
-        <div className="empty-state room-boot-loading">
-          <span className="loading-spinner loading-spinner-lg" aria-hidden="true" />
-          <strong data-text-animate="fade">Loading room</strong>
-          <p data-text-animate="fade">Fetching room snapshot from the gateway.</p>
+      <main className="room-boot">
+        <div className="room-boot-loading" role="status">
+          <Spinner size="lg" />
+          <p className="text-secondary">Loading room…</p>
         </div>
       </main>
     );
   }
 
-  // Expired room with no session: show dedicated expired page (not generic error)
+  // Expired room with no session: show the final summary, not a generic error.
   if ((snapshotExpired || showEndedSummary) && !session) {
     return (
-      <main className="room-boot" ref={roomTextMotionRef}>
-        <div className="room-ended-summary-page room-ended-summary-page-premium">
-          <div className="room-ended-copy">
-            <span className="room-ended-mark" aria-hidden="true">MQ</span>
-            <span className="room-ended-kicker" data-text-animate="fade">Meeting ended</span>
-            <h1 data-text-animate="line">Summary vault</h1>
-            <p data-text-animate="fade">
-              This room is closed. Review the final notes, decisions, and actions when MeetQ finishes preparing them.
+      <div className="ended">
+        <header className="ended-header">
+          <div>
+            <h1 className="page-title">Meeting ended</h1>
+            <p className="page-description">
+              This room is closed. The final summary appears below once it&apos;s ready.
             </p>
-            <div className="room-ended-meta-grid" aria-hidden="true">
-              <span>Final notes</span>
-              <span>Actions</span>
-              <span>Decisions</span>
-            </div>
-            <button type="button" className="button-secondary room-ended-home-button" onClick={() => navigate("/")} data-text-animate="cta">
-              Back Home
-            </button>
           </div>
-          <div className="room-ended-summary-card">
-            {renderSummaryPanel(true)}
-          </div>
-        </div>
-      </main>
+          <button type="button" className={buttonClassName({ variant: "secondary" })} onClick={() => navigate("/")}>
+            Back to home
+          </button>
+        </header>
+        <main className="ended-body card">
+          <div className="card-body">{renderSummaryPanel(true)}</div>
+        </main>
+      </div>
     );
   }
 
   if (snapshotError && !roomSnapshot && !session) {
     return (
-      <main className="room-boot" ref={roomTextMotionRef}>
-        <div className="empty-state">
-          <strong data-text-animate="fade">Room unavailable</strong>
-          <p data-text-animate="fade">{snapshotError}</p>
-          <button type="button" className="button-secondary" onClick={() => navigate("/")} data-text-animate="cta">
-            Back Home
-          </button>
-        </div>
+      <main className="room-boot">
+        <EmptyState
+          icon={<AlertCircle size={20} />}
+          title="Room unavailable"
+          description={snapshotError}
+          action={<Link to="/" className={buttonClassName({ variant: "secondary" })}>Back to home</Link>}
+        />
       </main>
     );
   }
@@ -411,31 +406,26 @@ export function RoomPage() {
     }
 
     return (
-      <main className="room-boot" ref={roomTextMotionRef}>
-        <JoinRoomCard
+      <JoinRoomCard
           room={roomSnapshot.room}
           participants={roomSnapshot.participants}
           meetingLanguages={roomMeetingLanguages}
           isExpired={isRoomExpired}
           onJoin={handleJoin}
           isSubmitting={joining}
-          error={joinError}
-        />
-      </main>
+        error={joinError}
+      />
     );
   }
 
   return (
-    <main className={[
-      "room-page",
-      `theme-${themeMode}`,
-      `layout-${layoutMode}`,
-      meeting.brseEnabled ? "brse-on" : "brse-off",
-      sidePanelOpen ? "panel-open" : "panel-closed",
-    ].join(" ")} ref={roomTextMotionRef}>
+    <div className={[
+      "room",
+      `room--${layoutMode}`,
+      sidePanelOpen ? "is-panel-open" : "",
+    ].filter(Boolean).join(" ")}>
       <RoomTopBar
         roomId={roomId}
-        displayName={meeting.selfState?.display_name || session.participant.display_name}
         meetingLanguages={roomMeetingLanguages}
         currentLanguage={meeting.selfState?.language || session.participant.language}
         participantCount={meeting.participants.length}
@@ -444,7 +434,6 @@ export function RoomPage() {
         brseEnabled={meeting.brseEnabled}
         brseRoomMode={meeting.brseRoomMode}
         isTogglingBrse={meeting.isTogglingBrse}
-        brseToggleError={meeting.brseToggleError}
         canToggleBrse={meeting.canToggleBrse && !isRoomExpired}
         onChangeLanguage={(language) => meeting.changeLanguage(language)}
         onToggleBrse={(nextEnabled) => {
@@ -452,39 +441,16 @@ export function RoomPage() {
         }}
       />
 
-      <div className="room-alert-stack">
-        {isRoomExpired ? (
-          <div className="banner banner-danger banner-room-expired">
-            This meeting has ended. The room time limit has been reached.
-          </div>
-        ) : null}
-        {meeting.connectionError ? (
-          <div className="banner banner-danger">{meeting.connectionError}</div>
-        ) : null}
-        {meeting.mediaError ? (
-          <div className="banner banner-warning">{meeting.mediaError}</div>
-        ) : null}
-        {meeting.screenShareError ? (
-          <div className="banner banner-warning">{meeting.screenShareError}</div>
-        ) : null}
-        {meeting.micToggleError ? (
-          <div className="banner banner-warning">{meeting.micToggleError}</div>
-        ) : null}
-        {meeting.cameraToggleError ? (
-          <div className="banner banner-warning">{meeting.cameraToggleError}</div>
-        ) : null}
-        {meeting.moderationError ? (
-          <div className="banner banner-warning">{meeting.moderationError}</div>
-        ) : null}
-        {meeting.isMutedByHost ? (
-          <div className="banner banner-danger banner-force-muted">
-            Your microphone has been muted by the host.
-          </div>
-        ) : null}
-      </div>
+      {roomAlerts.length > 0 ? (
+        <div className="room-alerts">
+          {roomAlerts.map((alert) => (
+            <Alert key={alert.message} tone={alert.tone}>{alert.message}</Alert>
+          ))}
+        </div>
+      ) : null}
 
-      <div className="room-shell">
-        <section className="room-main-column" aria-label="Meeting stage and controls">
+      <div className="room-body">
+        <main className="room-main">
           <MeetingStage
             sidePanelOpen={sidePanelOpen}
             videos={meeting.videos}
@@ -547,7 +513,7 @@ export function RoomPage() {
               });
             }}
           />
-        </section>
+        </main>
 
         <RoomSidePanel
           open={sidePanelOpen}
@@ -602,14 +568,8 @@ export function RoomPage() {
       <SettingsDrawer
         open={settingsOpen}
         onClose={() => setSettingsOpen(false)}
-        title="Room settings"
+        title="Settings"
       >
-        <MeetingViewPanel
-          themeMode={themeMode}
-          layoutMode={layoutMode}
-          onThemeChange={handleThemeChange}
-          onLayoutChange={handleLayoutChange}
-        />
         <AudioDevicePanel
           isMicMuted={meeting.isMicMuted}
           isTogglingMic={meeting.isTogglingMic}
@@ -635,6 +595,12 @@ export function RoomPage() {
           }}
           embedded
         />
+        <MeetingViewPanel
+          themeMode={themeMode}
+          layoutMode={layoutMode}
+          onThemeChange={handleThemeChange}
+          onLayoutChange={handleLayoutChange}
+        />
       </SettingsDrawer>
 
       <div className="audio-sinks" aria-hidden="true">
@@ -654,7 +620,7 @@ export function RoomPage() {
           />
         ))}
       </div>
-    </main>
+    </div>
   );
 }
 

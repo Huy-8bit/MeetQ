@@ -1,16 +1,15 @@
 import {
-  DoorOpen,
+  LogOut,
   Mic,
   MicOff,
   MonitorUp,
-  PanelRightClose,
-  PanelRightOpen,
+  PanelRight,
   Settings,
   Video,
   VideoOff,
 } from "lucide-react";
 import type { ReactNode } from "react";
-import { MotionButton } from "./MotionButton";
+import { Spinner } from "./ui/Spinner";
 
 interface RoomControlBarProps {
   sidePanelOpen: boolean;
@@ -53,101 +52,101 @@ export function RoomControlBar({
   const micDisabled = isTogglingMic || (isMutedByHost && isMicMuted);
 
   return (
-    <footer className="room-control-bar">
-      <div className="room-control-group room-control-media">
+    <div className="control-bar" role="toolbar" aria-label="Meeting controls">
+      <div className="control-bar-group">
         <ControlButton
-          active={!isMicMuted}
-          muted={isMicMuted}
+          state={isMicMuted ? "off" : "on"}
+          busy={isTogglingMic}
           disabled={micDisabled}
           onClick={onToggleMic}
           label={isMutedByHost && isMicMuted ? "Muted by host" : isMicMuted ? "Unmute" : "Mute"}
           icon={isMicMuted ? <MicOff size={18} /> : <Mic size={18} />}
         />
         <ControlButton
-          active={!isCameraOff}
-          muted={isCameraOff}
+          state={isCameraOff ? "off" : "on"}
+          busy={isTogglingCamera}
           disabled={isTogglingCamera || isLeaving}
           onClick={onToggleCamera}
           label={isCameraOff ? "Start video" : "Stop video"}
           icon={isCameraOff ? <VideoOff size={18} /> : <Video size={18} />}
         />
         <ControlButton
-          active={isScreenSharing}
+          state={isScreenSharing ? "active" : "on"}
+          busy={screenShareBusy}
           disabled={screenShareBusy || isLeaving}
           onClick={onToggleScreenShare}
           label={
             isStartingScreenShare ? "Starting…" :
             isStoppingScreenShare ? "Stopping…" :
-            isScreenSharing ? "Stop share" : "Share"
+            isScreenSharing ? "Stop sharing" : "Share screen"
           }
           icon={<MonitorUp size={18} />}
         />
       </div>
 
-      <div className="room-control-secondary">
-        <MotionButton
-          className={sidePanelOpen ? "control-icon-btn control-text-btn context-toggle-btn is-active" : "control-icon-btn control-text-btn context-toggle-btn"}
+      <div className="control-bar-group control-bar-end">
+        <button
+          className="control-btn control-btn--quiet"
           type="button"
-          aria-label={sidePanelOpen ? "Hide context panel" : "Show context panel"}
-          title={sidePanelOpen ? "Hide context panel" : "Show context panel"}
+          aria-pressed={sidePanelOpen}
+          aria-label={sidePanelOpen ? "Hide side panel" : "Show side panel"}
+          title={sidePanelOpen ? "Hide side panel" : "Show side panel"}
           onClick={onToggleSidePanel}
         >
-          {sidePanelOpen ? <PanelRightClose size={18} /> : <PanelRightOpen size={18} />}
-          <span>{sidePanelOpen ? "Hide" : "Context"}</span>
-        </MotionButton>
-        <MotionButton
-          className="control-icon-btn"
+          <PanelRight size={18} aria-hidden="true" />
+        </button>
+        <button
+          className="control-btn control-btn--quiet"
           type="button"
           aria-label="Settings"
           title="Settings"
           onClick={onOpenSettings}
         >
-          <Settings size={18} />
-        </MotionButton>
-        <MotionButton
-          className="leave-button"
+          <Settings size={18} aria-hidden="true" />
+        </button>
+        <button
+          className="control-btn control-btn--leave"
           type="button"
           onClick={onLeave}
           disabled={isLeaving}
+          aria-label={isLeaving ? "Leaving…" : "Leave meeting"}
         >
-          <DoorOpen size={17} />
-          {isLeaving ? "Leaving…" : "Leave"}
-        </MotionButton>
+          {isLeaving ? <Spinner /> : <LogOut size={18} aria-hidden="true" />}
+          <span className="control-btn-label">{isLeaving ? "Leaving…" : "Leave"}</span>
+        </button>
       </div>
-    </footer>
+    </div>
   );
 }
 
 function ControlButton({
-  active,
-  muted = false,
+  state,
+  busy = false,
   disabled = false,
   onClick,
   label,
   icon,
 }: {
-  active: boolean;
-  muted?: boolean;
+  /** "off" = muted/camera off, "active" = presenting. Label text always states it too. */
+  state: "on" | "off" | "active";
+  busy?: boolean;
   disabled?: boolean;
   onClick: () => void;
   label: string;
   icon: ReactNode;
 }) {
   return (
-    <MotionButton
-      className={[
-        "meeting-control-button",
-        active ? "is-live" : "",
-        muted ? "is-muted" : "",
-      ].filter(Boolean).join(" ")}
+    <button
+      className={`control-btn is-${state}`}
       type="button"
       onClick={onClick}
       disabled={disabled}
       aria-label={label}
+      aria-busy={busy || undefined}
       title={label}
     >
-      <span className="control-btn-icon" aria-hidden="true">{icon}</span>
+      <span className="control-btn-icon" aria-hidden="true">{busy ? <Spinner /> : icon}</span>
       <span className="control-btn-label">{label}</span>
-    </MotionButton>
+    </button>
   );
 }

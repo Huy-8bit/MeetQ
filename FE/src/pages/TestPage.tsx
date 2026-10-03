@@ -1,36 +1,36 @@
 import { useRef } from "react";
 import { Link } from "react-router-dom";
+import { ArrowLeft, ArrowRight } from "lucide-react";
 import { CustomSelect, type CustomSelectOption } from "../components/CustomSelect";
 import { MicLevelMeter } from "../components/MicLevelMeter";
+import { Alert } from "../components/ui/Alert";
+import { Badge, type BadgeTone } from "../components/ui/Badge";
+import { Button, buttonClassName } from "../components/ui/Button";
+import { Field } from "../components/ui/Field";
 import { useMicTest } from "../features/test/useMicTest";
 import { useTranslationTest } from "../features/test/useTranslationTest";
 import { getLanguageLabel, SUPPORTED_MEETING_LANGUAGES } from "../lib/languages";
-import { useTextAnimationRoot } from "../lib/textAnimations";
 import type { Language } from "../types/api";
 
 export function TestPage() {
-  const textMotionRef = useTextAnimationRoot<HTMLElement>();
-
   return (
-    <main className="test-page" ref={textMotionRef}>
-      <header className="test-page-header">
-        <div>
-          <span className="eyebrow" data-text-animate="highlight">Dev Tools</span>
-          <h1 data-text-animate="line">Mic &amp; Translation Test</h1>
-          <p data-text-animate="fade">
-            Kiểm tra mic và dịch thuật trước khi vào phòng họp thật.
-          </p>
-        </div>
-        <Link to="/" className="button-secondary test-back-btn" data-text-animate="cta">
-          ← Về Trang Chủ
+    <div className="page">
+      <header className="page-header">
+        <Link to="/" className={buttonClassName({ variant: "ghost", size: "sm", className: "page-back" })}>
+          <ArrowLeft size={16} aria-hidden="true" />
+          Home
         </Link>
+        <h1 className="page-title">Device check</h1>
+        <p className="page-description">
+          Make sure your microphone works and hear how translation sounds before you join a meeting.
+        </p>
       </header>
 
-      <div className="test-sections">
+      <main className="test-grid">
         <MicTestSection />
         <TranslationTestSection />
-      </div>
-    </main>
+      </main>
+    </div>
   );
 }
 
@@ -40,74 +40,77 @@ function MicTestSection() {
   const { state, start, stop } = useMicTest();
   const isActive =
     state.status === "active" || state.status === "silence" || state.status === "connecting";
+  const status = MIC_STATUS[state.status] ?? { label: state.status, tone: "neutral" as BadgeTone };
 
   return (
-    <section className="test-card panel">
-      <div className="test-card-header">
-        <div>
-          <h2 data-text-animate="line">Mic Test</h2>
-          <p data-text-animate="fade">Kiểm tra microphone có hoạt động và backend nhận audio chưa.</p>
+    <section className="card" aria-labelledby="mic-test-title">
+      <div className="card-body test-card">
+        <div className="card-header">
+          <div>
+            <h2 className="card-title" id="mic-test-title">Microphone</h2>
+            <p className="card-description">Check that your mic picks up your voice.</p>
+          </div>
+          <Badge tone={status.tone} dot>{status.label}</Badge>
         </div>
-        <span className={`test-status-badge status-${state.status}`}>
-          {statusLabel(state.status)}
-        </span>
-      </div>
 
-      {state.error ? (
-        <div className="banner banner-danger test-error">{state.error}</div>
-      ) : null}
+        {state.error ? <Alert tone="danger">{state.error}</Alert> : null}
 
-      <div className="mic-level-section">
-        <MicLevelMeter level={state.level} peak={state.peak} db={state.db} />
-        <div className="mic-feedback" data-text-animate="fade">
-          {micFeedbackText(state.status, state.level)}
+        <div className="test-meter">
+          <MicLevelMeter level={state.level} peak={state.peak} db={state.db} />
+          <p className="field-helper" aria-live="polite">{micFeedbackText(state.status, state.level)}</p>
         </div>
-      </div>
 
-      {state.sessionId ? (
-        <p className="test-session-id">Session: {state.sessionId}</p>
-      ) : null}
-
-      <div className="test-controls">
-        {!isActive ? (
-          <button
-            className="button-primary"
-            onClick={() => void start()}
-            disabled={state.status === "requesting_permission" || state.status === "connecting"}
-            data-text-animate="cta"
-          >
-            {state.status === "requesting_permission"
-              ? "Đang xin quyền mic..."
-              : state.status === "connecting"
-              ? "Đang kết nối..."
-              : "Bắt đầu Mic Test"}
-          </button>
-        ) : (
-          <button className="button-danger" onClick={() => void stop()} data-text-animate="cta">
-            Dừng
-          </button>
-        )}
+        <div className="test-footer">
+          {state.sessionId ? <span className="test-session mono">Session {state.sessionId}</span> : <span />}
+          {!isActive ? (
+            <Button
+              variant="primary"
+              onClick={() => void start()}
+              loading={state.status === "requesting_permission" || state.status === "connecting"}
+            >
+              {state.status === "requesting_permission"
+                ? "Waiting for permission…"
+                : state.status === "connecting"
+                ? "Connecting…"
+                : "Start mic test"}
+            </Button>
+          ) : (
+            <Button variant="secondary" onClick={() => void stop()}>
+              Stop
+            </Button>
+          )}
+        </div>
       </div>
     </section>
   );
 }
 
+const MIC_STATUS: Record<string, { label: string; tone: BadgeTone }> = {
+  idle: { label: "Not started", tone: "neutral" },
+  requesting_permission: { label: "Permission", tone: "warning" },
+  connecting: { label: "Connecting", tone: "warning" },
+  active: { label: "Listening", tone: "success" },
+  silence: { label: "Silent", tone: "warning" },
+  stopped: { label: "Stopped", tone: "neutral" },
+  error: { label: "Error", tone: "danger" },
+};
+
 function micFeedbackText(status: string, level: number): string {
   switch (status) {
     case "idle":
-      return "Nhấn bắt đầu để kiểm tra mic.";
+      return "Start the test, then say a few words.";
     case "requesting_permission":
-      return "Đang xin quyền truy cập microphone...";
+      return "Allow microphone access in your browser.";
     case "connecting":
-      return "Đang kết nối đến backend test session...";
+      return "Connecting to the test session…";
     case "active":
-      return level > 0.05 ? "Đang nhận âm thanh" : "Đang chờ tiếng nói...";
+      return level > 0.05 ? "We can hear you." : "Waiting for you to speak…";
     case "silence":
-      return "Không phát hiện tiếng nói (im lặng)";
+      return "No speech detected. Check that the right microphone is selected.";
     case "stopped":
-      return "Đã dừng mic test.";
+      return "Test stopped.";
     case "error":
-      return "Đã xảy ra lỗi. Xem chi tiết bên trên.";
+      return "Something went wrong. See the details above.";
     default:
       return "";
   }
@@ -125,12 +128,14 @@ function TranslationTestSection() {
     state.status === "connecting";
 
   const canChangeLang = state.status === "idle" || state.status === "stopped";
+  const sameLanguage = state.srcLang === state.tgtLang;
   const languageOptions: Array<CustomSelectOption<Language>> = SUPPORTED_MEETING_LANGUAGES.map(
     (language) => ({
       value: language,
       label: getLanguageLabel(language),
     }),
   );
+  const status = TRANSLATION_STATUS[state.status] ?? { label: state.status, tone: "neutral" as BadgeTone };
 
   function handleStart() {
     void start(state.srcLang, state.tgtLang);
@@ -154,163 +159,107 @@ function TranslationTestSection() {
   }
 
   return (
-    <section className="test-card panel">
-      <div className="test-card-header">
-        <div>
-          <h2 data-text-animate="line">Translation Test</h2>
-          <p data-text-animate="fade">Nói thử và xem kết quả dịch realtime từ backend.</p>
-        </div>
-        <span className={`test-status-badge status-${state.status}`}>
-          {translationStatusLabel(state.status)}
-        </span>
-      </div>
-
-      {state.error ? (
-        <div className="banner banner-danger test-error">{state.error}</div>
-      ) : null}
-
-      <div className="translation-lang-row">
-        <label className="compact-field">
-          <span>Ngôn ngữ nguồn</span>
-          <CustomSelect
-            value={state.srcLang}
-            options={languageOptions}
-            disabled={!canChangeLang}
-            onChange={setSrcLang}
-            ariaLabel="Ngôn ngữ nguồn"
-          />
-        </label>
-
-        <span className="lang-arrow">→</span>
-
-        <label className="compact-field">
-          <span>Ngôn ngữ đích</span>
-          <CustomSelect
-            value={state.tgtLang}
-            options={languageOptions}
-            disabled={!canChangeLang}
-            onChange={setTgtLang}
-            ariaLabel="Ngôn ngữ đích"
-          />
-        </label>
-      </div>
-
-      {state.sessionId ? (
-        <p className="test-session-id">Session: {state.sessionId}</p>
-      ) : null}
-
-      <div className="translation-panels">
-        <div className="translation-text-box">
-          <span className="translation-box-label">
-            Lời gốc ({getLanguageLabel(state.srcLang)})
-          </span>
-          <div className="translation-text-content">
-            {state.items.length === 0 ? (
-              <span className="translation-placeholder">
-                {isRunning ? "Đang chờ tiếng nói..." : "Chưa có dữ liệu"}
-              </span>
-            ) : (
-              state.items.map((item) => (
-                <p
-                  key={item.id}
-                  className={`translation-item-text ${item.isFinal ? "" : "is-partial"}`}
-                >
-                  {item.sourceText}
-                  {!item.isFinal ? (
-                    <span className="translation-partial-badge">…</span>
-                  ) : null}
-                </p>
-              ))
-            )}
+    <section className="card" aria-labelledby="translation-test-title">
+      <div className="card-body test-card">
+        <div className="card-header">
+          <div>
+            <h2 className="card-title" id="translation-test-title">Translation</h2>
+            <p className="card-description">Speak and watch the live translation.</p>
           </div>
+          <Badge tone={status.tone} dot pulse={state.status === "translating"}>{status.label}</Badge>
         </div>
 
-        <div className="translation-text-box translation-text-box-right">
-          <span className="translation-box-label">
-            Bản dịch ({getLanguageLabel(state.tgtLang)})
-            {state.status === "translating" ? (
-              <span className="badge live translation-live-badge">Đang dịch</span>
-            ) : null}
-          </span>
-          <div className="translation-text-content">
-            {state.items.length === 0 ? (
-              <span className="translation-placeholder">
-                {isRunning ? "Đang chờ bản dịch..." : "Chưa có dữ liệu"}
-              </span>
-            ) : (
-              state.items.map((item) => (
-                <p
-                  key={item.id}
-                  className={`translation-item-text ${item.isFinal ? "" : "is-partial"}`}
-                >
-                  {item.translatedText || (
-                    <span className="translation-placeholder">...</span>
-                  )}
-                </p>
-              ))
-            )}
-          </div>
+        {state.error ? <Alert tone="danger">{state.error}</Alert> : null}
+
+        <div className="test-languages">
+          <Field label="From" htmlFor="test-src-lang">
+            <CustomSelect
+              id="test-src-lang"
+              value={state.srcLang}
+              options={languageOptions}
+              disabled={!canChangeLang}
+              onChange={setSrcLang}
+              ariaLabel="From language"
+            />
+          </Field>
+          <ArrowRight className="test-languages-arrow" size={16} aria-hidden="true" />
+          <Field label="To" htmlFor="test-tgt-lang">
+            <CustomSelect
+              id="test-tgt-lang"
+              value={state.tgtLang}
+              options={languageOptions}
+              disabled={!canChangeLang}
+              onChange={setTgtLang}
+              ariaLabel="To language"
+            />
+          </Field>
         </div>
-      </div>
-
-      {/* Hidden audio element for translated audio playback */}
-      <audio ref={audioRef} style={{ display: "none" }} />
-
-      <div className="test-controls">
-        {!isRunning ? (
-          <button
-            className="button-primary"
-            onClick={handleStart}
-            disabled={
-              state.status === "requesting_permission" ||
-              state.status === "connecting" ||
-              state.srcLang === state.tgtLang
-            }
-            data-text-animate="cta"
-          >
-            {state.status === "requesting_permission"
-              ? "Đang xin quyền mic..."
-              : state.status === "connecting"
-              ? "Đang kết nối..."
-              : "Bắt đầu Translation Test"}
-          </button>
-        ) : (
-          <button className="button-danger" onClick={() => void stop()} data-text-animate="cta">
-            Dừng
-          </button>
-        )}
-        {state.srcLang === state.tgtLang && canChangeLang ? (
-          <p className="inline-error" style={{ marginTop: 8 }}>
-            Ngôn ngữ nguồn và đích không được trùng nhau.
-          </p>
+        {sameLanguage && canChangeLang ? (
+          <p className="field-error">Pick two different languages.</p>
         ) : null}
+
+        <div className="test-transcripts" aria-live="polite">
+          <div className="test-transcript">
+            <p className="test-transcript-label">{getLanguageLabel(state.srcLang)}</p>
+            {state.items.length === 0 ? (
+              <p className="text-tertiary">{isRunning ? "Waiting for speech…" : "Nothing yet"}</p>
+            ) : (
+              state.items.map((item) => (
+                <p key={item.id} className={item.isFinal ? undefined : "is-partial"}>
+                  {item.sourceText}
+                </p>
+              ))
+            )}
+          </div>
+          <div className="test-transcript">
+            <p className="test-transcript-label">{getLanguageLabel(state.tgtLang)}</p>
+            {state.items.length === 0 ? (
+              <p className="text-tertiary">{isRunning ? "Waiting for translation…" : "Nothing yet"}</p>
+            ) : (
+              state.items.map((item) => (
+                <p key={item.id} className={item.isFinal ? undefined : "is-partial"}>
+                  {item.translatedText || "…"}
+                </p>
+              ))
+            )}
+          </div>
+        </div>
+
+        {/* Hidden audio element for translated audio playback */}
+        <audio ref={audioRef} hidden />
+
+        <div className="test-footer">
+          {state.sessionId ? <span className="test-session mono">Session {state.sessionId}</span> : <span />}
+          {!isRunning ? (
+            <Button
+              variant="primary"
+              onClick={handleStart}
+              loading={state.status === "requesting_permission" || state.status === "connecting"}
+              disabled={sameLanguage}
+            >
+              {state.status === "requesting_permission"
+                ? "Waiting for permission…"
+                : state.status === "connecting"
+                ? "Connecting…"
+                : "Start translation test"}
+            </Button>
+          ) : (
+            <Button variant="secondary" onClick={() => void stop()}>
+              Stop
+            </Button>
+          )}
+        </div>
       </div>
     </section>
   );
 }
 
-function statusLabel(status: string): string {
-  const map: Record<string, string> = {
-    idle: "Chờ",
-    requesting_permission: "Xin quyền",
-    connecting: "Kết nối",
-    active: "Đang chạy",
-    silence: "Im lặng",
-    stopped: "Đã dừng",
-    error: "Lỗi",
-  };
-  return map[status] ?? status;
-}
-
-function translationStatusLabel(status: string): string {
-  const map: Record<string, string> = {
-    idle: "Chờ",
-    requesting_permission: "Xin quyền",
-    connecting: "Kết nối",
-    listening: "Đang nghe",
-    translating: "Đang dịch",
-    stopped: "Đã dừng",
-    error: "Lỗi",
-  };
-  return map[status] ?? status;
-}
+const TRANSLATION_STATUS: Record<string, { label: string; tone: BadgeTone }> = {
+  idle: { label: "Not started", tone: "neutral" },
+  requesting_permission: { label: "Permission", tone: "warning" },
+  connecting: { label: "Connecting", tone: "warning" },
+  listening: { label: "Listening", tone: "success" },
+  translating: { label: "Translating", tone: "accent" },
+  stopped: { label: "Stopped", tone: "neutral" },
+  error: { label: "Error", tone: "danger" },
+};

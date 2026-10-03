@@ -1,9 +1,8 @@
-import { Pin, PinOff } from "lucide-react";
+import { MicOff, MonitorUp, Pin, PinOff, Sparkles } from "lucide-react";
 import type { VideoFeed } from "../types/livekit";
 import type { BrseRoomMode } from "../lib/brseModes";
 import { getLanguageLabel } from "../lib/languages";
 import { VideoTrackView } from "./MediaElements";
-import { MotionButton } from "./MotionButton";
 
 interface ParticipantTileProps {
   feed: VideoFeed;
@@ -37,96 +36,93 @@ export function ParticipantTile({
   const isBrse = feed.kind === "virtual_brse" || feed.isVirtual;
   const brseCaption =
     !isBrseEnabled
-      ? "Normal meeting mode"
+      ? "Relay off"
       : brseRoomMode === "text_only" || !brseAudioExpected
-        ? "Text relay only"
+        ? "Text relay"
         : brseRoomMode === "silent_summary"
           ? "Summary capture"
-          : "AI voice + text relay";
-  const brseBadge =
-    !isBrseEnabled
-      ? "BRSE off"
-      : brseRoomMode === "text_only" || !brseAudioExpected
-      ? "Text-only"
-      : brseRoomMode === "silent_summary"
-        ? "Summary"
-        : "AI relay";
+          : "Voice + text relay";
   const initials = feed.displayName
     .split(" ")
     .map((part) => part[0]?.toUpperCase())
     .filter(Boolean)
     .slice(0, 2)
     .join("");
+  const hasVideo = !!feed.track && !feed.isCameraOff;
+  // `label` carries the participant status; only surface it when it's unusual.
+  const statusNote =
+    label && !feed.isLocal && !isBrse && !["connected", "Participant", "You"].includes(label)
+      ? label.charAt(0).toUpperCase() + label.slice(1)
+      : null;
+  const subtitle = isBrse
+    ? brseCaption
+    : [
+        feed.isLocal ? "You" : null,
+        isHost ? "Host" : null,
+        feed.language ? getLanguageLabel(feed.language) : null,
+        statusNote,
+      ]
+        .filter(Boolean)
+        .join(" · ");
 
   return (
     <article
       className={[
-        "participant-tile",
-        isBrse ? "participant-tile-brse" : "",
-        isBrse && isBrseEnabled && (brseRoomMode === "text_only" || !brseAudioExpected)
-          ? "participant-tile-brse-text-only"
-          : "",
+        "tile",
+        isBrse ? "tile--ai" : "",
         feed.isSpeaking ? "is-speaking" : "",
         isPinned ? "is-pinned" : "",
       ].filter(Boolean).join(" ")}
+      aria-label={`${feed.displayName}${feed.isLocal ? " (you)" : ""}`}
     >
-      {onPin || onUnpin ? (
-        <div className="participant-tile-actions">
-          <MotionButton
-            className={isPinned ? "tile-action-button is-active" : "tile-action-button"}
-            type="button"
-            aria-label={isPinned ? `Unpin ${feed.displayName}` : `Pin ${feed.displayName}`}
-            aria-pressed={isPinned}
-            title={isPinned ? "Unpin video" : "Pin video"}
-            onClick={isPinned ? onUnpin : onPin}
-          >
-            {isPinned ? <PinOff size={14} /> : <Pin size={14} />}
-            <span>{isPinned ? "Unpin" : "Pin"}</span>
-          </MotionButton>
-        </div>
-      ) : null}
-      <div className="participant-media-frame">
-        {feed.track && !feed.isCameraOff ? (
+      <div className="tile-media">
+        {hasVideo ? (
           <VideoTrackView track={feed.track} mirrored={feed.isLocal} />
         ) : isBrse ? (
-          <div className="participant-fallback participant-fallback-brse">
-            <div className="brse-avatar" aria-hidden="true">
-              <span>AI</span>
-              <i />
-              <i />
-              <i />
-            </div>
-            <strong data-text-animate="fade">{isBrseEnabled ? relayStatusLabel : "Relay off"}</strong>
-            <p data-text-animate="fade">{brseCaption}</p>
+          <div className="tile-fallback">
+            <span className="tile-avatar tile-avatar--ai" aria-hidden="true">
+              <Sparkles size={22} />
+            </span>
+            <p className="tile-fallback-text">{isBrseEnabled ? relayStatusLabel : "Relay off"}</p>
           </div>
         ) : (
-          <div className="participant-fallback participant-fallback-human">
-            <span>{initials || "?"}</span>
-            <strong data-text-animate="fade">{feed.isLocal && feed.isCameraOff ? "Camera off" : feed.displayName}</strong>
+          <div className="tile-fallback">
+            <span className="tile-avatar" aria-hidden="true">{initials || "?"}</span>
+            {feed.isLocal && feed.isCameraOff ? <p className="tile-fallback-text">Camera off</p> : null}
           </div>
         )}
       </div>
-      <div className="participant-tile-footer">
-        <div>
-          <strong data-text-animate="fade">{feed.displayName}</strong>
-          <p data-text-animate="fade">
-            {label
-              || (feed.isLocal
-                ? "You"
-                : isBrse
-                  ? relayStatusLabel
-                  : "Participant")}
-          </p>
+
+      {onPin || onUnpin ? (
+        <div className="tile-actions">
+          <button
+            className="tile-action"
+            type="button"
+            aria-label={isPinned ? `Unpin ${feed.displayName}` : `Pin ${feed.displayName}`}
+            aria-pressed={isPinned}
+            title={isPinned ? "Unpin" : "Pin to stage"}
+            onClick={isPinned ? onUnpin : onPin}
+          >
+            {isPinned ? <PinOff size={14} aria-hidden="true" /> : <Pin size={14} aria-hidden="true" />}
+          </button>
         </div>
-        <div className="participant-tile-tags">
-          {isHost ? <span className="badge badge-host">Host</span> : null}
-          {isBrse ? <span className="badge kind">{brseBadge}</span> : null}
-          {isScreenSharing ? <span className="badge live">Sharing screen</span> : null}
-          {isMutedByHost ? <span className="badge badge-muted-by-host">Muted</span> : null}
-          {feed.language ? (
-            <span className="language-pill">{getLanguageLabel(feed.language)}</span>
-          ) : null}
-        </div>
+      ) : null}
+
+      <div className="tile-footer">
+        {isMutedByHost ? (
+          <span className="tile-icon tile-icon--danger" title="Muted by host">
+            <MicOff size={12} aria-hidden="true" />
+            <span className="sr-only">Muted by host</span>
+          </span>
+        ) : null}
+        {isScreenSharing ? (
+          <span className="tile-icon" title="Sharing screen">
+            <MonitorUp size={12} aria-hidden="true" />
+            <span className="sr-only">Sharing screen</span>
+          </span>
+        ) : null}
+        <span className="tile-name">{feed.displayName}</span>
+        {subtitle ? <span className="tile-subtitle">{subtitle}</span> : null}
       </div>
     </article>
   );

@@ -13,8 +13,3 @@ interface ImportMetaEnv {
 interface ImportMeta {
   readonly env: ImportMetaEnv;
 }
-
-declare module "animejs" {
-  const anime: any;
-  export default anime;
-}

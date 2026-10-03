@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef } from "react";
+import { Captions } from "lucide-react";
 import type { InterpreterStatusEntry } from "../features/room/interpreter";
 import type { TranscriptEntry } from "../features/room/transcripts";
 import type { BrseRoomMode } from "../lib/brseModes";
 import { formatLanguageFlow, getLanguageLabel } from "../lib/languages";
-import { animateLatestItem, useRevealMotion } from "../lib/motion";
-import { useTextAnimations } from "../lib/textAnimations";
 import type { MeetingLanguage } from "../types/api";
+import { EmptyState } from "./ui/EmptyState";
 
 interface BrseRelayPanelProps {
   brseEnabled: boolean;
@@ -27,16 +27,6 @@ export function BrseRelayPanel({
   meetingLanguages,
 }: BrseRelayPanelProps) {
   const listRef = useRef<HTMLDivElement | null>(null);
-  const emptyMotionRef = useRevealMotion<HTMLDivElement>({
-    selector: "[data-relay-empty-motion]",
-    distance: 8,
-    duration: 280,
-    stagger: 36,
-    dependencies: [brseEnabled, brseRoomMode, brseAudioExpected, meetingLanguages.length],
-  });
-  useTextAnimations(emptyMotionRef, {
-    dependencies: [brseEnabled, brseRoomMode, brseAudioExpected, meetingLanguages.length],
-  });
   const isNearBottomRef = useRef(true);
 
   const visibleEntries = useMemo(
@@ -61,11 +51,6 @@ export function BrseRelayPanel({
     }
   }, [visibleEntries]);
 
-  useEffect(() => {
-    const animation = animateLatestItem(listRef.current);
-    return () => animation?.pause?.();
-  }, [latestId]);
-
   if (visibleEntries.length === 0) {
     const emptyCopy = getRelayEmptyCopy({
       brseEnabled,
@@ -75,16 +60,12 @@ export function BrseRelayPanel({
     });
 
     return (
-      <div className="relay-history-empty panel-empty-state" ref={emptyMotionRef}>
-        <span className="panel-empty-kicker" data-relay-empty-motion data-text-animate="highlight">Relay</span>
-        <strong data-relay-empty-motion data-text-animate="fade">{emptyCopy.title}</strong>
-        <p data-relay-empty-motion data-text-animate="fade">{emptyCopy.detail}</p>
-      </div>
+      <EmptyState icon={<Captions size={20} />} title={emptyCopy.title} description={emptyCopy.detail} />
     );
   }
 
   return (
-    <div className="relay-history-list" ref={listRef} onScroll={handleScroll}>
+    <div className="feed" ref={listRef} onScroll={handleScroll} aria-live="polite" aria-relevant="additions">
       {visibleEntries.map((entry) => (
         <RelayEntry
           key={entry.transcriptId}
@@ -161,33 +142,29 @@ function RelayEntry({
   return (
     <article
       className={[
-        "relay-entry",
-        isRelay ? "relay-entry-relay" : "relay-entry-human",
-        isPartial ? "relay-entry-partial" : "",
-        isLatest ? "relay-entry-latest" : "",
+        "feed-item",
+        isRelay ? "feed-item--relay" : "",
+        isPartial ? "is-partial" : "",
+        isLatest ? "is-latest" : "",
       ].filter(Boolean).join(" ")}
-      data-motion-latest={isLatest ? "true" : undefined}
     >
-      <div className="relay-entry-meta">
-        <span className="relay-entry-speaker">{entry.actorName}</span>
-        <span className="relay-entry-lang">{getLanguageLabel(entry.actorLanguage)}</span>
-        {isRelay ? (
-          <span className="relay-entry-kind">
-            {formatLanguageFlow(entry.sourceSpeakerLanguage, entry.relayTargetLanguage ?? "auto")}
-          </span>
-        ) : null}
-        {isPartial ? <span className="relay-entry-live" /> : null}
-      </div>
+      <header className="feed-item-meta">
+        <span className="feed-item-author">{isRelay ? entry.sourceSpeakerName || entry.actorName : entry.actorName}</span>
+        <span>
+          {isRelay
+            ? formatLanguageFlow(entry.sourceSpeakerLanguage, entry.relayTargetLanguage ?? "auto")
+            : getLanguageLabel(entry.actorLanguage)}
+        </span>
+        {isPartial ? <span className="feed-item-live">Live</span> : null}
+      </header>
 
       {isRelay ? (
-        <div className="relay-entry-body">
-          <p className="relay-source-text">{entry.sourceText}</p>
-          <p className="relay-translated-text">{entry.relayText ?? entry.text}</p>
-        </div>
+        <>
+          <p className="feed-item-text">{entry.relayText ?? entry.text}</p>
+          <p className="feed-item-source">{entry.sourceText}</p>
+        </>
       ) : (
-        <div className="relay-entry-body">
-          <p className="relay-source-text">{entry.text}</p>
-        </div>
+        <p className="feed-item-text">{entry.text}</p>
       )}
     </article>
   );

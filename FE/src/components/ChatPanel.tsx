@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
+import { MessageSquare, SendHorizontal } from "lucide-react";
 import { getLanguageLabel } from "../lib/languages";
-import { animateLatestItem } from "../lib/motion";
-import { useTextAnimationRoot } from "../lib/textAnimations";
 import type { ChatTranslationMode, MeetingLanguage, RoomChatMessage } from "../types/api";
-import { MotionButton } from "./MotionButton";
+import { Button } from "./ui/Button";
+import { EmptyState } from "./ui/EmptyState";
+import { SegmentedControl } from "./ui/SegmentedControl";
 
 const TRANSLATION_MODE_STORAGE_KEY = "brseai_chat_translation_mode";
 
@@ -45,7 +46,6 @@ export function ChatPanel({
   disabled = false,
   error = null,
   isSending = false,
-  embedded = false,
   meetingLanguages,
 }: ChatPanelProps) {
   const [inputText, setInputText] = useState("");
@@ -54,12 +54,8 @@ export function ChatPanel({
   );
   const listRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
-  const latestMessageId = messages[messages.length - 1]?.message_id ?? null;
   // Only useful when the room has more than one language.
   const canTranslate = !meetingLanguages || meetingLanguages.length >= 2;
-  const textMotionRef = useTextAnimationRoot<HTMLElement>({
-    dependencies: [embedded, messages.length === 0, canTranslate],
-  });
 
   // Auto-scroll to bottom on new messages
   useEffect(() => {
@@ -68,11 +64,6 @@ export function ChatPanel({
       el.scrollTop = el.scrollHeight;
     }
   }, [messages.length]);
-
-  useEffect(() => {
-    const animation = animateLatestItem(listRef.current);
-    return () => animation?.pause?.();
-  }, [latestMessageId]);
 
   useEffect(() => {
     const el = inputRef.current;
@@ -123,25 +114,14 @@ export function ChatPanel({
   }
 
   return (
-    <section className={embedded ? "chat-panel panel-section" : "panel chat-panel"} ref={textMotionRef}>
-      <div className="panel-header chat-intro">
-        <div>
-          <h3 data-text-animate="fade">Room Chat</h3>
-          <p data-text-animate="fade">Send messages to everyone in the room.</p>
-        </div>
-        <span className="panel-count" data-text-animate="fade">{messages.length}</span>
-      </div>
-
-      <div
-        className={`chat-message-list ${messages.length === 0 ? "chat-message-list-empty" : ""}`}
-        ref={listRef}
-      >
+    <section className="chat" aria-label="Room chat">
+      <div className="chat-list" ref={listRef} aria-live="polite" aria-relevant="additions">
         {messages.length === 0 ? (
-          <div className="chat-empty panel-empty-state">
-            <span className="panel-empty-kicker" data-text-animate="highlight">Chat</span>
-            <strong data-text-animate="fade">No messages yet</strong>
-            <p data-text-animate="fade">Chat notes for this room will appear here.</p>
-          </div>
+          <EmptyState
+            icon={<MessageSquare size={20} />}
+            title="No messages yet"
+            description="Messages you send here are visible to everyone in the room."
+          />
         ) : (
           messages.map((message) => {
             const isSelf = message.participant_id === selfParticipantId;
@@ -154,80 +134,56 @@ export function ChatPanel({
               message.delivery_status === "sending";
 
             return (
-              <div
-                className={`chat-message ${isSelf ? "chat-message-self" : "chat-message-other"}`}
+              <article
+                className={isSelf ? "chat-message is-self" : "chat-message"}
                 key={message.message_id}
-                data-motion-latest={message.message_id === latestMessageId ? "true" : undefined}
               >
-                <div className="chat-message-header">
-                  <strong>{isSelf ? "You" : message.display_name}</strong>
+                <header className="chat-message-meta">
+                  <span className="chat-message-author">{isSelf ? "You" : message.display_name}</span>
                   {message.sender_language ? (
-                    <span className="language-pill chat-lang-pill">
-                      {getLanguageLabel(message.sender_language)}
-                    </span>
+                    <span>{getLanguageLabel(message.sender_language)}</span>
                   ) : null}
-                  <span className="chat-timestamp">{formatTime(message.created_at)}</span>
+                  <time dateTime={message.created_at}>{formatTime(message.created_at)}</time>
                   {message.delivery_status === "sending" ? (
-                    <span className="badge live chat-delivery-badge">Sending</span>
+                    <span className="chat-message-status">Sending…</span>
                   ) : null}
                   {message.delivery_status === "failed" ? (
-                    <span className="badge warning chat-delivery-badge">Failed</span>
+                    <span className="chat-message-status is-failed">Not sent</span>
                   ) : null}
-                </div>
+                </header>
 
                 <p className="chat-message-text">{message.text}</p>
 
                 {hasTranslation
                   ? message.translations!.map((t) => (
-                      <div className="chat-translation-block" key={t.language}>
+                      <div className="chat-translation" key={t.language}>
                         <span className="chat-translation-label">
-                          Translated · {getLanguageLabel(t.language)}
+                          {getLanguageLabel(t.language)}
                         </span>
-                        <p className="chat-translation-text">{t.text}</p>
+                        <p>{t.text}</p>
                       </div>
                     ))
                   : null}
 
                 {isPendingTranslation && !hasTranslation ? (
-                  <div className="chat-translation-block chat-translation-pending">
+                  <div className="chat-translation">
                     <span className="chat-translation-label">Translating…</span>
                   </div>
                 ) : null}
-              </div>
+              </article>
             );
           })
         )}
       </div>
 
-      <div className="chat-composer">
-        {canTranslate ? (
-          <div className="chat-mode-bar" aria-label="Chat send mode">
-            <MotionButton
-              type="button"
-              className={`chat-mode-btn ${translationMode === "original_only" ? "chat-mode-btn-active" : ""}`}
-              onClick={() => handleModeChange("original_only")}
-              disabled={disabled}
-              title="Send without translation"
-            >
-              Original
-            </MotionButton>
-            <MotionButton
-              type="button"
-              className={`chat-mode-btn ${translationMode === "translate" ? "chat-mode-btn-active" : ""}`}
-              onClick={() => handleModeChange("translate")}
-              disabled={disabled}
-              title="Send with translation"
-            >
-              Translate
-            </MotionButton>
-          </div>
-        ) : null}
-
-        <form className="chat-input-bar" onSubmit={(event) => void handleSubmit(event)}>
+      <form className="chat-composer" onSubmit={(event) => void handleSubmit(event)}>
+        <label className="sr-only" htmlFor="chat-input">Message</label>
+        <div className="chat-input-row">
           <textarea
+            id="chat-input"
             ref={inputRef}
-            className="chat-input"
-            placeholder={disabled ? "Chat is unavailable right now" : "Type a message..."}
+            className="textarea"
+            placeholder={disabled ? "Chat is unavailable right now" : "Message everyone…"}
             value={inputText}
             onChange={(event) => setInputText(event.target.value)}
             onKeyDown={handleInputKeyDown}
@@ -235,18 +191,36 @@ export function ChatPanel({
             maxLength={2000}
             rows={1}
           />
-          <MotionButton
-            className="button-primary chat-send-btn"
+          <Button
             type="submit"
-            disabled={disabled || isSending || !inputText.trim()}
-            attentionKey={inputText.trim() ? "chat-ready" : null}
-          >
-            {isSending ? "Sending..." : "Send"}
-          </MotionButton>
-        </form>
+            variant="primary"
+            iconOnly
+            size="lg"
+            loading={isSending}
+            icon={<SendHorizontal size={18} />}
+            aria-label="Send message"
+            disabled={disabled || !inputText.trim()}
+          />
+        </div>
 
-        {error ? <div className="inline-error">{error}</div> : null}
-      </div>
+        {canTranslate ? (
+          <div className="chat-composer-options">
+            <span className="field-helper" id="chat-mode-label">Send as</span>
+            <SegmentedControl
+              ariaLabelledBy="chat-mode-label"
+              value={translationMode}
+              onChange={handleModeChange}
+              disabled={disabled}
+              options={[
+                { value: "original_only", label: "Original", title: "Send without translation" },
+                { value: "translate", label: "Translated", title: "Send with translation for other languages" },
+              ]}
+            />
+          </div>
+        ) : null}
+
+        {error ? <p className="field-error" role="alert">{error}</p> : null}
+      </form>
     </section>
   );
 }

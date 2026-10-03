@@ -1,0 +1,171 @@
+/* ─── Generic page layout (Device check, Meeting ended) ──────────────── */
+.page {
+  width: 100%;
+  max-width: var(--content-max);
+  margin: 0 auto;
+  padding: var(--space-6) var(--space-6) var(--space-12);
+}
+
+.page-header {
+  display: grid;
+  justify-items: start;
+  gap: var(--space-2);
+  margin-bottom: var(--space-8);
+}
+
+.page-back {
+  margin-left: calc(var(--space-3) * -1);
+  margin-bottom: var(--space-2);
+}
+
+.page-title {
+  font-size: var(--text-2xl);
+}
+
+.page-description {
+  max-width: 640px;
+  color: var(--color-text-secondary);
+}
+
+/* ─── Device check ────────────────────────────────────────────────────── */
+.test-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: start;
+  gap: var(--space-6);
+}
+
+.test-card {
+  display: grid;
+  gap: var(--space-5);
+}
+
+.test-card .card-header {
+  margin-bottom: 0;
+}
+
+.test-meter {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.test-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.test-session {
+  overflow: hidden;
+  color: var(--color-text-tertiary);
+  font-size: var(--text-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.test-languages {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: end;
+  gap: var(--space-3);
+}
+
+.test-languages-arrow {
+  margin-bottom: 12px;
+  color: var(--color-text-tertiary);
+}
+
+.test-transcripts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-3);
+}
+
+.test-transcript {
+  display: grid;
+  align-content: start;
+  gap: var(--space-1);
+  min-height: 120px;
+  max-height: 240px;
+  overflow-y: auto;
+  padding: var(--space-3);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-muted);
+}
+
+.test-transcript-label {
+  color: var(--color-text-tertiary);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-semibold);
+}
+
+.test-transcript .is-partial {
+  color: var(--color-text-secondary);
+}
+
+/* Mic level meter */
+.mic-level-meter {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.mic-level-bars {
+  display: grid;
+  flex: 1;
+  grid-template-columns: repeat(20, minmax(0, 1fr));
+  gap: 3px;
+  height: 24px;
+}
+
+.mic-bar {
+  border-radius: 2px;
+  background: var(--color-surface-muted);
+  transition: background-color 80ms linear;
+}
+
+.mic-bar-low,
+.mic-bar-mid {
+  background: var(--color-accent);
+}
+
+.mic-bar-high {
+  background: var(--color-warning);
+}
+
+.mic-bar-peak {
+  background: var(--color-text-secondary);
+}
+
+.mic-level-db {
+  width: 56px;
+  color: var(--color-text-tertiary);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  text-align: right;
+}
+
+@media (max-width: 900px) {
+  .test-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 480px) {
+  .page {
+    padding: var(--space-4) var(--space-4) var(--space-10);
+  }
+
+  .test-transcripts {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .test-languages {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .test-languages-arrow {
+    display: none;
+  }
+}

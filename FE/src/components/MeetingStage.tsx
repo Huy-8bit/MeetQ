@@ -1,14 +1,12 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { Pin, PinOff } from "lucide-react";
+import { Pin, PinOff, Video } from "lucide-react";
 import type { ParticipantSnapshot } from "../types/api";
 import type { ScreenShareFeed, VideoFeed } from "../types/livekit";
 import type { BrseRoomMode } from "../lib/brseModes";
 import { preferScreenShareHighQuality } from "../lib/livekit";
-import { useContentSwitchMotion } from "../lib/motion";
-import { useTextAnimations } from "../lib/textAnimations";
 import { ParticipantTile } from "./ParticipantTile";
 import { VideoTrackView } from "./MediaElements";
-import { MotionButton } from "./MotionButton";
+import { EmptyState } from "./ui/EmptyState";
 
 const SCREEN_SHARE_ASPECT_RATIO = 16 / 9;
 
@@ -66,31 +64,7 @@ export function MeetingStage({
     : hasScreenShare
       ? "screen-share"
       : "participant-grid";
-  const stageMotionRef = useContentSwitchMotion<HTMLElement>(
-    `${stageMode}-${pinnedTarget?.type ?? "auto"}-${pinnedTarget?.participantId ?? "none"}`,
-    {
-      selector: ":scope > *",
-      distance: 10,
-      stagger: 0,
-    },
-  );
-  useTextAnimations(stageMotionRef, {
-    dependencies: [
-      stageMode,
-      pinnedTarget?.type,
-      pinnedTarget?.participantId,
-      videos.length,
-      activeScreenShareCount,
-    ],
-  });
-
-  const stageClass = [
-    "meeting-stage",
-    stageMode === "screen-share" ? "has-screen-share" : "",
-    stageMode === "pinned-participant" ? "has-pinned-participant" : "",
-    pinnedScreenShareActive ? "has-pinned-screen-share" : "",
-    (stageMode === "screen-share" || pinnedParticipantFeed) ? "has-sharer-label" : "",
-  ].filter(Boolean).join(" ");
+  const stageClass = `stage stage--${stageMode}`;
   const additionalShareCount = Math.max(0, activeScreenShareCount - 1);
   const additionalShareLabel = additionalShareCount > 0
     ? ` + ${additionalShareCount} more`
@@ -104,12 +78,8 @@ export function MeetingStage({
       : null;
 
   return (
-    <section className={stageClass} ref={stageMotionRef}>
-      {stageLabel ? (
-        <div className="stage-sharer-label stage-priority-label">
-          <span data-text-animate="fade">{stageLabel}</span>
-        </div>
-      ) : null}
+    <section className={stageClass} aria-label="Meeting stage">
+      {stageLabel ? <div className="stage-label">{stageLabel}</div> : null}
 
       {pinnedParticipantFeed ? (
         <PinnedParticipantStage
@@ -198,7 +168,7 @@ function SharedScreenStage({
   };
 
   return (
-    <div className="screen-share-stage">
+    <div className="stage-share">
       <StageMediaSurface>
         {selectedScreenFeed?.track ? (
           <VideoTrackView
@@ -207,9 +177,9 @@ function SharedScreenStage({
             className="screen-share-video"
           />
         ) : (
-          <div className="screen-stage-placeholder">
+          <div className="stage-placeholder">
             <strong>{selectedScreenSharer.display_name}</strong>
-            <p>Screen stream is connecting.</p>
+            <p>Screen share is connecting…</p>
           </div>
         )}
         <ScreenSharePinButton
@@ -267,8 +237,8 @@ function PinnedParticipantStage({
   const hasSecondaryContent = !!selectedScreenSharer || secondaryVideos.length > 0;
 
   return (
-    <div className={hasSecondaryContent ? "pinned-participant-stage" : "pinned-participant-stage is-solo"}>
-      <div className="pinned-participant-primary">
+    <div className={hasSecondaryContent ? "stage-pinned" : "stage-pinned is-solo"}>
+      <div className="stage-pinned-primary">
         <StageTile
           feed={pinnedFeed}
           participant={participantById.get(pinnedFeed.participantId)}
@@ -283,7 +253,7 @@ function PinnedParticipantStage({
       </div>
 
       {hasSecondaryContent ? (
-        <div className="stage-video-strip pinned-stage-strip" aria-label="Other stage content">
+        <div className="stage-strip" aria-label="Other participants">
           {selectedScreenSharer ? (
             <ScreenSharePreviewTile
               sharer={selectedScreenSharer}
@@ -384,9 +354,9 @@ function StageMediaSurface({ children }: { children: ReactNode }) {
   }, []);
 
   return (
-    <div className="screen-share-surface-slot" ref={slotRef}>
+    <div className="stage-share-slot" ref={slotRef}>
       <div
-        className="screen-share-frame"
+        className="stage-share-frame"
         style={
           frameSize
             ? {
@@ -422,12 +392,14 @@ function ParticipantGrid({
   onUnpinStage: () => void;
 }) {
   return (
-    <div className={videos.length <= 2 ? "stage-video-grid is-few" : "stage-video-grid"}>
+    <div className="stage-grid" data-count={Math.min(videos.length, 9)}>
       {videos.length === 0 ? (
-        <div className="stage-empty-state">
-          <span className="stage-empty-kicker" data-text-animate="highlight">Stage</span>
-          <strong data-text-animate="fade">Waiting for video</strong>
-          <p data-text-animate="fade">Audio, relay, chat, and notes stay active while cameras connect.</p>
+        <div className="stage-empty">
+          <EmptyState
+            icon={<Video size={20} />}
+            title="Waiting for video"
+            description="Audio, relay, chat and notes keep working while cameras connect."
+          />
         </div>
       ) : (
         videos.map((feed) => (
@@ -475,7 +447,7 @@ function ParticipantFilmstrip({
   }
 
   return (
-    <div className="stage-video-strip" aria-label="Participant video strip">
+    <div className="stage-strip" aria-label="Participants">
       {videos.map((feed) => (
         <StageTile
           key={feed.participantId}
@@ -551,18 +523,18 @@ function ScreenSharePinButton({
   onClick: () => void;
 }) {
   return (
-    <div className="screen-share-stage-action">
-      <MotionButton
-        className={isPinned ? "stage-pin-button is-active" : "stage-pin-button"}
+    <div className="stage-share-action">
+      <button
+        className="tile-action"
         type="button"
         aria-label={isPinned ? `Unpin ${displayName}'s shared screen` : `Pin ${displayName}'s shared screen`}
         aria-pressed={isPinned}
         title={isPinned ? "Unpin shared screen" : "Pin shared screen"}
         onClick={onClick}
       >
-        {isPinned ? <PinOff size={15} /> : <Pin size={15} />}
-        <span>{isPinned ? "Unpin" : "Pin share"}</span>
-      </MotionButton>
+        {isPinned ? <PinOff size={14} aria-hidden="true" /> : <Pin size={14} aria-hidden="true" />}
+        <span>{isPinned ? "Unpin" : "Pin"}</span>
+      </button>
     </div>
   );
 }
@@ -577,36 +549,34 @@ function ScreenSharePreviewTile({
   onPin: () => void;
 }) {
   return (
-    <article className="screen-share-preview-card">
-      <div className="screen-share-preview-media">
+    <article className="tile tile--share-preview">
+      <div className="tile-media">
         {feed?.track ? (
           <VideoTrackView
             track={feed.track}
             fit="contain"
-            className="screen-share-preview-video"
           />
         ) : (
-          <div className="screen-share-preview-placeholder">
+          <div className="stage-placeholder">
             <strong>{sharer.display_name}</strong>
-            <span>Share connecting</span>
+            <p>Share connecting…</p>
           </div>
         )}
       </div>
-      <div className="screen-share-preview-footer">
-        <div>
-          <strong>Screen share</strong>
-          <p>{sharer.display_name}</p>
-        </div>
-        <MotionButton
-          className="tile-action-button screen-preview-pin"
+      <div className="tile-actions">
+        <button
+          className="tile-action"
           type="button"
           aria-label={`Pin ${sharer.display_name}'s shared screen`}
           title="Pin shared screen"
           onClick={onPin}
         >
-          <Pin size={14} />
+          <Pin size={14} aria-hidden="true" />
           <span>Pin</span>
-        </MotionButton>
+        </button>
+      </div>
+      <div className="tile-footer">
+        <span className="tile-name">{sharer.display_name}&apos;s screen</span>
       </div>
     </article>
   );

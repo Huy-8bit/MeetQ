@@ -1,3 +1,4 @@
+import { Clock, Users } from "lucide-react";
 import type { GatewayConnectionState } from "../types/livekit";
 import type { Language, MeetingLanguage } from "../types/api";
 import { formatMeetingLanguageBridge, getLanguageLabel } from "../lib/languages";
@@ -7,9 +8,10 @@ import { BrseToggleControl } from "./BrseToggleControl";
 import { ConnectionBadge } from "./ConnectionBadge";
 import { CustomSelect, type CustomSelectOption } from "./CustomSelect";
 
+const LOW_TIME_MS = 5 * 60 * 1000;
+
 interface RoomTopBarProps {
   roomId: string;
-  displayName: string;
   meetingLanguages: MeetingLanguage[];
   currentLanguage: Language;
   participantCount: number;
@@ -18,7 +20,6 @@ interface RoomTopBarProps {
   brseEnabled: boolean;
   brseRoomMode: BrseRoomMode;
   isTogglingBrse: boolean;
-  brseToggleError: string | null;
   canToggleBrse: boolean;
   onChangeLanguage: (language: Language) => void;
   onToggleBrse: (nextEnabled: boolean) => void;
@@ -26,7 +27,6 @@ interface RoomTopBarProps {
 
 export function RoomTopBar({
   roomId,
-  displayName,
   meetingLanguages,
   currentLanguage,
   participantCount,
@@ -35,7 +35,6 @@ export function RoomTopBar({
   brseEnabled,
   brseRoomMode,
   isTogglingBrse,
-  brseToggleError,
   canToggleBrse,
   onChangeLanguage,
   onToggleBrse,
@@ -47,47 +46,49 @@ export function RoomTopBar({
     label: getLanguageLabel(item),
   }));
 
-  const { remainingLabel, isExpired } = useRoomExpiry(expiresAt);
+  const { remainingLabel, remainingMs, isExpired } = useRoomExpiry(expiresAt);
+  const timeIsLow = !isExpired && remainingMs < LOW_TIME_MS;
 
   return (
-    <header className="room-topbar">
-      {/* Left: identity */}
-      <div className="room-topbar-identity">
-        <div className="room-brand-mark" data-text-animate="fade">MQ</div>
-        <div className="room-topbar-meta">
-          <span className="room-topbar-name" data-text-animate="fade">{displayName || "Meeting"}</span>
-          <div className="room-topbar-sub">
-            <span data-text-animate="fade">{roomId}</span>
-            <span>·</span>
-            <span data-text-animate="fade">{formatMeetingLanguageBridge(meetingLanguages)}</span>
-            <span>·</span>
-            <span data-text-animate="fade">{participantCount}p</span>
+    <header className="room-header">
+      <div className="room-header-identity">
+        <span className="brand-mark" aria-hidden="true">MQ</span>
+        <div className="room-header-text">
+          <h1 className="room-title">{formatMeetingLanguageBridge(meetingLanguages)}</h1>
+          <p className="room-meta">
+            <span className="mono" title="Room ID">{roomId}</span>
+            <span className="room-meta-item">
+              <Users size={13} aria-hidden="true" />
+              {participantCount}
+              <span className="sr-only"> participants</span>
+            </span>
             {remainingLabel ? (
-              <>
-                <span>·</span>
-                <span className={isExpired ? "topbar-timer expired" : "topbar-timer"} data-text-animate="fade">
-                  {isExpired ? "Ended" : remainingLabel}
-                </span>
-              </>
+              <span
+                className={[
+                  "room-meta-item",
+                  isExpired ? "is-danger" : timeIsLow ? "is-warning" : "",
+                ].filter(Boolean).join(" ")}
+              >
+                <Clock size={13} aria-hidden="true" />
+                {isExpired ? "Ended" : `${remainingLabel} left`}
+              </span>
             ) : null}
-          </div>
+          </p>
         </div>
       </div>
 
-      {/* Right: controls */}
-      <div className="room-topbar-controls">
-        <CustomSelect
-          className="topbar-lang-select"
-          value={currentLanguage}
-          options={selectOptions}
-          disabled={meetingLanguages.length === 0}
-          onChange={onChangeLanguage}
-          ariaLabel="Your language"
-          size="compact"
-        />
-
+      <div className="room-header-controls">
         <ConnectionBadge state={connectionState} />
-
+        <div className="room-header-language">
+          <CustomSelect
+            value={currentLanguage}
+            options={selectOptions}
+            disabled={meetingLanguages.length === 0}
+            onChange={onChangeLanguage}
+            ariaLabel="Your language"
+            size="compact"
+          />
+        </div>
         <BrseToggleControl
           enabled={brseEnabled}
           mode={brseRoomMode}
@@ -97,10 +98,6 @@ export function RoomTopBar({
           onToggle={onToggleBrse}
         />
       </div>
-
-      {brseToggleError ? (
-        <div className="room-topbar-error" data-text-animate="fade">{brseToggleError}</div>
-      ) : null}
     </header>
   );
 }
