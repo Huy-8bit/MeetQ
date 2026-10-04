@@ -1,0 +1,21 @@
+# Scheduled MeetQ database backup (started by meetq-db-backup.timer).
+# Installed by scripts/install-backup-schedule.sh, which replaces @MEETQ_DIR@ and @RUN_USER@.
+[Unit]
+Description=MeetQ database backup to private S3
+Wants=network-online.target
+After=network-online.target docker.service
+
+[Service]
+Type=oneshot
+User=@RUN_USER@
+WorkingDirectory=@MEETQ_DIR@
+# Credentials stay in this git-ignored file (DATABASE_URL, AWS_*, DB_BACKUP_*).
+EnvironmentFile=@MEETQ_DIR@/.env.backup
+ExecStart=@MEETQ_DIR@/scripts/db-backup.sh --quiet --trigger scheduled
+ExecStartPost=@MEETQ_DIR@/scripts/_db-backup-cleanup.sh
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+TimeoutStartSec=6h
+PrivateTmp=false
+NoNewPrivileges=true

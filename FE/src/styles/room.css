@@ -23,6 +23,7 @@
 .lobby-nav {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   height: var(--header-height);
   padding: 0 var(--space-6);
 }
@@ -250,6 +251,14 @@
 
 .room-header-language {
   width: 148px;
+}
+
+.room-header-relay-mode {
+  width: 148px;
+}
+
+.room-header-relay-mode:empty {
+  display: none;
 }
 
 .room-alerts {
@@ -1061,6 +1070,11 @@
 
 /* Tablet: the side panel floats over the stage instead of squeezing it. */
 @media (max-width: 1023px) {
+  /* Header gets tight here; the relay mode stays in Settings → AI relay. */
+  .room-header-relay-mode {
+    display: none;
+  }
+
   /* Stop above the control bar so mic / leave stay reachable. */
   .side-panel {
     position: absolute;

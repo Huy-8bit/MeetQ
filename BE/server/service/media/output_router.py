@@ -53,7 +53,11 @@ class OutputRouter:
         self.src_lang = src_lang
         self.target_lang = target_lang
         self.output_sample_rate = output_sample_rate
+        # output_enabled: this router may publish/capture AI voice (stays True once enabled,
+        # so a response that started with voice can finish after a switch to text-only).
+        # voice_active: the room currently relays new utterances with AI voice.
         self.output_enabled = output_enabled
+        self.voice_active = output_enabled
         self.output_mode = output_mode
         self.suppressed_reason = suppressed_reason
         self._frame_bytes = int(output_sample_rate * _FRAME_MS / 1000) * _BYTES_PER_SAMPLE
@@ -86,9 +90,25 @@ class OutputRouter:
             return None
         return state.track_name
 
+    async def enable_voice(self, *, output_mode: str) -> None:
+        """Room switched to Voice + Text at runtime: allow capture and publish the relay track."""
+        self.output_enabled = True
+        self.voice_active = True
+        self.output_mode = output_mode
+        self.suppressed_reason = None
+        self._suppression_logged = False
+        await self.ensure_track()
+
+    def disable_voice(self, *, output_mode: str, suppressed_reason: str) -> None:
+        """Room switched to Text Only at runtime. The track is kept: a response that already
+        started speaking may finish; no new response requests audio."""
+        self.voice_active = False
+        self.output_mode = output_mode
+        self.suppressed_reason = suppressed_reason
+
     def track_descriptor(self) -> Dict[str, Any]:
         state = self._state
-        if not self.output_enabled:
+        if not self.output_enabled or not self.voice_active:
             return {
                 "model": "brse_text_only_relay" if self.output_mode == "text_only" else "brse_silent_listener",
                 "mode": "disabled",

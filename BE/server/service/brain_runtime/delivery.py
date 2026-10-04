@@ -60,6 +60,15 @@ class RelayDeliveryController:
         self.room_id = room_id
         self.room_languages = normalize_room_languages_for_runtime(room_languages)
         self.brse_mode = normalize_brse_mode(brse_mode)
+        self._apply_output_mode(brse_output_mode)
+
+    def update_output_mode(self, brse_output_mode: str) -> bool:
+        """Switch Voice + Text <-> Text Only at runtime. Returns True if audio delivery changed."""
+        previous_audio = self.relay_audio_enabled
+        self._apply_output_mode(brse_output_mode)
+        return previous_audio != self.relay_audio_enabled
+
+    def _apply_output_mode(self, brse_output_mode: str) -> None:
         self.requested_brse_output_mode = normalize_brse_output_mode(brse_output_mode)
         self.brse_output_mode, self.output_mode_downgrade_reason = resolve_effective_brse_output_mode(
             self.room_languages,

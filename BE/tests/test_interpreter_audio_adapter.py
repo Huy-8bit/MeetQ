@@ -95,9 +95,10 @@ def test_livekit_audio_input_yields_native_20ms_frames():
 
     with LoopThread() as loop:
         stream = FakeAudioStream(frames)
-        audio_input = LiveKitAudioInput("speaker-1", stream, loop=loop)
+        audio_input = LiveKitAudioInput("speaker-1", stream, sample_rate=16000, loop=loop)
 
         audio_input.start()
+        audio_input.set_streaming_ready(True)  # realtime session ready
         chunks = list(audio_input.stream_frames())
 
     assert chunks == frames
@@ -112,9 +113,10 @@ def test_livekit_audio_input_rechunks_irregular_frames():
 
     with LoopThread() as loop:
         stream = FakeAudioStream(parts)
-        audio_input = LiveKitAudioInput("speaker-2", stream, loop=loop)
+        audio_input = LiveKitAudioInput("speaker-2", stream, sample_rate=16000, loop=loop)
 
         audio_input.start()
+        audio_input.set_streaming_ready(True)  # realtime session ready
         chunks = list(audio_input.stream_frames())
 
     assert chunks == [raw[:640], raw[640:1280]]
@@ -123,7 +125,7 @@ def test_livekit_audio_input_rechunks_irregular_frames():
 def test_livekit_audio_input_stop_pushes_sentinel():
     with LoopThread() as loop:
         stream = BlockingAudioStream()
-        audio_input = LiveKitAudioInput("speaker-3", stream, loop=loop)
+        audio_input = LiveKitAudioInput("speaker-3", stream, sample_rate=16000, loop=loop)
 
         audio_input.start()
         audio_input.stop()
@@ -144,12 +146,43 @@ def test_livekit_audio_input_drops_oldest_when_queue_full():
         audio_input = LiveKitAudioInput(
             "speaker-4",
             stream,
+            sample_rate=16000,
             loop=loop,
             queue_maxsize=2,
         )
 
         audio_input.start()
+        audio_input.set_streaming_ready(True)
         _wait_until(lambda: stream.index == len(frames))
         chunks = list(audio_input.stream_frames())
 
     assert chunks == frames[-2:]
+
+
+class OpenEndedAudioStream(FakeAudioStream):
+    """Yields its frames, then stays open like a live microphone track."""
+
+    async def __anext__(self):
+        if self.index >= len(self._frames):
+            while not self.closed:
+                await asyncio.sleep(0.01)
+            raise StopAsyncIteration
+        return await super().__anext__()
+
+
+def test_livekit_audio_input_holds_warmup_audio_until_streaming_ready():
+    frames = [_pcm_chunk(1, 320), _pcm_chunk(2, 320)]
+
+    with LoopThread() as loop:
+        stream = OpenEndedAudioStream(frames)
+        audio_input = LiveKitAudioInput("speaker-5", stream, sample_rate=16000, loop=loop)
+
+        audio_input.start()
+        _wait_until(lambda: stream.index == len(frames))
+        # Nothing is sent before the realtime session is ready; it waits in warm-up.
+        assert audio_input.stats_snapshot()["warmup_depth"] == 2
+        audio_input.set_streaming_ready(True)
+        audio_input.stop()
+        chunks = list(audio_input.stream_frames())
+
+    assert chunks == frames

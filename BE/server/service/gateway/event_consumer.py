@@ -93,6 +93,11 @@ async def _handle_interpreter_events(msg_data: dict):
         return
     silent_summary_mode = snapshot.room.brse_mode == BRSE_MODE_SILENT_SUMMARY
 
+    # Ops events are stored for the admin portal and never fanned out to participants.
+    if event_type in (EventType.OPS_RELAY_TRACE, EventType.OPS_AI_ERROR):
+        await _record_ops_event(room_id, event_type, payload, msg_data.get("sent_at"))
+        return
+
     if event_type == EventType.PARTICIPANT_MEDIA_CONNECTED:
         p_id = payload.get("participant_id")
         if p_id:
@@ -162,7 +167,30 @@ async def _handle_interpreter_events(msg_data: dict):
             await app_state.ws_hub.send_to_participant(room_id, transcript.listener_id, msg_data)
 
     elif event_type in (EventType.INTERPRETER_STATUS, EventType.INTERPRETER_ERROR):
+        await _record_ops_event(room_id, event_type, payload, msg_data.get("sent_at"))
         await app_state.ws_hub.broadcast_to_room(room_id, msg_data)
+
+
+async def _record_ops_event(
+    room_id: str,
+    event_type: str,
+    payload: Dict[str, Any],
+    sent_at: Any,
+) -> None:
+    recorder = app_state.ops_recorder
+    if recorder is None or not isinstance(payload, dict):
+        return
+    try:
+        if event_type == EventType.OPS_RELAY_TRACE:
+            await recorder.record_relay_trace(room_id, payload)
+        elif event_type == EventType.OPS_AI_ERROR:
+            await recorder.record_ai_error(room_id, payload, source="brain_runtime", sent_at=sent_at)
+        elif event_type == EventType.INTERPRETER_STATUS:
+            await recorder.record_status(room_id, payload, sent_at=sent_at)
+        elif event_type == EventType.INTERPRETER_ERROR:
+            await recorder.record_ai_error(room_id, payload, source="interpreter_error", sent_at=sent_at)
+    except Exception:
+        logger.warning("failed to record ops event type=%s room_id=%s", event_type, room_id, exc_info=True)
 
 
 def transcript_visible_to_participant(transcript: TranscriptEvent, participant_id: str) -> bool:

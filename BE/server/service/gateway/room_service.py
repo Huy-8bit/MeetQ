@@ -3,7 +3,7 @@ import json
 import logging
 import uuid
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Awaitable, Callable, Dict, List, Optional
 from urllib.parse import urljoin, urlsplit, urlunsplit
 
 from fastapi.encoders import jsonable_encoder
@@ -13,6 +13,7 @@ from server.config import Settings
 from server.events import EventType, build_envelope
 from server.service.gateway.auth import issue_room_token
 from server.service.gateway.livekit_tokens import generate_livekit_token
+from server.service.gateway.room_access import RoomAccessStore
 from server.service.gateway.room_store import RoomStore
 from server.integrations.telegram import TelegramNotifier
 from server.meeting_modes import (
@@ -21,6 +22,7 @@ from server.meeting_modes import (
     DEFAULT_BRSE_OUTPUT_MODE,
     DEFAULT_BRSE_ENABLED,
     DEFAULT_ROOM_MEETING_LANGUAGES,
+    BRSE_MODE_SILENT_SUMMARY,
     INTERPRETER_MODE_BRSE_PARTICIPANT,
     SUPPORTED_MEETING_LANGUAGES,
     active_human_participant_count,
@@ -31,6 +33,7 @@ from server.meeting_modes import (
     normalize_brse_output_mode,
     resolve_effective_brse_output_mode,
     room_language_route_strategy,
+    selectable_output_modes,
 )
 from server.models import (
     ChatMessage,
@@ -101,6 +104,12 @@ class BrseToggleForbiddenError(Exception):
         self.code = code
 
 
+class RelayModeNotSupportedError(Exception):
+    def __init__(self, message: str, code: str = "relay_mode_not_supported"):
+        super().__init__(message)
+        self.code = code
+
+
 class RoomExpiredError(Exception):
     """Room meeting duration (30 min) has elapsed; no new joins or actions."""
     pass
@@ -143,11 +152,16 @@ class RoomService:
         settings: Settings,
         redis: Redis,
         room_history: Optional[MongoRoomHistoryRepository] = None,
+        ops_recorder: Optional[Any] = None,
     ):
         self.store = store
         self.settings = settings
         self.redis = redis
         self.room_history = room_history
+        # Optional server.service.ops.recorder.OpsRecorder (admin portal visibility).
+        self.ops_recorder = ops_recorder
+        # Password hashes + failed-attempt counters for protected rooms.
+        self.access = RoomAccessStore(store.client, store.ttl)
         self.gateway_control_channel = settings.redis_channel_gateway_control
         self.telegram_notifier = TelegramNotifier(settings)
         self.meeting_summary_service = MeetingSummaryService(
@@ -156,6 +170,28 @@ class RoomService:
         )
         self._notification_tasks: set[asyncio.Task] = set()
         self._expiry_summary_tasks: set[asyncio.Task] = set()
+        # Serializes room-level AI relay changes (enable/disable, output mode) per room so
+        # concurrent requests cannot lose updates and events go out in write order.
+        self._room_state_locks: Dict[str, asyncio.Lock] = {}
+        # Called (fire-and-forget) when a meeting ends: last participant left or the room
+        # expired. The recording service registers here to stop an active recording.
+        self.room_end_listeners: list[Callable[[str, str], Awaitable[None]]] = []
+
+    def _notify_room_ended(self, room_id: str, reason: str) -> None:
+        for listener in self.room_end_listeners:
+            try:
+                task = asyncio.create_task(listener(room_id, reason))
+            except RuntimeError:
+                return
+            self._notification_tasks.add(task)
+            task.add_done_callback(self._notification_tasks.discard)
+
+    def _room_state_lock(self, room_id: str) -> asyncio.Lock:
+        lock = self._room_state_locks.get(room_id)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._room_state_locks[room_id] = lock
+        return lock
 
     def _generate_id(self, prefix: str) -> str:
         return f"{prefix}_{uuid.uuid4().hex[:12]}"
@@ -314,6 +350,7 @@ class RoomService:
         if not self.room_history:
             return
         room_id = self._room_id_from_any(room)
+        self._notify_room_ended(room_id, "room_expired")
         await self.room_history.persist_room_expired(
             room,
             expired_at=expired_at,
@@ -679,6 +716,8 @@ class RoomService:
         brse_enabled: bool = DEFAULT_BRSE_ENABLED,
         brse_mode: str = DEFAULT_BRSE_MODE,
         brse_output_mode: str = DEFAULT_BRSE_OUTPUT_MODE,
+        *,
+        password: Optional[str] = None,
     ) -> CreateRoomResponse:
         room_id = self._generate_id("rm")
         now = self._now_str()
@@ -747,7 +786,11 @@ class RoomService:
                 if brse_enabled
                 else []
             ),
+            password_required=bool(password),
         )
+        if password:
+            # Store the hash before the room exists, so a protected room is never joinable without it.
+            await self.access.set_password(room_id, password)
         await self.store.create_room(room)
 
         await self._publish(EventType.ROOM_CREATED, room_id, room.model_dump())
@@ -773,6 +816,124 @@ class RoomService:
         )
 
     async def set_brse_enabled(
+        self,
+        room_id: str,
+        brse_enabled: bool,
+        *,
+        actor_participant_id: Optional[str],
+        session_id: Optional[str],
+        reason: str,
+    ) -> CreateRoomResponseRoom:
+        async with self._room_state_lock(room_id):
+            return await self._set_brse_enabled_locked(
+                room_id,
+                brse_enabled,
+                actor_participant_id=actor_participant_id,
+                session_id=session_id,
+                reason=reason,
+            )
+
+    async def set_relay_mode(
+        self,
+        room_id: str,
+        mode: str,
+        *,
+        actor_participant_id: Optional[str],
+        session_id: Optional[str],
+        reason: str,
+    ) -> CreateRoomResponseRoom:
+        """Change the room-level relay output mode (Voice + Text <-> Text Only) in a live room.
+
+        Independent of `brse_enabled`: while AI relay is off the mode is stored and
+        used the next time it is turned on. The brain runtime applies the change in
+        place (see RoomInterpreterManager.set_output_mode).
+        """
+        async with self._room_state_lock(room_id):
+            snapshot = await self.store.get_room_snapshot(room_id)
+            if not snapshot:
+                raise RoomNotFoundError()
+            if self._is_room_expired(snapshot.room):
+                raise RoomExpiredError()
+            if not actor_participant_id:
+                raise BrseToggleForbiddenError(
+                    "authenticated participant is required to change the AI relay mode",
+                    code="relay_mode_forbidden",
+                )
+            actor = await self.store.get_participant(room_id, actor_participant_id)
+            if actor is None or actor.status == "disconnected" or actor.is_virtual:
+                raise BrseToggleForbiddenError(
+                    "active human participant is required to change the AI relay mode",
+                    code="relay_mode_forbidden",
+                )
+            if session_id and actor.session_id != session_id:
+                raise BrseToggleForbiddenError("session is no longer valid", code="session_mismatch")
+
+            room_languages = self._room_languages_from_snapshot(snapshot)
+            brse_mode = normalize_brse_mode(getattr(snapshot.room, "brse_mode", DEFAULT_BRSE_MODE))
+            if brse_mode == BRSE_MODE_SILENT_SUMMARY:
+                raise RelayModeNotSupportedError("Summary capture rooms do not publish relay output.")
+            allowed = selectable_output_modes(room_languages)
+            if mode not in allowed:
+                raise RelayModeNotSupportedError(
+                    "AI voice is only available in rooms with exactly two languages."
+                    if mode == "voice_text"
+                    else "This relay mode is not available for this room."
+                )
+
+            previous_mode = normalize_brse_output_mode(snapshot.room.brse_output_mode)
+            if previous_mode == mode:
+                return self._room_response_from_state(snapshot.room)
+
+            now = self._now_str()
+            audio_routing = build_brse_audio_routing(room_languages, brse_mode, mode)
+            patch: Dict[str, Any] = {
+                "brse_output_mode": mode,
+                "audio_routing": audio_routing,
+            }
+            if snapshot.room.brse_enabled:
+                patch["virtual_participants"] = self._build_brse_virtual_participants(
+                    room_id,
+                    now,
+                    room_languages,
+                    brse_mode,
+                    mode,
+                )
+            updated_room = await self.store.update_room(room_id, patch)
+            if updated_room is None:
+                raise RoomNotFoundError()
+
+            logger.info(
+                "event=relay_mode_changed room_id=%s from=%s to=%s brse_enabled=%s changed_by=%s reason=%s",
+                room_id,
+                previous_mode,
+                mode,
+                updated_room.brse_enabled,
+                actor_participant_id,
+                reason,
+            )
+            self._schedule_history(
+                "room_mode_updated",
+                room_id,
+                lambda: self.room_history.persist_room_mode_updated(updated_room, changed_at=now),
+            )
+            await self._publish(
+                EventType.ROOM_RELAY_MODE_UPDATED,
+                room_id,
+                {
+                    "room_id": room_id,
+                    "brse_enabled": updated_room.brse_enabled,
+                    "brse_mode": brse_mode,
+                    "brse_output_mode": mode,
+                    "previous_output_mode": previous_mode,
+                    "audio_routing": audio_routing,
+                    "changed_at": now,
+                    "changed_by": actor_participant_id,
+                    "reason": reason,
+                },
+            )
+            return self._room_response_from_state(updated_room)
+
+    async def _set_brse_enabled_locked(
         self,
         room_id: str,
         brse_enabled: bool,
@@ -903,11 +1064,29 @@ class RoomService:
 
         return self._room_response_from_state(updated_room)
 
-    async def get_room(self, room_id: str) -> RoomSnapshotResponse:
+    async def get_room(self, room_id: str, *, include_private: bool = True) -> RoomSnapshotResponse:
         snapshot = await self.store.get_room_snapshot(room_id)
         if not snapshot:
             raise RoomNotFoundError()
+        if snapshot.room.password_required and not include_private:
+            # Lobby view of a protected room: room settings only. Names, transcripts
+            # and chat are for people who joined with the password.
+            snapshot.participants = [p for p in snapshot.participants if p.is_virtual]
+            snapshot.recent_transcripts = []
+            snapshot.recent_messages = []
         return snapshot
+
+    async def is_password_protected(self, room_id: str) -> bool:
+        """Live rooms from Redis; ended rooms from history (rooms created before this feature are public)."""
+        room = await self.store.get_room_state(room_id)
+        if room is not None:
+            return room.password_required
+        if self.room_history and self.room_history.enabled:
+            doc = await self.room_history.db[self.room_history.rooms_collection].find_one(
+                {"room_id": room_id}, {"password_required": 1}
+            )
+            return bool((doc or {}).get("password_required"))
+        return False
 
     async def get_meeting_summary(
         self,
@@ -1292,10 +1471,18 @@ class RoomService:
         display_name: str,
         language: Language,
         client_meta: Optional[JoinRoomRequestClient],
+        *,
+        user_id: Optional[str] = None,
+        password: Optional[str] = None,
+        client_ip: Optional[str] = None,
     ) -> JoinRoomResponse:
         snapshot = await self.store.get_room_snapshot(room_id)
         if not snapshot:
             raise RoomNotFoundError()
+
+        # Protected rooms: verify before anything else (and before any token is issued).
+        if snapshot.room.password_required:
+            await self.access.check_join(room_id, password, client_ip=client_ip, user_id=user_id)
 
         # Participant limit check: only enforce if a positive cap is configured
         if (
@@ -1402,6 +1589,7 @@ class RoomService:
                 participant,
                 current_human_count=current_participant_count,
                 client_meta=client_meta,
+                user_id=user_id,
             ),
         )
         self._schedule_participant_joined_notification(
@@ -1530,6 +1718,7 @@ class RoomService:
                             src_lang,
                             tgt_lang,
                         )
+                        await self._record_chat_translation_failure(room_id, src_lang, tgt_lang)
             else:
                 logger.info(
                     "chat translation skipped: room=%s src=%s room_languages=%s reason=no_cross_language_target",
@@ -1568,6 +1757,28 @@ class RoomService:
         )
         await self._publish(EventType.CHAT_MESSAGE, room_id, message.model_dump())
         return message
+
+    async def _record_chat_translation_failure(
+        self,
+        room_id: str,
+        src_lang: str,
+        tgt_lang: str,
+    ) -> None:
+        if self.ops_recorder is None:
+            return
+        try:
+            await self.ops_recorder.record_ai_error(
+                room_id,
+                {
+                    "code": "chat_translation_failed",
+                    "message": "Chat translation returned no text; message sent untranslated.",
+                    "source_language": src_lang,
+                    "target_language": tgt_lang,
+                },
+                source="gateway",
+            )
+        except Exception:
+            logger.debug("failed to record chat translation failure room=%s", room_id, exc_info=True)
 
     async def leave_room(self, room_id: str, participant_id: str, session_id: Optional[str] = None) -> None:
         await self.cleanup_participant(
@@ -1622,6 +1833,7 @@ class RoomService:
         terminal_state = "empty" if fresh_snapshot and current_human_count == 0 else None
         if terminal_state:
             await self.store.mark_room_empty(room_id, emptied_at=now)
+            self._notify_room_ended(room_id, "last_participant_left")
 
         async def persist_left_and_summary() -> None:
             await self.room_history.persist_participant_left(
@@ -1864,4 +2076,5 @@ class RoomService:
             ),
             interpreter_mode=payload.get("interpreter_mode", INTERPRETER_MODE_BRSE_PARTICIPANT),
             audio_routing=payload["audio_routing"],
+            password_required=bool(payload.get("password_required", False)),
         )

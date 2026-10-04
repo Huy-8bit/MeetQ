@@ -94,6 +94,17 @@ def resolve_effective_brse_output_mode(
     return requested_output_mode, None
 
 
+def selectable_output_modes(meeting_languages: Optional[Iterable[str]]) -> tuple[str, ...]:
+    """Relay output modes participants may choose for this room (at creation or in the room).
+
+    Exactly two languages: Voice + Text or Text Only. Any other language count runs
+    text-only (Captions for one language, text captions for 3+), so no switch exists.
+    """
+    if brse_voice_relay_allowed_for_room_languages(meeting_languages):
+        return (BRSE_OUTPUT_MODE_VOICE_TEXT, BRSE_OUTPUT_MODE_TEXT_ONLY)
+    return (BRSE_OUTPUT_MODE_TEXT_ONLY,)
+
+
 def brse_voice_relay_allowed_for_room_languages(
     meeting_languages: Optional[Iterable[str]],
 ) -> bool:

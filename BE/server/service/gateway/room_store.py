@@ -40,12 +40,17 @@ class RoomStore:
     def _chat_key(self, room_id: str) -> str:
         return f"room:{room_id}:chat"
 
+    def _access_key(self, room_id: str) -> str:
+        # Password hash for protected rooms (see room_access.py); same lifetime as the room.
+        return f"room:{room_id}:access"
+
     async def _refresh_ttl(self, room_id: str):
         pipe = self.client.pipeline()
         pipe.expire(self._meta_key(room_id), self.ttl)
         pipe.expire(self._parts_key(room_id), self.ttl)
         pipe.expire(self._trans_key(room_id), self.ttl)
         pipe.expire(self._chat_key(room_id), self.ttl)
+        pipe.expire(self._access_key(room_id), self.ttl)
         await pipe.execute()
 
     async def create_room(self, room: RoomState):
@@ -125,6 +130,7 @@ class RoomStore:
             meeting_mode=room_state.meeting_mode,
             interpreter_mode=room_state.interpreter_mode,
             audio_routing=room_state.audio_routing,
+            password_required=room_state.password_required,
             participant_count=participant_count,
         )
 
@@ -206,6 +212,7 @@ class RoomStore:
             self._parts_key(room_id),
             self._trans_key(room_id),
             self._chat_key(room_id),
+            self._access_key(room_id),
         )
 
     def _participant_state_to_snapshot(self, participant: ParticipantState) -> ParticipantSnapshot:

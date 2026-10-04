@@ -10,10 +10,12 @@ async def test_ws_connect_snapshot(gateway_app: TestClient, fake_settings):
     room_id = res.json()["room"]["room_id"]
     
     # Join room to get participant and token
+    # Default rooms are Vietnamese + Japanese; the join language must be one of them.
     join_res = gateway_app.post(f"/api/rooms/{room_id}/join", json={
         "display_name": "WS User",
-        "language": "en"
+        "language": "vi"
     })
+    assert join_res.status_code == 200, join_res.text
     data = join_res.json()
     token = data["room_token"]["token"]
     participant_id = data["participant"]["participant_id"]
@@ -69,7 +71,7 @@ async def test_ws_connect_snapshot(gateway_app: TestClient, fake_settings):
             "sent_at": "2026-04-29T14:57:00Z",
             "payload": {
                 "transcript_id": "t_123",
-                "speaker": {"participant_id": "pt_other", "display_name": "Other", "source_language": "ja"},
+                "speaker": {"participant_id": "pt_other", "display_name": "Other", "language": "ja", "source_language": "ja"},
                 "listener": {"participant_id": participant_id, "target_language": "en"},
                 "source_text": "Hello",
                 "translated_text": "Hello in EN"

@@ -1,3 +1,4 @@
+import type { RecordingState } from "./recording";
 import type {
   AudioOutputDescriptor,
   AudioRouting,
@@ -249,6 +250,22 @@ export type RoomBrseUpdatedEvent = WsEnvelope<
   }
 >;
 
+/** Room-level AI relay output mode changed in a live room (any participant can change it). */
+export type RoomRelayModeUpdatedEvent = WsEnvelope<
+  "room.relay_mode_updated",
+  {
+    room_id: string;
+    brse_enabled: boolean;
+    brse_mode?: BrseMode;
+    brse_output_mode: BrseOutputMode;
+    previous_output_mode?: BrseOutputMode;
+    audio_routing?: AudioRouting;
+    changed_at: string;
+    changed_by?: string | null;
+    reason?: string | null;
+  }
+>;
+
 export type RoomExpiredEvent = WsEnvelope<
   "room.expired",
   {
@@ -269,6 +286,8 @@ export type ServerEvent =
   | ScreenShareStartedEvent
   | ScreenShareStoppedEvent
   | RoomBrseUpdatedEvent
+  | RoomRelayModeUpdatedEvent
+  | RecordingEvent
   | RoomExpiredEvent
   | ChatMessageEvent
   | RoomHostChangedEvent
@@ -276,6 +295,19 @@ export type ServerEvent =
   | ModerationParticipantMutedEvent
   | PongEvent
   | ErrorEvent;
+
+// ─── Recording events (room-level; every participant converges on `version`) ──
+
+export type RecordingEventType =
+  | "recording.starting"
+  | "recording.started"
+  | "recording.stopping"
+  | "recording.stopped"
+  | "recording.processing"
+  | "recording.ready"
+  | "recording.failed";
+
+export type RecordingEvent = WsEnvelope<RecordingEventType, { recording: RecordingState }>;
 
 // ─── Chat events ──────────────────────────────────────────────────────────────
 

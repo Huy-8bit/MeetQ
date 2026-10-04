@@ -64,3 +64,16 @@ def print_translation(text: str, end: str = "", flush: bool = True) -> None:
     Use end='' for streaming deltas, end='\\n' for final output.
     """
     print(text, end=end, flush=flush)
+
+
+def transcript_logging_enabled() -> bool:
+    """Raw meeting text is logged only when LOG_TRANSCRIPTS is set (local debugging)."""
+    return os.getenv("LOG_TRANSCRIPTS", "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def loggable_text(text: object) -> str:
+    """Return text for a log line: the raw value in debug mode, else only its length."""
+    value = "" if text is None else str(text)
+    if transcript_logging_enabled():
+        return repr(value)
+    return f"<redacted chars={len(value)}>"

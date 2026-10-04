@@ -17,12 +17,16 @@ import { AudioTrackSink } from "../components/MediaElements";
 import { ChatPanel } from "../components/ChatPanel";
 import { JoinRoomCard } from "../components/JoinRoomCard";
 import { AudioDevicePanel } from "../components/AudioDevicePanel";
+import { AiRelaySettingsPanel } from "../components/AiRelaySettingsPanel";
 import { ParticipantList } from "../components/ParticipantList";
 import { BrseRelayPanel } from "../components/BrseRelayPanel";
 import { MeetingSummaryPanel } from "../components/MeetingSummaryPanel";
 import { MeetingStage, type PinnedStageTarget } from "../components/MeetingStage";
 import { MeetingViewPanel } from "../components/MeetingViewPanel";
 import { RoomControlBar } from "../components/RoomControlBar";
+import { RecordButton, RecordingIndicator } from "../components/RecordingControls";
+import { MeetingRecordingSection } from "../components/MeetingRecordingSection";
+import { useRoomRecording } from "../features/room/useRoomRecording";
 import { RoomSidePanel, type RoomPanelTab } from "../components/RoomSidePanel";
 import { RoomTopBar } from "../components/RoomTopBar";
 import { SettingsDrawer } from "../components/SettingsDrawer";
@@ -56,6 +60,7 @@ export function RoomPage() {
   const [snapshotExpired, setSnapshotExpired] = useState(false);
   const [joining, setJoining] = useState(false);
   const [joinError, setJoinError] = useState<string | null>(null);
+  const [joinPasswordError, setJoinPasswordError] = useState<string | null>(null);
   const [activePanel, setActivePanel] = useState<RoomPanelTab>("relay");
   const [sidePanelOpen, setSidePanelOpen] = useState(
     () => typeof window === "undefined" || window.innerWidth >= SIDE_PANEL_INLINE_MIN_WIDTH,
@@ -135,6 +140,15 @@ export function RoomPage() {
     session,
     onSessionInvalidated: handleSessionInvalidated,
     onRoomExpired: handleRoomExpired,
+  });
+
+  const recording = useRoomRecording({
+    roomId,
+    roomToken: session?.roomToken ?? null,
+    gatewayState: meeting.gatewayState,
+    subscribe: meeting.subscribeRecordingEvents,
+    initial: roomSnapshot?.room.recording ?? null,
+    available: roomSnapshot?.room.recording_available ?? false,
   });
 
   // expiresAt comes from the live meeting state (updated via WS snapshots) or fallback to REST snapshot
@@ -284,6 +298,7 @@ export function RoomPage() {
   async function handleJoin(payload: {
     displayName: string;
     language: MeetingLanguage;
+    password?: string;
   }) {
     if (!roomId) {
       return;
@@ -315,6 +330,7 @@ export function RoomPage() {
 
     setJoining(true);
     setJoinError(null);
+    setJoinPasswordError(null);
 
     try {
       const response = await api.joinRoom(roomId, {
@@ -324,10 +340,16 @@ export function RoomPage() {
           sdk: "web",
           version: APP_VERSION,
         },
+        // Sent only in the request body; never stored or put in the URL.
+        ...(payload.password ? { password: payload.password } : {}),
       });
       saveSession(response);
     } catch (error) {
-      if (error instanceof ApiError && error.code === "room_expired") {
+      if (error instanceof ApiError && (error.code === "invalid_room_password" || error.code === "room_password_required")) {
+        setJoinPasswordError(
+          error.code === "invalid_room_password" ? "Incorrect meeting password." : "Enter the meeting password.",
+        );
+      } else if (error instanceof ApiError && error.code === "room_expired") {
         setSnapshotExpired(true);
         setJoinError("This meeting has expired.");
       } else {
@@ -347,11 +369,17 @@ export function RoomPage() {
     meeting.isMutedByHost ? { tone: "danger" as const, message: "The host muted your microphone." } : null,
     meeting.connectionError ? { tone: "danger" as const, message: meeting.connectionError } : null,
     meeting.brseToggleError ? { tone: "warning" as const, message: meeting.brseToggleError } : null,
+    meeting.relayModeError ? { tone: "warning" as const, message: meeting.relayModeError } : null,
     meeting.mediaError ? { tone: "warning" as const, message: meeting.mediaError } : null,
     meeting.screenShareError ? { tone: "warning" as const, message: meeting.screenShareError } : null,
     meeting.micToggleError ? { tone: "warning" as const, message: meeting.micToggleError } : null,
     meeting.cameraToggleError ? { tone: "warning" as const, message: meeting.cameraToggleError } : null,
     meeting.moderationError ? { tone: "warning" as const, message: meeting.moderationError } : null,
+    recording.error ? { tone: "warning" as const, message: recording.error } : null,
+    ...recording.notices.map((notice) => ({
+      tone: notice.tone === "danger" ? ("danger" as const) : ("warning" as const),
+      message: notice.message,
+    })),
   ].filter((alert): alert is { tone: "danger" | "warning"; message: string } => alert !== null);
 
   if (loadingSnapshot && !roomSnapshot && !session) {
@@ -383,6 +411,7 @@ export function RoomPage() {
         <main className="ended-body card">
           <div className="card-body">{renderSummaryPanel(true)}</div>
         </main>
+        <MeetingRecordingSection roomId={roomId} />
       </div>
     );
   }
@@ -414,6 +443,8 @@ export function RoomPage() {
           onJoin={handleJoin}
           isSubmitting={joining}
         error={joinError}
+        passwordError={joinPasswordError}
+        onPasswordEdited={() => setJoinPasswordError(null)}
       />
     );
   }
@@ -439,6 +470,14 @@ export function RoomPage() {
         onToggleBrse={(nextEnabled) => {
           void meeting.toggleBrseMode(nextEnabled);
         }}
+        relayMode={meeting.relayMode}
+        relayModes={meeting.selectableRelayModes}
+        isUpdatingRelayMode={meeting.isUpdatingRelayMode}
+        canChangeRelayMode={meeting.canChangeRelayMode && !isRoomExpired}
+        onChangeRelayMode={(mode) => {
+          void meeting.changeRelayMode(mode);
+        }}
+        recordingIndicator={<RecordingIndicator recording={recording.active} />}
       />
 
       {roomAlerts.length > 0 ? (
@@ -469,6 +508,18 @@ export function RoomPage() {
           />
 
           <RoomControlBar
+            recordControl={
+              recording.available ? (
+                <RecordButton
+                  recording={recording.active}
+                  isStarting={recording.isStarting}
+                  isStopping={recording.isStopping}
+                  disabled={isRoomExpired || meeting.isLeaving}
+                  onStart={() => void recording.start()}
+                  onStop={() => void recording.stop()}
+                />
+              ) : null
+            }
             isMicMuted={meeting.isMicMuted}
             isTogglingMic={meeting.isTogglingMic}
             isMutedByHost={meeting.isMutedByHost}
@@ -570,6 +621,24 @@ export function RoomPage() {
         onClose={() => setSettingsOpen(false)}
         title="Settings"
       >
+        <AiRelaySettingsPanel
+          brseEnabled={meeting.brseEnabled}
+          brseRoomMode={meeting.brseRoomMode}
+          languageCount={roomMeetingLanguages.length}
+          isTogglingBrse={meeting.isTogglingBrse}
+          canToggleBrse={meeting.canToggleBrse && !isRoomExpired}
+          onToggleBrse={(nextEnabled) => {
+            void meeting.toggleBrseMode(nextEnabled);
+          }}
+          relayMode={meeting.relayMode}
+          relayModes={meeting.selectableRelayModes}
+          isUpdatingRelayMode={meeting.isUpdatingRelayMode}
+          canChangeRelayMode={meeting.canChangeRelayMode && !isRoomExpired}
+          onChangeRelayMode={(mode) => {
+            void meeting.changeRelayMode(mode);
+          }}
+          relayModeError={meeting.relayModeError}
+        />
         <AudioDevicePanel
           isMicMuted={meeting.isMicMuted}
           isTogglingMic={meeting.isTogglingMic}
@@ -657,6 +726,9 @@ function mapJoinError(error: ApiError, meetingLanguages: MeetingLanguage[]): str
   }
   if (error.code === "livekit_unavailable") {
     return "LiveKit is unavailable right now.";
+  }
+  if (error.code === "room_password_rate_limited") {
+    return "Too many incorrect password attempts. Please wait a few minutes and try again.";
   }
   if (error.code === "invalid_display_name") {
     return "Display name must be 1 to 40 characters.";

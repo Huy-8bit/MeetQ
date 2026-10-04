@@ -1,5 +1,6 @@
 import type {
   ApiErrorEnvelope,
+  BrseOutputMode,
   CreateRoomRequest,
   CreateRoomResponse,
   MuteParticipantRequest,
@@ -65,15 +66,38 @@ export function leaveRoomBestEffort(roomId: string, token: string): boolean {
     headers: buildAuthHeaders(token),
     body: "{}",
     keepalive: true,
+    credentials: "include",
   }).catch(() => undefined);
   return true;
 }
 
-async function requestJson<T>(
+/** Called for every 401 response; each auth realm (user, admin) decides if it is about its session. */
+export type UnauthorizedListener = (error: ApiError, path: string) => void;
+
+const unauthorizedListeners = new Set<UnauthorizedListener>();
+
+export function onUnauthorized(listener: UnauthorizedListener): () => void {
+  unauthorizedListeners.add(listener);
+  return () => {
+    unauthorizedListeners.delete(listener);
+  };
+}
+
+function apiPathOf(pathOrUrl: string): string {
+  try {
+    return new URL(buildApiUrl(pathOrUrl)).pathname;
+  } catch {
+    return pathOrUrl;
+  }
+}
+
+export async function requestJson<T>(
   pathOrUrl: string,
   init?: RequestInit,
 ): Promise<T> {
   const response = await fetch(buildApiUrl(pathOrUrl), {
+    // Sessions are backend-managed HttpOnly cookies on the API origin.
+    credentials: "include",
     ...init,
     headers: {
       "Content-Type": "application/json",
@@ -90,16 +114,21 @@ async function requestJson<T>(
       envelope = null;
     }
 
-    throw new ApiError(
-      envelope?.error.message || `Request failed with status ${response.status}`,
+    const error = new ApiError(
+      envelope?.error?.message || `Request failed with status ${response.status}`,
       {
-        code: envelope?.error.code || "http_error",
+        code: envelope?.error?.code || "http_error",
         status: response.status,
-        details: envelope?.error.details,
+        details: envelope?.error?.details,
         requestId:
-          envelope?.error.request_id || response.headers.get("X-Request-ID"),
+          envelope?.error?.request_id || response.headers.get("X-Request-ID"),
       },
     );
+    if (response.status === 401) {
+      const path = apiPathOf(pathOrUrl);
+      unauthorizedListeners.forEach((listener) => listener(error, path));
+    }
+    throw error;
   }
 
   if (response.status === 204) {
@@ -109,7 +138,18 @@ async function requestJson<T>(
   return (await response.json()) as T;
 }
 
+export interface PublicConfig {
+  room_meeting_duration_seconds: number;
+  supported_languages: string[];
+  recording_available?: boolean;
+  meeting_history_available?: boolean;
+}
+
 export const api = {
+  getPublicConfig() {
+    return requestJson<PublicConfig>("/api/config");
+  },
+
   createRoom(body: CreateRoomRequest) {
     const roomLanguages = normalizeLanguageList(body.room_languages);
     const payload: CreateRoomRequest = {
@@ -168,6 +208,14 @@ export const api = {
     });
   },
 
+  updateRelayMode(roomId: string, token: string, mode: BrseOutputMode) {
+    return requestJson<RoomSummary>(`/api/rooms/${roomId}/relay-mode`, {
+      method: "PATCH",
+      headers: buildAuthHeaders(token),
+      body: JSON.stringify({ mode }),
+    });
+  },
+
   disableBrse(roomId: string, token: string) {
     return requestJson<RoomSummary>(`/api/rooms/${roomId}/brse/disable`, {
       method: "POST",
@@ -176,10 +224,11 @@ export const api = {
     });
   },
 
-  getRoomSummary(roomId: string, type: MeetingSummaryType = "final") {
+  getRoomSummary(roomId: string, type: MeetingSummaryType = "final", token?: string | null) {
     const query = new URLSearchParams({ type });
     return requestJson<FetchMeetingSummaryResponse>(
       `/api/rooms/${roomId}/summary?${query.toString()}`,
+      token ? { headers: buildAuthHeaders(token) } : undefined,
     );
   },
 

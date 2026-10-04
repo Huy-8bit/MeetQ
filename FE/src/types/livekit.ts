@@ -44,6 +44,9 @@ export interface HumanAudioFeed {
   participantId: string;
   displayName: string;
   track: RemoteAudioTrack;
+  trackSid?: string;
+  /** "screen_share_audio" is audio shared with a screen (tab/system audio). */
+  source?: "microphone" | "screen_share_audio";
   language?: Language;
 }
 

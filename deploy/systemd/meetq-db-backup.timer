@@ -1,0 +1,12 @@
+# Daily at 02:00 (server local time). Change OnCalendar, then:
+#   sudo systemctl daemon-reload && sudo systemctl restart meetq-db-backup.timer
+[Unit]
+Description=Daily MeetQ database backup
+
+[Timer]
+OnCalendar=*-*-* 02:00:00
+RandomizedDelaySec=10m
+Persistent=true
+
+[Install]
+WantedBy=timers.target

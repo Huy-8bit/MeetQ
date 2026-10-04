@@ -188,10 +188,21 @@ class RealtimeClient:
     # Retry loop
     # ------------------------------------------------------------------
 
+    def _notify_connection_error(self, message: str, attempt: int, final: bool) -> None:
+        # Optional hook (set by the meeting runtime) for operations visibility.
+        hook = getattr(self, "on_connection_error", None)
+        if not callable(hook):
+            return
+        try:
+            hook(message, attempt, final)
+        except Exception:
+            logger.debug("on_connection_error hook failed", exc_info=True)
+
     async def _run_with_retry(self) -> None:
         attempt = 0
         while self._running:
             attempt += 1
+            error_message: Optional[str] = None
             try:
                 self._log(f"Connecting (attempt {attempt})...")
                 await self._run_session()
@@ -199,14 +210,20 @@ class RealtimeClient:
                 raise
             except (ConnectionClosedError, ConnectionClosedOK) as exc:
                 logger.warning(f"WebSocket closed: {exc}")
+                error_message = f"WebSocket closed: {exc}"
             except websockets.exceptions.WebSocketException as exc:
                 logger.error(f"WebSocket error: {exc}")
+                error_message = f"WebSocket error: {exc}"
             except Exception as exc:
                 logger.error(f"Unexpected error: {exc}", exc_info=True)
+                error_message = f"Unexpected error: {type(exc).__name__}"
 
             if not self._running:
                 break
-            if attempt >= MAX_RECONNECT_ATTEMPTS:
+            final_attempt = attempt >= MAX_RECONNECT_ATTEMPTS
+            if error_message:
+                self._notify_connection_error(error_message, attempt, final_attempt)
+            if final_attempt:
                 logger.error(f"Max reconnect attempts ({MAX_RECONNECT_ATTEMPTS}) reached.")
                 break
 

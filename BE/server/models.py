@@ -153,6 +153,8 @@ class RoomState(BaseModel):
     interpreter_mode: InterpreterMode = INTERPRETER_MODE_BRSE_PARTICIPANT
     audio_routing: RoomAudioRouting = Field(default_factory=RoomAudioRouting)
     virtual_participants: List[ParticipantSnapshot] = Field(default_factory=list)
+    # True when joining needs the room password. The hash lives in a separate Redis key.
+    password_required: bool = False
 
     @model_validator(mode="before")
     @classmethod
@@ -289,6 +291,7 @@ class CreateRoomResponseRoom(BaseModel):
     meeting_mode: MeetingMode
     interpreter_mode: InterpreterMode
     audio_routing: RoomAudioRouting
+    password_required: bool = False
 
 
 class CreateRoomResponseJoin(BaseModel):
@@ -309,6 +312,18 @@ class CreateRoomRequest(BaseModel):
     brse_enabled: bool = DEFAULT_BRSE_ENABLED
     brse_mode: BrseMode = DEFAULT_BRSE_MODE
     brse_output_mode: BrseOutputMode = DEFAULT_BRSE_OUTPUT_MODE
+    # "link": anyone with the link can join; "password": joining needs `password`.
+    access: Literal["link", "password"] = "link"
+    password: Optional[str] = Field(default=None, max_length=128, repr=False)
+
+    @model_validator(mode="after")
+    def _check_password(self) -> "CreateRoomRequest":
+        if self.access == "password":
+            if not self.password or len(self.password) < 6:
+                raise ValueError("Password must be at least 6 characters.")
+        elif self.password:
+            raise ValueError("password is only allowed when access is 'password'.")
+        return self
 
     def requested_room_languages(self) -> List[str]:
         if self.room_languages is not None:
@@ -325,6 +340,10 @@ class CreateRoomRequest(BaseModel):
         return list(DEFAULT_ROOM_MEETING_LANGUAGES)
 
 
+class UpdateRelayModeRequest(BaseModel):
+    mode: BrseOutputMode
+
+
 class JoinRoomRequestClient(BaseModel):
     sdk: str
     version: str
@@ -334,6 +353,8 @@ class JoinRoomRequest(BaseModel):
     display_name: str = Field(..., min_length=1, max_length=40)
     language: Language
     client: Optional[JoinRoomRequestClient] = None
+    # Only for password-protected rooms. Never logged or echoed back.
+    password: Optional[str] = Field(default=None, max_length=128, repr=False)
 
 
 class ScreenShareStartRequest(BaseModel):
@@ -392,6 +413,10 @@ class JoinRoomResponse(BaseModel):
 
 class RoomSnapshotResponseRoom(CreateRoomResponseRoom):
     participant_count: int
+    # Room-level recording state (starting/recording/stopping) so the lobby and anyone
+    # joining late see that the meeting is being recorded. None when not recording.
+    recording: Optional[Dict[str, Any]] = None
+    recording_available: bool = False
 
 
 class RoomSnapshotResponse(BaseModel):

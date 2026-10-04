@@ -1,0 +1,17 @@
+# Copy to env/<environment>.tfvars (see env/*.tfvars.example). Not a secret file, but
+# real tfvars are git-ignored so each operator keeps their own.
+# The API token is NOT set here: export CLOUDFLARE_API_TOKEN instead.
+
+cloudflare_account_id = "0123456789abcdef0123456789abcdef"
+cloudflare_zone_id    = "fedcba9876543210fedcba9876543210"
+
+project_name      = "meetq"
+environment       = "prod"
+domain_name       = "meetq.example.com"
+production_branch = "main"
+
+# Zone-wide http -> https redirect. Enable in one environment only.
+manage_always_use_https = false # Pages already redirects http -> https
+
+# Serve www.<apex> too (redirects to the apex). Only used when domain_name is the zone apex.
+www_alias = false # true when domain_name is the zone apex

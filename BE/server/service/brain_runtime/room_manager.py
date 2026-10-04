@@ -23,6 +23,24 @@ from server.service.brain_runtime.overlap import (
 )
 from server.service.brain_runtime.policy import ConversationPolicyEngine
 from server.service.brain_runtime.text_translation import translate_caption_text
+from server.shared.logging_utils import loggable_text
+from server.service.brain_runtime.trace import (
+    INPUT_REJECTION_OUTCOMES,
+    OUTCOME_ABANDONED,
+    OUTCOME_CAPTION_DELIVERED,
+    OUTCOME_DELIVERED,
+    OUTCOME_OUTPUT_REJECTED,
+    OUTCOME_RELAY_DROPPED,
+    OUTCOME_RELAY_SUPPRESSED,
+    OUTCOME_SOURCE_ONLY,
+    OUTCOME_SOURCE_REJECTED,
+    TRACE_EMITTED_KEY,
+    TRACE_KEY,
+    build_trace_payload,
+    trace_init,
+    trace_mark,
+    trace_set,
+)
 from server.brain.realtime.interpreter_client import InterpreterRealtimeClient
 from server.service.media.livekit_runtime import LiveKitRuntime
 from server.brain.realtime.session_config import (
@@ -164,13 +182,7 @@ class RoomInterpreterManager:
             brse_output_mode=brse_output_mode,
             room_languages=self.room_languages,
         )
-        self.brse_mode = self.delivery.brse_mode
-        self.brse_output_mode = self.delivery.brse_output_mode
-        self.relay_text_enabled = self.delivery.relay_text_enabled
-        self.relay_audio_enabled = self.delivery.relay_audio_enabled
-        self.relay_output_enabled = self.delivery.relay_output_enabled
-        self.silent_summary_mode = self.delivery.silent_summary_mode
-        self.text_only_output_mode = self.delivery.text_only_output_mode
+        self._sync_delivery_flags()
         self.room_context = RoomContextBuffer(room_id)
         self.policy = ConversationPolicyEngine(room_id)
         self.overlap = OverlapManager(
@@ -220,6 +232,69 @@ class RoomInterpreterManager:
         self.public_relay_approved_count = 0
         self.public_relay_suppressed_count = 0
         self.single_speaker_relay_approved_count = 0
+
+    def _sync_delivery_flags(self) -> None:
+        self.brse_mode = self.delivery.brse_mode
+        self.brse_output_mode = self.delivery.brse_output_mode
+        self.relay_text_enabled = self.delivery.relay_text_enabled
+        self.relay_audio_enabled = self.delivery.relay_audio_enabled
+        self.relay_output_enabled = self.delivery.relay_output_enabled
+        self.silent_summary_mode = self.delivery.silent_summary_mode
+        self.text_only_output_mode = self.delivery.text_only_output_mode
+
+    async def set_output_mode(self, brse_output_mode: str) -> None:
+        """Apply a room relay-mode change (Voice + Text <-> Text Only) without restarting.
+
+        Boundary: AI voice is decided per relay response when it starts
+        (`on_relay_response_starting` snapshots `client.request_audio_output`).
+        Every speaker's flag is flipped synchronously first, so no response can start
+        with the old mode after this call begins. A response already speaking finishes;
+        queued and future responses follow the new mode; STT, translation and text
+        relay are untouched.
+        """
+        if self._closed:
+            return
+        previous_mode = self.brse_output_mode
+        audio_changed = self.delivery.update_output_mode(brse_output_mode)
+        self._sync_delivery_flags()
+        self.runtime.output_audio_enabled = self.relay_audio_enabled
+        logger.info(
+            "event=relay_mode_applied room=%s from=%s to=%s relay_audio_enabled=%s speakers=%d",
+            self.room_id,
+            previous_mode,
+            self.brse_output_mode,
+            self.relay_audio_enabled,
+            len(self.clients),
+        )
+        if not audio_changed:
+            return
+
+        speakers = []
+        for speaker_id, client in list(self.clients.items()):
+            route_audio = bool(self.relay_audio_enabled and self.speaker_relay_enabled.get(speaker_id, False))
+            if not route_audio:
+                client.request_audio_output = False
+            speakers.append((speaker_id, client, route_audio))
+
+        for speaker_id, client, route_audio in speakers:
+            router = self.routers.get(speaker_id)
+            try:
+                if route_audio:
+                    if router is not None:
+                        await router.enable_voice(output_mode=self.brse_output_mode)
+                elif router is not None:
+                    router.disable_voice(
+                        output_mode=self.brse_output_mode,
+                        suppressed_reason=self.delivery.suppressed_audio_reason,
+                    )
+                await client.set_audio_output(route_audio)
+            except Exception:
+                logger.exception(
+                    "Failed to apply relay mode room=%s speaker=%s to=%s",
+                    self.room_id,
+                    speaker_id,
+                    self.brse_output_mode,
+                )
 
     async def start(self) -> None:
         logger.info(
@@ -651,6 +726,7 @@ class RoomInterpreterManager:
             except Exception:
                 logger.exception("Failed to cancel in-flight BRSE relay response for %s", speaker_id)
 
+        self._emit_pending_traces_for_speaker(speaker_id, reason="route_reconfigured")
         self.transcript_state.pop(speaker_id, None)
         for utterance_id, state in list(self.transcript_states.items()):
             if state.get("speaker_id") == speaker_id:
@@ -767,6 +843,7 @@ class RoomInterpreterManager:
         drop_stream: bool = True,
     ) -> None:
         self._forget_speaker_arbitration(speaker_id)
+        self._emit_pending_traces_for_speaker(speaker_id, reason="speaker_teardown")
 
         client = self.clients.pop(speaker_id, None)
         if client is not None:
@@ -1416,6 +1493,7 @@ class RoomInterpreterManager:
             final=final,
             relay_style=str(state.get("relay_style") or "normal"),
             min_partial_meaningful_chars=_PUBLIC_TEXT_GATE_MIN_PARTIAL_MEANINGFUL_CHARS,
+            source_text=str(state.get("relay_source_text") or state.get("source_text") or ""),
         )
         if not decision.publishable:
             if decision.reject:
@@ -1423,6 +1501,7 @@ class RoomInterpreterManager:
                 state["public_output_ready"] = False
                 state["public_output_gate_reason"] = decision.reason
                 state["brse_text"] = ""
+                trace_set(state, output_rejected_reason=decision.reason)
                 self.room_context.record_relay_decision(
                     utterance_id=str(state.get("utterance_id") or ""),
                     speaker_id=speaker_id,
@@ -1434,14 +1513,14 @@ class RoomInterpreterManager:
                 )
                 logger.warning(
                     "BRSE relay output rejected room=%s speaker=%s utterance=%s "
-                    "reason=%s relay_style=%s signal=%s text=%r",
+                    "reason=%s relay_style=%s signal=%s text=%s",
                     self.room_id,
                     speaker_id,
                     state.get("utterance_id"),
                     decision.reason,
                     state.get("relay_style", "normal"),
                     decision.signal,
-                    text,
+                    loggable_text(text),
                 )
                 asyncio.create_task(router.reject_public_output(reason=decision.reason))
             elif not state.get("public_output_gate_logged"):
@@ -1457,18 +1536,19 @@ class RoomInterpreterManager:
                 )
                 logger.info(
                     "BRSE relay output held pending usable text room=%s speaker=%s "
-                    "utterance=%s reason=%s signal=%s text=%r",
+                    "utterance=%s reason=%s signal=%s text=%s",
                     self.room_id,
                     speaker_id,
                     state.get("utterance_id"),
                     decision.reason,
                     decision.signal,
-                    text,
+                    loggable_text(text),
                 )
             return False
 
         if not state.get("public_output_ready"):
             state["public_output_ready"] = True
+            trace_mark(state, "text_gate_passed_at")
             state["public_output_gate_reason"] = None
             state["public_output_policy_reason"] = decision.reason
             asyncio.create_task(router.release_public_output(reason="text_gate_passed"))
@@ -1577,6 +1657,11 @@ class RoomInterpreterManager:
                 speaker_id,
                 relay_source_id,
             )
+            self._emit_trace(
+                state,
+                OUTCOME_RELAY_DROPPED,
+                "same_language_no_translation_required",
+            )
             return True
         if state.get("speaker_id") != speaker_id or state.get("generation") != generation:
             logger.info(
@@ -1589,6 +1674,7 @@ class RoomInterpreterManager:
                 state.get("generation"),
                 generation,
             )
+            self._emit_trace(state, OUTCOME_RELAY_DROPPED, "stale_generation")
             return True
         if not self._source_state_is_valid_for_output(state):
             logger.info(
@@ -1597,6 +1683,7 @@ class RoomInterpreterManager:
                 speaker_id,
                 relay_source_id,
             )
+            self._emit_trace(state, OUTCOME_RELAY_DROPPED, "source_not_valid")
             return True
         if not self._relay_route_is_still_valid(
             speaker_id=speaker_id,
@@ -1609,6 +1696,7 @@ class RoomInterpreterManager:
                 speaker_id,
                 relay_source_id,
             )
+            self._emit_trace(state, OUTCOME_RELAY_DROPPED, "route_not_current")
             return True
         if not state.get("public_relay_approved"):
             logger.info(
@@ -1618,6 +1706,11 @@ class RoomInterpreterManager:
                 relay_source_id,
                 state.get("public_relay_reason") or "public_relay_not_approved",
                 state.get("relay_style", "normal"),
+            )
+            self._emit_trace(
+                state,
+                OUTCOME_RELAY_DROPPED,
+                state.get("public_relay_reason") or "public_relay_not_approved",
             )
             return True
         if not self._public_relay_is_fresh(
@@ -1633,6 +1726,7 @@ class RoomInterpreterManager:
                 relay_source_id,
                 state.get("relay_style", "normal"),
             )
+            self._emit_trace(state, OUTCOME_RELAY_DROPPED, "stale_public_relay")
             return True
         if state.get("public_output_rejected"):
             logger.info(
@@ -1642,6 +1736,11 @@ class RoomInterpreterManager:
                 relay_source_id,
                 state.get("public_output_gate_reason") or "public_output_rejected",
                 state.get("relay_style", "normal"),
+            )
+            self._emit_trace(
+                state,
+                OUTCOME_RELAY_DROPPED,
+                state.get("public_output_gate_reason") or "public_output_rejected",
             )
             return True
         return False
@@ -1774,7 +1873,16 @@ class RoomInterpreterManager:
             window = self._current_overlap_understanding_window()
             if window is not None:
                 state["overlap_window_id"] = window.window_id
-            state["speech_duration_ms"] = self._speaker_state(speaker_id).last_speech_duration_ms
+            speaker_state = self._speaker_state(speaker_id)
+            state["speech_duration_ms"] = speaker_state.last_speech_duration_ms
+            trace_init(
+                state,
+                speech_started_at=speaker_state.last_speech_started_at,
+                speech_stopped_at=speaker_state.last_speech_stopped_at,
+                audio_requested=bool(
+                    self.relay_audio_enabled and state["relay_translation_enabled"]
+                ),
+            )
 
         def on_input_transcript_delta(delta: str) -> None:
             if not delta or not is_current_callback():
@@ -1828,6 +1936,8 @@ class RoomInterpreterManager:
             state["source_valid"] = source_ok
             state["source_rejected_reason"] = None if source_ok else reason
             state["source_signal"] = signal
+            trace_mark(state, "transcript_completed_at")
+            trace_set(state, source_accepted=source_ok, source_reason=None if source_ok else reason)
             state["source_blocked_for_overlap"] = bool(
                 state.get("source_blocked_for_overlap")
                 or speaker_id in self.overlap.blocked_speakers
@@ -1901,6 +2011,18 @@ class RoomInterpreterManager:
                         state=state,
                         overlap_level=overlap_level,
                     )
+                    trace_mark(state, "policy_at")
+                    trace_set(
+                        state,
+                        policy_decision="publish" if state.get("public_relay_approved") else "suppress",
+                        policy_reason=state.get("public_relay_reason"),
+                    )
+                    if not state.get("public_relay_approved"):
+                        self._emit_trace(
+                            state,
+                            OUTCOME_RELAY_SUPPRESSED,
+                            state.get("public_relay_reason"),
+                        )
                 else:
                     reason = (
                         "same_language_no_translation_required"
@@ -1931,6 +2053,13 @@ class RoomInterpreterManager:
                         overlap_level=overlap_level,
                         delivery_mode="source_transcript_only",
                     )
+                    trace_mark(state, "policy_at")
+                    trace_set(state, policy_decision="source_only", policy_reason=reason)
+                    if not (
+                        state.get("route_mode") == "multi_language_text_caption"
+                        and self.relay_output_enabled
+                    ):
+                        self._emit_trace(state, OUTCOME_SOURCE_ONLY, reason)
                     logger.info(
                         "BRSE relay translation disabled room=%s speaker=%s utterance=%s "
                         "route=%s->%s route_mode=%s reason=%s room_languages=%s",
@@ -2009,9 +2138,10 @@ class RoomInterpreterManager:
                     )
             else:
                 router.clear_queue()
+                self._emit_trace(state, OUTCOME_SOURCE_REJECTED, reason)
                 logger.info(
                     "Suppressing BRSE source transcript room=%s speaker=%s utterance=%s "
-                    "route=%s->%s reason=%s signal=%s generation=%d text=%r",
+                    "route=%s->%s reason=%s signal=%s generation=%d text=%s",
                     self.room_id,
                     speaker_id,
                     state["utterance_id"],
@@ -2020,7 +2150,7 @@ class RoomInterpreterManager:
                     reason,
                     signal,
                     generation,
-                    normalized_text,
+                    loggable_text(normalized_text),
                 )
 
         def approve_transcript_for_relay(text: str, item_id: Optional[str]) -> Optional[Dict[str, Any]]:
@@ -2079,6 +2209,7 @@ class RoomInterpreterManager:
                 kind="source_approval",
             ):
                 router.clear_queue()
+                self._emit_trace(state, OUTCOME_RELAY_DROPPED, "stale_public_relay")
                 return None
             if speaker_id in self.overlap.blocked_speakers and state.get("relay_style") != "summary":
                 logger.info(
@@ -2112,12 +2243,15 @@ class RoomInterpreterManager:
                     and self._source_state_is_valid_for_output(state)
                 )
                 if can_queue_behind_focus:
+                    trace_mark(state, "relay_requested_at")
                     return {
                         "relay_source_id": str(state["utterance_id"]),
                         "source_text": state.get("relay_source_text") or state.get("source_text") or text,
                         "relay_style": state.get("relay_style", "normal"),
                     }
+                self._emit_trace(state, OUTCOME_RELAY_DROPPED, "not_relayable")
                 return None
+            trace_mark(state, "relay_requested_at")
             return {
                 "relay_source_id": str(state["utterance_id"]),
                 "source_text": state.get("relay_source_text") or state.get("source_text") or text,
@@ -2130,6 +2264,7 @@ class RoomInterpreterManager:
             state = relay_state_for_response("relay_partial")
             if state is None:
                 return
+            trace_mark(state, "first_text_at")
             state["brse_text"] = f"{state['brse_text']}{delta}"
             if not self._apply_public_output_text_gate(
                 speaker_id=speaker_id,
@@ -2150,6 +2285,8 @@ class RoomInterpreterManager:
             state = relay_state_for_response("relay_final")
             if state is None:
                 return
+            trace_mark(state, "first_text_at")
+            trace_mark(state, "text_done_at")
             final_text = text or state["brse_text"].strip()
             state["brse_text"] = final_text
             if final_text and self._apply_public_output_text_gate(
@@ -2172,6 +2309,7 @@ class RoomInterpreterManager:
             state = relay_state_for_response("audio_delta")
             if state is None:
                 return
+            trace_mark(state, "first_audio_at")
             asyncio.create_task(
                 self._capture_audio_delta(
                     speaker_id=speaker_id,
@@ -2222,6 +2360,7 @@ class RoomInterpreterManager:
                 kind="response_start",
             ):
                 asyncio.create_task(router.reject_public_output(reason="public_relay_not_approved"))
+                self._emit_trace(state, OUTCOME_RELAY_DROPPED, "public_relay_not_approved")
                 return
             if not self._public_relay_is_fresh(
                 speaker_id=speaker_id,
@@ -2229,7 +2368,13 @@ class RoomInterpreterManager:
                 kind="response_start",
             ):
                 asyncio.create_task(router.reject_public_output(reason="stale_public_relay"))
+                self._emit_trace(state, OUTCOME_RELAY_DROPPED, "stale_public_relay")
                 return
+            trace_mark(state, "response_started_at")
+            # Voice decision for this relay is fixed here, in the same step that builds
+            # response.create, so a mode switch never splits one utterance.
+            state["audio_output"] = bool(client.request_audio_output)
+            trace_set(state, audio_requested=state["audio_output"])
             self._prepare_public_output_gate(router=router, state=state)
 
         def on_speech_started() -> None:
@@ -2320,6 +2465,41 @@ class RoomInterpreterManager:
                 )
             )
 
+        def on_input_rejected(item_id: Optional[str], reason: str) -> None:
+            if not is_current_callback():
+                return
+            outcome = INPUT_REJECTION_OUTCOMES.get(reason)
+            state = self.transcript_state.get(speaker_id)
+            if outcome is None or state is None or state.get("source_final"):
+                return
+            state_item_id = state.get("source_item_id")
+            if item_id is not None and state_item_id is not None and item_id != state_item_id:
+                return
+            trace_mark(state, "transcript_completed_at")
+            trace_set(state, source_accepted=False, source_reason=reason)
+            self._emit_trace(state, outcome, reason)
+
+        def on_connection_error(message: str, attempt: int, final: bool) -> None:
+            if not is_current_callback():
+                return
+            lowered = message.lower()
+            if "invalid_api_key" in lowered or "401" in lowered or "unauthorized" in lowered:
+                code = "realtime_auth_error"
+            elif final:
+                code = "realtime_unavailable"
+            else:
+                code = "realtime_connection_error"
+            self._publish_ai_error_ops(
+                code,
+                message,
+                speaker_id=speaker_id,
+                source_language=src_lang,
+                target_language=target_lang,
+                details={"attempt": attempt, "final": final},
+            )
+
+        client.on_input_rejected = on_input_rejected
+        client.on_connection_error = on_connection_error
         client.on_input_audio_committed = on_input_audio_committed
         client.on_input_transcript_delta = on_input_transcript_delta
         client.on_transcript_complete = on_transcript_complete
@@ -2358,20 +2538,18 @@ class RoomInterpreterManager:
         router: OutputRouter,
         encoded: str,
     ) -> None:
-        if not self.relay_audio_enabled:
-            logger.debug(
-                "Suppressing BRSE audio delta by output mode room=%s speaker=%s generation=%d "
-                "brse_mode=%s brse_output_mode=%s",
-                self.room_id,
-                speaker_id,
-                generation,
-                self.brse_mode,
-                self.brse_output_mode,
-            )
-            return
         if not self._runtime_generation_matches(speaker_id, generation, router):
             return
         state = self._transcript_state_for_publish(speaker_id, utterance_id, generation)
+        if state is not None and not state.get("audio_output", self.relay_audio_enabled):
+            logger.debug(
+                "Suppressing BRSE audio for text-only relay room=%s speaker=%s utterance=%s",
+                self.room_id,
+                speaker_id,
+                utterance_id,
+            )
+            router.clear_queue()
+            return
         if state is not None and not state.get("relay_translation_enabled", True):
             router.clear_queue()
             return
@@ -2395,20 +2573,18 @@ class RoomInterpreterManager:
         generation: int,
         router: OutputRouter,
     ) -> None:
-        if not self.relay_audio_enabled:
-            logger.debug(
-                "Suppressing BRSE audio flush by output mode room=%s speaker=%s generation=%d "
-                "brse_mode=%s brse_output_mode=%s",
-                self.room_id,
-                speaker_id,
-                generation,
-                self.brse_mode,
-                self.brse_output_mode,
-            )
-            return
         if not self._runtime_generation_matches(speaker_id, generation, router):
             return
         state = self._transcript_state_for_publish(speaker_id, utterance_id, generation)
+        if state is not None and not state.get("audio_output", self.relay_audio_enabled):
+            logger.debug(
+                "Suppressing BRSE audio for text-only relay room=%s speaker=%s utterance=%s",
+                self.room_id,
+                speaker_id,
+                utterance_id,
+            )
+            router.clear_queue()
+            return
         if state is not None and not state.get("relay_translation_enabled", True):
             router.clear_queue()
             return
@@ -2437,6 +2613,16 @@ class RoomInterpreterManager:
                 return
             if state.get("speaker_id") != speaker_id or state.get("generation") != generation:
                 return
+        if state.get("relay_final_published"):
+            self._emit_trace(state, OUTCOME_DELIVERED)
+        elif state.get("public_output_rejected"):
+            self._emit_trace(
+                state,
+                OUTCOME_OUTPUT_REJECTED,
+                state.get("public_output_gate_reason") or "public_output_rejected",
+            )
+        else:
+            self._emit_trace(state, OUTCOME_RELAY_DROPPED, "relay_completed_without_output")
         if self.transcript_state.get(speaker_id) is state:
             self.transcript_state.pop(speaker_id, None)
         self.transcript_states.pop(utterance_id, None)
@@ -2684,15 +2870,26 @@ class RoomInterpreterManager:
                 utterance_id,
                 self.brse_mode,
             )
+            self._emit_trace(
+                self.transcript_states.get(utterance_id),
+                OUTCOME_SOURCE_ONLY,
+                "relay_text_disabled",
+            )
             return
 
         state = self._transcript_state_for_publish(speaker_id, utterance_id, generation)
         if state is None or not self._source_state_is_valid_for_output(state):
+            self._emit_trace(
+                self.transcript_states.get(utterance_id),
+                OUTCOME_RELAY_DROPPED,
+                "source_not_valid",
+            )
             return
 
         source_text = str(state.get("source_text") or "").strip()
         src_lang = str(state.get("src_lang") or "")
         if not source_text or src_lang not in self.room_languages:
+            self._emit_trace(state, OUTCOME_SOURCE_ONLY, "source_not_translatable")
             return
 
         target_languages = self._multi_language_text_target_languages(speaker_id, src_lang)
@@ -2706,6 +2903,7 @@ class RoomInterpreterManager:
                 src_lang,
                 ",".join(self.room_languages),
             )
+            self._emit_trace(state, OUTCOME_SOURCE_ONLY, "no_active_cross_language_audience")
             return
 
         logger.info(
@@ -2721,18 +2919,35 @@ class RoomInterpreterManager:
         )
 
         published_targets: list[str] = []
+        captions: list[Dict[str, Any]] = []
         for target_lang in target_languages:
             audience_ids = sorted(self._audience_ids_for_target(speaker_id, target_lang))
             if not audience_ids:
                 continue
 
+            caption_started_at = time.monotonic()
             translated_text = await translate_caption_text(
                 text=source_text,
                 src_lang=src_lang,
                 tgt_lang=target_lang,
                 api_key=self.settings.openai_api_key,
             )
+            captions.append(
+                {
+                    "target_lang": target_lang,
+                    "ok": bool(translated_text),
+                    "latency_ms": int((time.monotonic() - caption_started_at) * 1000),
+                }
+            )
             if not translated_text:
+                self._publish_ai_error_ops(
+                    "caption_translation_failed",
+                    "Caption translation returned no text.",
+                    speaker_id=speaker_id,
+                    source_language=src_lang,
+                    target_language=target_lang,
+                    details={"utterance_id": utterance_id},
+                )
                 logger.warning(
                     "BRSE multi-language text relay translation empty room=%s speaker=%s "
                     "utterance=%s src=%s target=%s",
@@ -2752,6 +2967,8 @@ class RoomInterpreterManager:
                 policy_reason="multi_language_text_caption",
             )
             if not delivery_plan.text_enabled:
+                trace_set(state, captions=captions)
+                self._emit_trace(state, OUTCOME_SOURCE_ONLY, "relay_text_disabled")
                 return
 
             latency_ms = int(max(0.0, time.monotonic() - state["started_at"]) * 1000)
@@ -2806,9 +3023,23 @@ class RoomInterpreterManager:
             )
             published_targets.append(target_lang)
 
+        trace_set(state, captions=captions)
         if published_targets:
+            trace_mark(state, "final_published_at")
             state["relay_final_published"] = True
             state["delivery_mode"] = "text_only"
+            self._emit_trace(
+                state,
+                OUTCOME_CAPTION_DELIVERED,
+                None if len(published_targets) == len(captions) else "partial_caption_failure",
+            )
+        else:
+            self._emit_trace(
+                state,
+                OUTCOME_RELAY_DROPPED,
+                "caption_translation_failed" if captions else "no_active_cross_language_audience",
+            )
+        if published_targets:
             logger.info(
                 "BRSE multi-language text relay published room=%s speaker=%s utterance=%s "
                 "targets=%s source_chars=%d relay_audio_enabled=False",
@@ -2955,6 +3186,7 @@ class RoomInterpreterManager:
         )
 
         state["relay_final_published"] = True
+        trace_mark(state, "final_published_at")
         self.room_context.record_relay_output(
             utterance_id=state["utterance_id"],
             speaker_id=speaker_id,
@@ -3065,6 +3297,59 @@ class RoomInterpreterManager:
             for language in self.room_languages
             if language != src_lang and language in audience_languages
         )
+
+    def _emit_trace(
+        self,
+        state: Optional[Dict[str, Any]],
+        outcome: str,
+        reason: Optional[str] = None,
+    ) -> None:
+        """Publish the single ops trace for an utterance (idempotent, ops-only)."""
+        if not state or TRACE_KEY not in state or state.get(TRACE_EMITTED_KEY):
+            return
+        state[TRACE_EMITTED_KEY] = True
+        speaker_id = str(state.get("speaker_id") or "")
+        try:
+            payload = build_trace_payload(
+                state,
+                outcome=outcome,
+                reason=reason,
+                speaker_name=self._speaker_name(speaker_id),
+            )
+            asyncio.get_running_loop().create_task(self.publisher.publish_relay_trace(payload))
+        except RuntimeError:
+            logger.debug("No running loop to publish BRSE relay trace room=%s", self.room_id)
+        except Exception:
+            logger.debug("Failed to publish BRSE relay trace room=%s", self.room_id, exc_info=True)
+
+    def _emit_pending_traces_for_speaker(self, speaker_id: str, *, reason: str) -> None:
+        for state in list(self.transcript_states.values()):
+            if state.get("speaker_id") == speaker_id:
+                self._emit_trace(state, OUTCOME_ABANDONED, reason)
+
+    def _publish_ai_error_ops(
+        self,
+        code: str,
+        message: str,
+        *,
+        speaker_id: Optional[str] = None,
+        source_language: Optional[str] = None,
+        target_language: Optional[str] = None,
+        details: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        try:
+            asyncio.get_running_loop().create_task(
+                self.publisher.publish_ai_error(
+                    code,
+                    message,
+                    speaker_id=speaker_id,
+                    source_language=source_language,
+                    target_language=target_language,
+                    details=details,
+                )
+            )
+        except RuntimeError:
+            logger.debug("No running loop to publish BRSE ai error room=%s", self.room_id)
 
     def _speaker_name(self, speaker_id: str) -> str:
         return self.participants.get(speaker_id, {}).get("display_name", speaker_id)

@@ -1,0 +1,12 @@
+cloudflare_account_id = "0123456789abcdef0123456789abcdef"
+cloudflare_zone_id    = "fedcba9876543210fedcba9876543210"
+
+project_name      = "meetq"
+environment       = "prod"
+domain_name       = "meetq.example.com" # or the apex, e.g. "example.com"
+production_branch = "main"
+
+manage_always_use_https = false # Pages already redirects http -> https
+
+# Serve www.<apex> too (redirects to the apex). Only used when domain_name is the zone apex.
+www_alias = false # true when domain_name is the zone apex

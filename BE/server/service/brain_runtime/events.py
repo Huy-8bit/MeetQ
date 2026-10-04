@@ -275,6 +275,33 @@ class RedisEventPublisher:
             payload["relay_mode"] = INTERPRETER_MODE_BRSE_PARTICIPANT
         await self._publish(EventType.INTERPRETER_ERROR, payload)
 
+    async def publish_relay_trace(self, payload: Dict[str, Any]) -> None:
+        """Ops-only: one terminal trace per utterance. Gateway stores it, never fans it out."""
+        await self._publish(EventType.OPS_RELAY_TRACE, payload)
+
+    async def publish_ai_error(
+        self,
+        code: str,
+        message: str,
+        *,
+        speaker_id: Optional[str] = None,
+        source_language: Optional[str] = None,
+        target_language: Optional[str] = None,
+        details: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """Ops-only AI/runtime error that is not surfaced to meeting participants."""
+        payload: Dict[str, Any] = {
+            "code": code,
+            "message": message,
+            "speaker_id": speaker_id,
+            "source_language": source_language,
+            "target_language": target_language,
+            "occurred_at": self._now_str(),
+        }
+        if details:
+            payload["details"] = details
+        await self._publish(EventType.OPS_AI_ERROR, payload)
+
     def _build_source_payload(
         self,
         *,

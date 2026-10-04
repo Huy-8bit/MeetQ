@@ -19,6 +19,14 @@ from typing import List, Optional
 
 from server.brain.prompts.language import LANG_NAMES
 from server.brain.prompts.technical_terms import build_technical_translation_policy
+from server.brain.prompts.translation_engine import (
+    build_text_translation_system_prompt,
+    wrap_source_text,
+)
+from server.brain.realtime.source_policy import (
+    source_text_is_translatable,
+    validated_translation,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -74,6 +82,8 @@ async def translate_chat_message(
     """
     if src_lang == tgt_lang:
         return text
+    if not source_text_is_translatable(text):
+        return None
 
     system_prompt = _build_chat_translation_prompt(src_lang, tgt_lang)
 
@@ -86,12 +96,18 @@ async def translate_chat_message(
             temperature=_CHAT_TRANSLATE_TEMPERATURE,
             messages=[
                 {"role": "system", "content": system_prompt},
-                {"role": "user", "content": text},
+                {"role": "user", "content": wrap_source_text(text)},
             ],
         )
-        result = resp.choices[0].message.content
+        result = (resp.choices[0].message.content or "").strip()
         if result:
-            return result.strip()
+            return validated_translation(
+                result,
+                source_text=text,
+                context="chat",
+                src_lang=src_lang,
+                tgt_lang=tgt_lang,
+            )
         return None
     except Exception as exc:
         logger.warning(
@@ -106,10 +122,9 @@ async def translate_chat_message(
 def _build_chat_translation_prompt(src_lang: str, tgt_lang: str) -> str:
     src_name = LANG_NAMES.get(src_lang, src_lang)
     tgt_name = LANG_NAMES.get(tgt_lang, tgt_lang)
-    return (
-        f"You are a professional translator from {src_name} to {tgt_name}. "
-        f"Translate the following chat message accurately and naturally. "
-        + build_technical_translation_policy()
-        + f"Output ONLY the {tgt_name} translation. "
-        + "No explanations, no labels, no commentary."
+    return build_text_translation_system_prompt(
+        src_name,
+        tgt_name,
+        medium="chat message typed by a meeting participant",
+        extra_policy=build_technical_translation_policy(),
     )

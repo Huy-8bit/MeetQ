@@ -28,6 +28,8 @@ interface RoomControlBarProps {
   onToggleSidePanel: () => void;
   onOpenSettings: () => void;
   onLeave: () => void;
+  /** Record button (shown when recording is available on the server). */
+  recordControl?: ReactNode;
 }
 
 export function RoomControlBar({
@@ -47,6 +49,7 @@ export function RoomControlBar({
   onToggleSidePanel,
   onOpenSettings,
   onLeave,
+  recordControl,
 }: RoomControlBarProps) {
   const screenShareBusy = isStartingScreenShare || isStoppingScreenShare;
   const micDisabled = isTogglingMic || (isMutedByHost && isMicMuted);
@@ -82,6 +85,7 @@ export function RoomControlBar({
           }
           icon={<MonitorUp size={18} />}
         />
+        {recordControl}
       </div>
 
       <div className="control-bar-group control-bar-end">

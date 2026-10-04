@@ -1,6 +1,6 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
-import { AudioLines, Captions, FileText, Mic } from "lucide-react";
+import { AudioLines, Captions, FileText, History, Mic } from "lucide-react";
 import { api, ApiError } from "../lib/api";
 import {
   BRSE_CREATE_MODE_OPTIONS,
@@ -16,11 +16,14 @@ import {
   SUPPORTED_MEETING_LANGUAGES,
 } from "../lib/languages";
 import { extractRoomId } from "../lib/rooms";
-import type { MeetingLanguage } from "../types/api";
+import { hasRoomPasswordErrors, validateRoomPassword, type RoomPasswordErrors } from "../lib/roomAccess";
+import type { MeetingLanguage, RoomAccess } from "../types/api";
 import { Alert } from "../components/ui/Alert";
 import { Button, buttonClassName } from "../components/ui/Button";
 import { Field } from "../components/ui/Field";
 import { SegmentedControl } from "../components/ui/SegmentedControl";
+import { RoomAccessFields } from "../components/RoomAccessFields";
+import { UserMenu } from "../auth/UserMenu";
 
 const CREATE_BRSE_MODE_STORAGE_KEY = "meetq:create-brse-mode";
 
@@ -50,11 +53,17 @@ export function HomePage() {
   const [brseCreateMode, setBrseCreateMode] = useState<BrseCreateMode>(
     () => loadCreateBrseModePreference(),
   );
+  // Room password lives only in component state until the create request is sent.
+  const [roomAccess, setRoomAccess] = useState<RoomAccess>("link");
+  const [roomPassword, setRoomPassword] = useState("");
+  const [roomPasswordConfirm, setRoomPasswordConfirm] = useState("");
+  const [passwordErrors, setPasswordErrors] = useState<RoomPasswordErrors>({});
   const [creating, setCreating] = useState(false);
   const [validationError, setValidationError] = useState<string | null>(null);
   const [createError, setCreateError] = useState<string | null>(null);
   const [joinError, setJoinError] = useState<string | null>(null);
   const landingNotice = getLandingNotice(location.state);
+  const roomDurationMinutes = useRoomDurationMinutes();
 
   useEffect(() => {
     saveCreateBrseModePreference(brseCreateMode);
@@ -78,6 +87,13 @@ export function HomePage() {
     if (!selectedLanguages.every((language) => isMeetingLanguage(language))) {
       setValidationError("Invalid language selection."); return;
     }
+    if (roomAccess === "password") {
+      const errors = validateRoomPassword(roomPassword, roomPasswordConfirm);
+      setPasswordErrors(errors);
+      if (hasRoomPasswordErrors(errors)) {
+        return;
+      }
+    }
 
     setCreating(true);
     setCreateError(null);
@@ -87,7 +103,10 @@ export function HomePage() {
       const res = await api.createRoom({
         room_languages: selectedLanguages,
         ...buildCreateBrsePayload(brseCreateMode, selectedLanguages),
+        ...(roomAccess === "password" ? { access: "password" as const, password: roomPassword } : { access: "link" as const }),
       });
+      setRoomPassword("");
+      setRoomPasswordConfirm("");
       navigate(`/rooms/${res.room.room_id}`);
     } catch (err) {
       setCreateError(
@@ -117,10 +136,17 @@ export function HomePage() {
           <span className="brand-mark" aria-hidden="true">MQ</span>
           MeetQ
         </Link>
-        <Link to="/test" className={buttonClassName({ variant: "ghost", size: "sm" })}>
-          <Mic size={16} aria-hidden="true" />
-          Test your mic
-        </Link>
+        <div className="nav-actions">
+          <Link to="/meetings" className={buttonClassName({ variant: "ghost", size: "sm" })}>
+            <History size={16} aria-hidden="true" />
+            My meetings
+          </Link>
+          <Link to="/test" className={buttonClassName({ variant: "ghost", size: "sm" })}>
+            <Mic size={16} aria-hidden="true" />
+            Test your mic
+          </Link>
+          <UserMenu />
+        </div>
       </header>
 
       <main className="home-main">
@@ -208,6 +234,27 @@ export function HomePage() {
                 />
               </Field>
 
+              <RoomAccessFields
+                access={roomAccess}
+                password={roomPassword}
+                confirm={roomPasswordConfirm}
+                errors={passwordErrors}
+                disabled={creating}
+                onAccessChange={(access) => {
+                  setRoomAccess(access);
+                  setPasswordErrors({});
+                  setCreateError(null);
+                }}
+                onPasswordChange={(value) => {
+                  setRoomPassword(value);
+                  setPasswordErrors({});
+                }}
+                onConfirmChange={(value) => {
+                  setRoomPasswordConfirm(value);
+                  setPasswordErrors((current) => ({ ...current, confirm: undefined }));
+                }}
+              />
+
               {createError ? <Alert tone="danger">{createError}</Alert> : null}
 
               <div className="home-create-footer">
@@ -221,7 +268,11 @@ export function HomePage() {
                 >
                   {creating ? "Creating room…" : "Create room"}
                 </Button>
-                <p className="field-helper">Rooms stay open for 60 minutes. No account needed.</p>
+                <p className="field-helper">
+                  {roomDurationMinutes
+                    ? `Rooms stay open for ${roomDurationMinutes} minutes. No account needed.`
+                    : "Rooms close automatically after a set time. No account needed."}
+                </p>
               </div>
             </div>
           </section>
@@ -294,6 +345,26 @@ function RelayPreview() {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
+/** Room lifetime comes from the server config (ROOM_MEETING_DURATION_SECONDS), never hard-coded. */
+function useRoomDurationMinutes(): number | null {
+  const [minutes, setMinutes] = useState<number | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .getPublicConfig()
+      .then((config) => {
+        if (!cancelled && config.room_meeting_duration_seconds > 0) {
+          setMinutes(Math.round(config.room_meeting_duration_seconds / 60));
+        }
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  return minutes;
+}
+
 function getLandingNotice(state: unknown): string | null {
   if (!state || typeof state !== "object") return null;
   const notice = (state as { notice?: unknown }).notice;
@@ -346,6 +417,9 @@ function getCreateModeHelper(languageCount: number): string {
 }
 
 function mapCreateRoomError(error: ApiError): string {
+  if (error.code === "invalid_room_password_setting") {
+    return error.message || "Check the room password.";
+  }
   if (error.code === "invalid_room_languages" || error.code === "invalid_meeting_languages") {
     if (error.details?.min === 1 || error.details?.required) return "Select at least one room language.";
     if (error.details?.unique) return "Remove duplicate languages.";

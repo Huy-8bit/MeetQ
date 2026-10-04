@@ -33,6 +33,52 @@ services:
     depends_on:
       - redis
 
+  # Private S3-compatible storage for local development (recordings + meeting archives).
+  # RustFS speaks the S3 API with access keys; on AWS the bucket comes from Terraform.
+  s3:
+    image: rustfs/rustfs:latest
+    restart: unless-stopped
+    environment:
+      RUSTFS_ACCESS_KEY: ${LOCAL_S3_ACCESS_KEY:-meetq-local}
+      RUSTFS_SECRET_KEY: ${LOCAL_S3_SECRET_KEY:-meetq-local-secret}
+      RUSTFS_CONSOLE_ENABLE: "false"
+    ports:
+      - "9000:9000"
+    volumes:
+      - s3_data:/data
+
+  # LiveKit Egress: server-side Room Composite recording, uploads MP4 straight to storage.
+  egress:
+    image: livekit/egress:latest
+    restart: unless-stopped
+    cap_add:
+      - SYS_ADMIN
+    depends_on:
+      - redis
+      - livekit
+      - s3
+    environment:
+      EGRESS_CONFIG_BODY: |
+        log_level: info
+        api_key: ${LIVEKIT_API_KEY:-devkey}
+        api_secret: ${LIVEKIT_API_SECRET:-devkeysecretdevkeysecretdevkey12}
+        ws_url: ws://livekit:7880
+        insecure: true
+        redis:
+          address: redis:6379
+        health_port: 9090
+        cpu_cost:
+          room_composite_cpu_cost: 1
+        # Default upload target for every recording (requests carry only the object key).
+        storage:
+          s3:
+            access_key: ${LOCAL_S3_ACCESS_KEY:-meetq-local}
+            secret: ${LOCAL_S3_SECRET_KEY:-meetq-local-secret}
+            region: us-east-1
+            endpoint: http://s3:9000
+            bucket: ${MEETING_ARCHIVE_BUCKET:-meetq-archive-local}
+            force_path_style: true
+
   gateway:
     build:
       context: ./BE
@@ -72,7 +118,34 @@ services:
       TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
       TELEGRAM_API_BASE_URL: ${TELEGRAM_API_BASE_URL:-https://api.telegram.org}
       TELEGRAM_REQUEST_TIMEOUT_SECONDS: ${TELEGRAM_REQUEST_TIMEOUT_SECONDS:-3}
+      ROOM_MEETING_DURATION_SECONDS: ${ROOM_MEETING_DURATION_SECONDS:-3600}
+      ROOM_MAX_PARTICIPANTS: ${ROOM_MAX_PARTICIPANTS:-0}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-}
+      ADMIN_PASSWORD_HASH: ${ADMIN_PASSWORD_HASH:-}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_ALLOWED_DOMAINS: ${GOOGLE_ALLOWED_DOMAINS:-}
+      USER_SESSION_TTL_SECONDS: ${USER_SESSION_TTL_SECONDS:-1209600}
+      USER_AUTH_REQUIRED: ${USER_AUTH_REQUIRED:-true}
+      AUTH_COOKIE_SECURE: ${AUTH_COOKIE_SECURE:-false}
+      ADMIN_SESSION_TTL_SECONDS: ${ADMIN_SESSION_TTL_SECONDS:-43200}
+      OPS_EVENT_RETENTION_DAYS: ${OPS_EVENT_RETENTION_DAYS:-30}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      LOG_TRANSCRIPTS: ${LOG_TRANSCRIPTS:-false}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:3000,http://127.0.0.1:3000}
+      # Meeting recording + archive: local RustFS stands in for the private S3 bucket.
+      MEETING_ARCHIVE_BUCKET: ${MEETING_ARCHIVE_BUCKET:-meetq-archive-local}
+      AWS_REGION: ${AWS_REGION:-us-east-1}
+      AWS_ACCESS_KEY_ID: ${LOCAL_S3_ACCESS_KEY:-meetq-local}
+      AWS_SECRET_ACCESS_KEY: ${LOCAL_S3_SECRET_KEY:-meetq-local-secret}
+      S3_ENDPOINT_URL: http://s3:9000
+      S3_PUBLIC_ENDPOINT_URL: ${S3_PUBLIC_ENDPOINT_URL:-http://localhost:9000}
+      S3_CREATE_BUCKET: "true"
+      S3_FORCE_PATH_STYLE: "true"
+      S3_SERVER_SIDE_ENCRYPTION: ""
+      MEETING_RECORDING_ENABLED: ${MEETING_RECORDING_ENABLED:-true}
+      DEFAULT_MEETING_RETENTION_DAYS: ${DEFAULT_MEETING_RETENTION_DAYS:-7}
+      DEPLOYMENT_ENVIRONMENT: local
     ports:
       - "8000:8000"
     depends_on:
@@ -106,9 +179,11 @@ services:
       LIVEKIT_LINE_CROSSTALK_CORRELATION: ${LIVEKIT_LINE_CROSSTALK_CORRELATION:-0.75}
       LIVEKIT_LINE_CROSSTALK_DOMINANCE_DB: ${LIVEKIT_LINE_CROSSTALK_DOMINANCE_DB:-4.0}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      LOG_TRANSCRIPTS: ${LOG_TRANSCRIPTS:-false}
     depends_on:
       - redis
       - livekit
 
 volumes:
   mongo_data:
+  s3_data:

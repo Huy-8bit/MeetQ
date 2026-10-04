@@ -8,6 +8,13 @@
     />
     <link rel="icon" type="image/png" href="/logo.png" />
     <title>MeetQ</title>
+    <script>
+      // Canonical host: www.<domain> -> <domain>. Pages cannot redirect hosts in _redirects,
+      // and Google sign-in is configured for the bare domain only.
+      if (location.hostname.indexOf("www.") === 0) {
+        location.replace(location.protocol + "//" + location.hostname.slice(4) + location.pathname + location.search + location.hash);
+      }
+    </script>
   </head>
   <body>
     <div id="root"></div>

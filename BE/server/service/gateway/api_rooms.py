@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Body, Depends, Response
+from fastapi import APIRouter, Body, Depends, Request, Response
 from fastapi.responses import JSONResponse
 from server.service.gateway.room_service import (
     BrseToggleForbiddenError,
@@ -10,11 +10,19 @@ from server.service.gateway.room_service import (
     MeetingSummaryNotReadyError,
     MeetingSummaryUnavailableError,
     ParticipantNotFoundError,
+    RelayModeNotSupportedError,
     RoomExpiredError,
     RoomFullError,
     RoomNotFoundError,
     RoomService,
 )
+from server.service.auth.dependencies import require_user
+from server.service.gateway.room_access import (
+    InvalidRoomPasswordError,
+    RoomPasswordRateLimitedError,
+    RoomPasswordRequiredError,
+)
+from server.service.gateway.app_state import app_state
 from server.service.gateway.dependencies import (
     get_room_service,
     optional_token_dependency,
@@ -30,6 +38,7 @@ from server.models import (
     MeetingSummaryResponse,
     ScreenShareStartRequest,
     ScreenShareStateResponse,
+    UpdateRelayModeRequest,
 )
 from typing import Dict, Any
 from typing import Optional
@@ -47,7 +56,12 @@ def _error_response(code: str, message: str, status_code: int = 400, details: di
         err["error"]["details"] = details
     return JSONResponse(status_code=status_code, content=err)
 
-@router.post("/api/rooms", response_model=CreateRoomResponse)
+# Creating, viewing, joining rooms and their summaries needs a signed-in user (USER_AUTH_REQUIRED).
+# Calls made inside a room are authorized by the room token issued at join.
+signed_in = [Depends(require_user)]
+
+
+@router.post("/api/rooms", response_model=CreateRoomResponse, dependencies=signed_in)
 async def create_room(
     req: Optional[CreateRoomRequest] = Body(default=None),
     service: RoomService = Depends(get_room_service),
@@ -59,24 +73,63 @@ async def create_room(
             payload.brse_enabled,
             payload.brse_mode,
             payload.brse_output_mode,
+            password=payload.password if payload.access == "password" else None,
         )
     except InvalidMeetingLanguagesError as exc:
         return _error_response("invalid_meeting_languages", str(exc), 422, exc.details)
 
-@router.get("/api/rooms/{room_id}", response_model=RoomSnapshotResponse)
-async def get_room(room_id: str, service: RoomService = Depends(get_room_service)):
+def _session_user_id(session: Optional[Dict[str, Any]]) -> Optional[str]:
+    return ((session or {}).get("user") or {}).get("id")
+
+
+def _client_ip(request: Request) -> str:
+    return request.client.host if request.client else "unknown"
+
+
+async def _may_read_protected_room(
+    service: RoomService,
+    room_id: str,
+    claims: Optional[Dict[str, Any]],
+    session: Optional[Dict[str, Any]],
+) -> bool:
+    """Public rooms: any signed-in user. Protected rooms: a room token, or someone who joined it."""
+    if claims is not None or not await service.is_password_protected(room_id):
+        return True
+    user_id = _session_user_id(session)
+    history = service.room_history
+    if not user_id or history is None or not history.enabled:
+        return False
+    return bool(await history.db["room_participants"].find_one({"room_id": room_id, "user_id": user_id}, {"_id": 1}))
+
+
+@router.get("/api/rooms/{room_id}", response_model=RoomSnapshotResponse, dependencies=signed_in)
+async def get_room(
+    room_id: str,
+    claims: Optional[Dict[str, Any]] = Depends(optional_token_dependency),
+    service: RoomService = Depends(get_room_service),
+):
     try:
-        return await service.get_room(room_id)
+        # Without a room token, a protected room shows only its settings (lobby view).
+        snapshot = await service.get_room(room_id, include_private=claims is not None)
+        recordings = app_state.recording_service
+        if recordings is not None:
+            snapshot.room.recording = await recordings.current(room_id)
+            snapshot.room.recording_available = bool(recordings.available)
+        return snapshot
     except RoomNotFoundError:
         return _error_response("room_not_found", "Room not found", 404)
 
 
-@router.get("/api/rooms/{room_id}/summary", response_model=MeetingSummaryResponse)
+@router.get("/api/rooms/{room_id}/summary", response_model=MeetingSummaryResponse, dependencies=signed_in)
 async def get_room_summary(
     room_id: str,
     type: str = "final",
+    claims: Optional[Dict[str, Any]] = Depends(optional_token_dependency),
+    session: Optional[Dict[str, Any]] = Depends(require_user),
     service: RoomService = Depends(get_room_service),
 ):
+    if not await _may_read_protected_room(service, room_id, claims, session):
+        return _error_response("meeting_summary_not_found", "Meeting summary not found", 404)
     try:
         return await service.get_meeting_summary(room_id, type)
     except MeetingSummaryNotFoundError:
@@ -85,15 +138,18 @@ async def get_room_summary(
         return _error_response("invalid_summary_type", "summary type must be interim or final", 422)
 
 
-@router.post("/api/rooms/{room_id}/summary", response_model=MeetingSummaryResponse)
+@router.post("/api/rooms/{room_id}/summary", response_model=MeetingSummaryResponse, dependencies=signed_in)
 async def generate_room_summary(
     room_id: str,
     type: Optional[str] = None,
     language: Optional[str] = None,
     summary_language: Optional[str] = None,
     claims: Optional[Dict[str, Any]] = Depends(optional_token_dependency),
+    session: Optional[Dict[str, Any]] = Depends(require_user),
     service: RoomService = Depends(get_room_service),
 ):
+    if not await _may_read_protected_room(service, room_id, claims, session):
+        return _error_response("meeting_summary_not_found", "Meeting summary not found", 404)
     try:
         requested_language = language or summary_language
         return await service.generate_meeting_summary(
@@ -121,11 +177,38 @@ async def generate_room_summary(
         )
 
 @router.post("/api/rooms/{room_id}/join", response_model=JoinRoomResponse)
-async def join_room(room_id: str, req: JoinRoomRequest, service: RoomService = Depends(get_room_service)):
+async def join_room(
+    room_id: str,
+    req: JoinRoomRequest,
+    request: Request,
+    service: RoomService = Depends(get_room_service),
+    session: Optional[Dict[str, Any]] = Depends(require_user),
+):
+    user_id = _session_user_id(session)
     try:
-        return await service.join_room(room_id, req.display_name, req.language, req.client)
+        return await service.join_room(
+            room_id,
+            req.display_name,
+            req.language,
+            req.client,
+            user_id=user_id,
+            password=req.password,
+            client_ip=_client_ip(request),
+        )
     except RoomNotFoundError:
         return _error_response("room_not_found", "Room not found", 404)
+    except RoomPasswordRequiredError:
+        return _error_response("room_password_required", "This meeting requires a password.", 403)
+    except InvalidRoomPasswordError:
+        return _error_response("invalid_room_password", "Incorrect meeting password.", 403)
+    except RoomPasswordRateLimitedError as exc:
+        response = _error_response(
+            "room_password_rate_limited",
+            "Too many incorrect password attempts. Please wait a few minutes and try again.",
+            429,
+        )
+        response.headers["Retry-After"] = str(exc.retry_after_seconds)
+        return response
     except RoomExpiredError:
         return _error_response(
             "room_expired",
@@ -183,6 +266,32 @@ async def disable_brse(
     except BrseToggleForbiddenError as exc:
         status_code = 409 if exc.code == "session_mismatch" else 403
         return _error_response(exc.code, str(exc), status_code)
+
+@router.patch("/api/rooms/{room_id}/relay-mode", response_model=CreateRoomResponseRoom)
+async def update_relay_mode(
+    room_id: str,
+    body: UpdateRelayModeRequest,
+    claims: Dict[str, Any] = Depends(verify_token_dependency),
+    service: RoomService = Depends(get_room_service),
+):
+    try:
+        return await service.set_relay_mode(
+            room_id,
+            body.mode,
+            actor_participant_id=claims.get("participant_id"),
+            session_id=claims.get("session_id"),
+            reason="rest_relay_mode",
+        )
+    except RoomNotFoundError:
+        return _error_response("room_not_found", "Room not found", 404)
+    except RoomExpiredError:
+        return _error_response("room_expired", "This meeting has ended.", 409)
+    except RelayModeNotSupportedError as exc:
+        return _error_response(exc.code, str(exc), 422)
+    except BrseToggleForbiddenError as exc:
+        status_code = 409 if exc.code == "session_mismatch" else 403
+        return _error_response(exc.code, str(exc), status_code)
+
 
 @router.delete("/api/rooms/{room_id}/leave", status_code=204)
 async def leave_room(

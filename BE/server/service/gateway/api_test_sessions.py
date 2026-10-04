@@ -11,7 +11,9 @@ No room join, no LiveKit subscription required.
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
+
+from server.service.auth.dependencies import require_user
 
 from server.service.gateway.app_state import app_state
 from server.meeting_modes import SUPPORTED_MEETING_LANGUAGES
@@ -21,7 +23,8 @@ from server.models import (
     CreateTranslationTestSessionResponse,
 )
 
-router = APIRouter(prefix="/api/test", tags=["test-sessions"])
+# Device tests call OpenAI on the user's behalf: signed-in users only.
+router = APIRouter(prefix="/api/test", tags=["test-sessions"], dependencies=[Depends(require_user)])
 
 _SUPPORTED_LANGS = tuple(SUPPORTED_MEETING_LANGUAGES)
 _SUPPORTED_LANG_SET = set(_SUPPORTED_LANGS)

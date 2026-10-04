@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from datetime import datetime, timezone
 from typing import Dict, Optional
 
 from redis.asyncio import Redis
@@ -13,6 +14,11 @@ from server.service.gateway.room_store import RoomStore
 from server.service.brain_runtime.events import RedisEventPublisher
 from server.service.brain_runtime.room_manager import RoomInterpreterManager
 from server.meeting_modes import DEFAULT_BRSE_OUTPUT_MODE, active_human_participant_count
+from server.service.ops.keys import (
+    RUNTIME_HEARTBEAT_INTERVAL_SECONDS,
+    RUNTIME_HEARTBEAT_KEY,
+    RUNTIME_HEARTBEAT_TTL_SECONDS,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +55,7 @@ class InterpreterDaemon:
         self.room_store = RoomStore(redis, ttl_seconds=settings.room_meeting_duration_seconds + 300)
         self.managers: Dict[str, RoomInterpreterManager] = {}
         self._pubsub = None
+        self._started_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
     async def _handle_gateway_event(self, message: dict) -> None:
         event_type = message.get("type")
@@ -92,6 +99,14 @@ class InterpreterDaemon:
 
         manager = self.managers.get(room_id)
         if manager is None:
+            # Includes relay-mode changes while AI is off: the mode is stored on the room
+            # and picked up by _spawn_manager when AI relay is turned back on.
+            return
+
+        if event_type == EventType.ROOM_RELAY_MODE_UPDATED:
+            output_mode = payload.get("brse_output_mode")
+            if isinstance(output_mode, str):
+                await manager.set_output_mode(output_mode)
             return
 
         if event_type == EventType.PARTICIPANT_UPDATED:
@@ -198,10 +213,34 @@ class InterpreterDaemon:
         for room_id in list(self.managers.keys()):
             await self._terminate_manager(room_id)
 
+    async def _write_heartbeat(self) -> None:
+        payload = {
+            "at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            "started_at": self._started_at,
+            "active_room_ids": sorted(self.managers.keys()),
+            "active_manager_count": len(self.managers),
+        }
+        await self.redis.set(
+            RUNTIME_HEARTBEAT_KEY,
+            json.dumps(payload),
+            ex=RUNTIME_HEARTBEAT_TTL_SECONDS,
+        )
+
+    async def _heartbeat_loop(self) -> None:
+        while True:
+            try:
+                await self._write_heartbeat()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.warning("Failed to write brain runtime heartbeat", exc_info=True)
+            await asyncio.sleep(RUNTIME_HEARTBEAT_INTERVAL_SECONDS)
+
     async def run(self) -> None:
         self._pubsub = self.redis.pubsub()
         await self._pubsub.subscribe(self.gateway_control_channel)
         logger.info("Interpreter daemon listening on %s", self.gateway_control_channel)
+        heartbeat_task = asyncio.create_task(self._heartbeat_loop())
 
         try:
             async for message in self._pubsub.listen():
@@ -217,4 +256,5 @@ class InterpreterDaemon:
             logger.info("Interpreter daemon cancelled")
             raise
         finally:
+            heartbeat_task.cancel()
             await self.shutdown()

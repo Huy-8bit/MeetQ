@@ -1,12 +1,14 @@
+import type { ReactNode } from "react";
 import { Clock, Users } from "lucide-react";
 import type { GatewayConnectionState } from "../types/livekit";
-import type { Language, MeetingLanguage } from "../types/api";
+import type { BrseOutputMode, Language, MeetingLanguage } from "../types/api";
 import { formatMeetingLanguageBridge, getLanguageLabel } from "../lib/languages";
 import type { BrseRoomMode } from "../lib/brseModes";
 import { useRoomExpiry } from "../features/room/useRoomExpiry";
 import { BrseToggleControl } from "./BrseToggleControl";
 import { ConnectionBadge } from "./ConnectionBadge";
 import { CustomSelect, type CustomSelectOption } from "./CustomSelect";
+import { RelayModeControl } from "./RelayModeControl";
 
 const LOW_TIME_MS = 5 * 60 * 1000;
 
@@ -23,6 +25,13 @@ interface RoomTopBarProps {
   canToggleBrse: boolean;
   onChangeLanguage: (language: Language) => void;
   onToggleBrse: (nextEnabled: boolean) => void;
+  relayMode: BrseOutputMode;
+  relayModes: BrseOutputMode[];
+  isUpdatingRelayMode: boolean;
+  canChangeRelayMode: boolean;
+  onChangeRelayMode: (mode: BrseOutputMode) => void;
+  /** Permanent recording indicator (REC + elapsed time). */
+  recordingIndicator?: ReactNode;
 }
 
 export function RoomTopBar({
@@ -38,6 +47,12 @@ export function RoomTopBar({
   canToggleBrse,
   onChangeLanguage,
   onToggleBrse,
+  relayMode,
+  relayModes,
+  isUpdatingRelayMode,
+  canChangeRelayMode,
+  onChangeRelayMode,
+  recordingIndicator,
 }: RoomTopBarProps) {
   const languageOptions =
     meetingLanguages.length > 0 ? meetingLanguages : [currentLanguage];
@@ -78,6 +93,7 @@ export function RoomTopBar({
       </div>
 
       <div className="room-header-controls">
+        {recordingIndicator}
         <ConnectionBadge state={connectionState} />
         <div className="room-header-language">
           <CustomSelect
@@ -97,6 +113,16 @@ export function RoomTopBar({
           disabled={!canToggleBrse}
           onToggle={onToggleBrse}
         />
+        {/* Desktop only; on smaller screens the same control lives in Settings → AI relay. */}
+        <div className="room-header-relay-mode">
+          <RelayModeControl
+            mode={relayMode}
+            modes={relayModes}
+            pending={isUpdatingRelayMode}
+            disabled={!canChangeRelayMode}
+            onChange={onChangeRelayMode}
+          />
+        </div>
       </div>
     </header>
   );

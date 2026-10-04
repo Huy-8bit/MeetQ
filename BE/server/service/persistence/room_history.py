@@ -235,6 +235,7 @@ class MongoRoomHistoryRepository:
         *,
         current_human_count: int,
         client_meta: Optional[Any],
+        user_id: Optional[str] = None,
     ) -> None:
         room_id = self._value(room, "room_id")
         participant_id = self._value(participant, "participant_id")
@@ -255,6 +256,8 @@ class MongoRoomHistoryRepository:
             "is_virtual": is_virtual,
             "livekit_identity": self._value(participant, "livekit_identity"),
             "metadata": self._value(participant, "metadata", {}) or {},
+            # Signed-in MeetQ user (stable ID) — the basis of meeting-history access.
+            **({"user_id": user_id} if user_id else {}),
             "last_joined_at": joined_at,
             "last_joined_at_dt": self._parse_dt(joined_at),
             "last_seen_at": self._value(participant, "last_seen_at") or joined_at,
@@ -1017,6 +1020,8 @@ class MongoRoomHistoryRepository:
             "meeting_mode": self._value(room, "meeting_mode"),
             "interpreter_mode": self._value(room, "interpreter_mode"),
             "audio_routing": self._model_dump(self._value(room, "audio_routing", {})),
+            # Only the flag; the password hash never leaves Redis.
+            "password_required": bool(self._value(room, "password_required", False)),
             "virtual_participants": [
                 self._model_dump(participant)
                 for participant in self._value(room, "virtual_participants", []) or []

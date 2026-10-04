@@ -6,3 +6,27 @@
 !FE/.env.development
 !FE/.env.production
 node_modules/
+
+# Terraform (local state per workspace; never commit state or plans)
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+tfplan
+crash.log
+crash.*.log
+infra/terraform/frontend/env/*.tfvars
+!infra/terraform/frontend/env/*.tfvars.example
+
+# Frontend deploy config and Cloudflare credentials (examples are committed)
+config/frontend/*.env
+!config/frontend/*.env.example
+!.env.deploy.example
+infra/terraform/frontend/.last-plan.log
+infra/terraform/storage/env/*.tfvars
+!infra/terraform/storage/env/*.tfvars.example
+!.env.backup.example
+tools/db_backup/.venv/
+infra/terraform/db-backups/env/*.tfvars
+!infra/terraform/db-backups/env/*.tfvars.example
+*.archive.gz

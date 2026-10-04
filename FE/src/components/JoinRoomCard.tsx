@@ -1,6 +1,6 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { Link } from "react-router-dom";
-import { Clock } from "lucide-react";
+import { Clock, Lock } from "lucide-react";
 import {
   formatRoomLanguageList,
   getLanguageLabel,
@@ -12,7 +12,10 @@ import {
   type BrseRoomMode,
 } from "../lib/brseModes";
 import { formatExpiresAtHuman, useRoomExpiry } from "../features/room/useRoomExpiry";
+import { useAuthUser } from "../auth/AuthProvider";
+import { UserMenu } from "../auth/UserMenu";
 import { loadUserPrefs, saveUserPrefs } from "../lib/userPrefs";
+import { isRecordingActive } from "../types/recording";
 import type { MeetingLanguage, ParticipantSnapshot, RoomSnapshotResponse } from "../types/api";
 import { CustomSelect, type CustomSelectOption } from "./CustomSelect";
 import { Alert } from "./ui/Alert";
@@ -20,15 +23,19 @@ import { Badge } from "./ui/Badge";
 import { Button, buttonClassName } from "./ui/Button";
 import { EmptyState } from "./ui/EmptyState";
 import { Field } from "./ui/Field";
+import { PasswordInput } from "./ui/PasswordInput";
 
 interface JoinRoomCardProps {
   room: RoomSnapshotResponse["room"];
   participants: RoomSnapshotResponse["participants"];
   meetingLanguages: MeetingLanguage[];
   isExpired: boolean;
-  onJoin: (payload: { displayName: string; language: MeetingLanguage }) => Promise<void>;
+  onJoin: (payload: { displayName: string; language: MeetingLanguage; password?: string }) => Promise<void>;
   isSubmitting: boolean;
   error: string | null;
+  /** Shown under the password field (e.g. "Incorrect meeting password."). */
+  passwordError?: string | null;
+  onPasswordEdited?: () => void;
 }
 
 export function JoinRoomCard({
@@ -39,14 +46,22 @@ export function JoinRoomCard({
   onJoin,
   isSubmitting,
   error,
+  passwordError = null,
+  onPasswordEdited,
 }: JoinRoomCardProps) {
-  const prefs = loadUserPrefs();
+  const user = useAuthUser();
+  const prefs = loadUserPrefs(user?.id);
   const savedLang = meetingLanguages.includes(prefs.language as MeetingLanguage)
     ? (prefs.language as MeetingLanguage)
     : "";
-  const [displayName, setDisplayName] = useState(prefs.displayName);
+  // A name this user typed before wins; otherwise start from their Google name.
+  const [displayName, setDisplayName] = useState(prefs.displayName || user?.name || "");
   const [language, setLanguage] = useState<MeetingLanguage | "">(savedLang);
   const [validationError, setValidationError] = useState<string | null>(null);
+  // Kept in memory only for this form; cleared after a successful join (unmount).
+  const [password, setPassword] = useState("");
+  const [passwordMissing, setPasswordMissing] = useState(false);
+  const passwordRequired = Boolean(room.password_required);
 
   useEffect(() => {
     if (meetingLanguages.length === 0) {
@@ -135,11 +150,17 @@ export function JoinRoomCard({
       return;
     }
 
+    if (passwordRequired && !password) {
+      setPasswordMissing(true);
+      return;
+    }
+
     setValidationError(null);
-    saveUserPrefs(displayName.trim(), language);
+    saveUserPrefs(displayName.trim(), language, user?.id, user?.name);
     await onJoin({
       displayName: displayName.trim(),
       language,
+      ...(passwordRequired ? { password } : {}),
     });
   }
 
@@ -157,6 +178,7 @@ export function JoinRoomCard({
           <span className="brand-mark" aria-hidden="true">MQ</span>
           MeetQ
         </Link>
+        <UserMenu />
       </header>
 
       <main className="lobby-main">
@@ -178,6 +200,14 @@ export function JoinRoomCard({
                 <dt>AI relay</dt>
                 <dd>{relayLabel}</dd>
               </div>
+              {passwordRequired ? (
+                <div className="meta-item">
+                  <dt>Access</dt>
+                  <dd className="lobby-access">
+                    <Lock size={14} aria-hidden="true" /> Password protected
+                  </dd>
+                </div>
+              ) : null}
               {expirySummary ? (
                 <div className="meta-item">
                   <dt>Time left</dt>
@@ -197,6 +227,12 @@ export function JoinRoomCard({
           ) : (
             <div className="lobby-body">
               <form className="lobby-form" onSubmit={(event) => void handleSubmit(event)} noValidate>
+                {isRecordingActive(room.recording) ? (
+                  <Alert tone="warning">
+                    <strong>This meeting is being recorded.</strong> By joining, your audio, video and screen share are
+                    included in the recording.
+                  </Alert>
+                ) : null}
                 <Field label="Your name" htmlFor="lobby-name">
                   <input
                     id="lobby-name"
@@ -235,6 +271,33 @@ export function JoinRoomCard({
                   />
                 </Field>
 
+                {passwordRequired ? (
+                  <p className="lobby-password-note">
+                    <Lock size={14} aria-hidden="true" /> This meeting requires a password.
+                  </p>
+                ) : null}
+                {passwordRequired ? (
+                  <Field
+                    label="Meeting password"
+                    htmlFor="lobby-password"
+                    error={passwordError ?? (passwordMissing ? "Enter the meeting password." : null)}
+                  >
+                    <PasswordInput
+                      id="lobby-password"
+                      name="meeting-password"
+                      value={password}
+                      onChange={(event) => {
+                        setPassword(event.target.value);
+                        setPasswordMissing(false);
+                        onPasswordEdited?.();
+                      }}
+                      maxLength={128}
+                      autoComplete="off"
+                      aria-invalid={passwordError || passwordMissing ? true : undefined}
+                    />
+                  </Field>
+                ) : null}
+
                 {roomLanguagesUnavailable ? (
                   <Alert tone="danger">
                     Room languages are unavailable. Reload the page or ask the host to recreate the room.
@@ -249,13 +312,14 @@ export function JoinRoomCard({
                   size="lg"
                   block
                   loading={isSubmitting}
-                  disabled={roomLanguagesUnavailable || !displayName.trim() || !language}
+                  disabled={roomLanguagesUnavailable || !displayName.trim() || !language || (passwordRequired && !password)}
                 >
                   {isSubmitting ? "Joining…" : "Join meeting"}
                 </Button>
               </form>
 
               <ParticipantPreviewList
+                hiddenParticipantCount={passwordRequired ? room.participant_count ?? 0 : null}
                 humanParticipants={humanParticipants}
                 virtualParticipants={virtualParticipants}
                 brseRoomMode={brseRoomMode}
@@ -270,11 +334,14 @@ export function JoinRoomCard({
 }
 
 function ParticipantPreviewList({
+  hiddenParticipantCount,
   humanParticipants,
   virtualParticipants,
   brseRoomMode,
   brseAudioExpected,
 }: {
+  /** Protected rooms show only a count until you join; null when names are visible. */
+  hiddenParticipantCount: number | null;
   humanParticipants: ParticipantSnapshot[];
   virtualParticipants: ParticipantSnapshot[];
   brseRoomMode: BrseRoomMode;
@@ -289,10 +356,12 @@ function ParticipantPreviewList({
   return (
     <section className="lobby-people" aria-labelledby="lobby-people-title">
       <h2 className="section-title" id="lobby-people-title">
-        In this room <span className="text-tertiary">{humanParticipants.length}</span>
+        In this room <span className="text-tertiary">{hiddenParticipantCount ?? humanParticipants.length}</span>
       </h2>
 
-      {humanParticipants.length === 0 ? (
+      {hiddenParticipantCount !== null && hiddenParticipantCount > 0 ? (
+        <p className="section-description">You'll see who's here after you join.</p>
+      ) : (hiddenParticipantCount ?? humanParticipants.length) === 0 ? (
         <p className="section-description">No one has joined yet. You'll be the first.</p>
       ) : null}
 

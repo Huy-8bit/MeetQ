@@ -9,6 +9,7 @@ import { Button, buttonClassName } from "../components/ui/Button";
 import { Field } from "../components/ui/Field";
 import { useMicTest } from "../features/test/useMicTest";
 import { useTranslationTest } from "../features/test/useTranslationTest";
+import { UserMenu } from "../auth/UserMenu";
 import { getLanguageLabel, SUPPORTED_MEETING_LANGUAGES } from "../lib/languages";
 import type { Language } from "../types/api";
 
@@ -16,10 +17,13 @@ export function TestPage() {
   return (
     <div className="page">
       <header className="page-header">
-        <Link to="/" className={buttonClassName({ variant: "ghost", size: "sm", className: "page-back" })}>
-          <ArrowLeft size={16} aria-hidden="true" />
-          Home
-        </Link>
+        <div className="page-header-bar">
+          <Link to="/" className={buttonClassName({ variant: "ghost", size: "sm", className: "page-back" })}>
+            <ArrowLeft size={16} aria-hidden="true" />
+            Home
+          </Link>
+          <UserMenu />
+        </div>
         <h1 className="page-title">Device check</h1>
         <p className="page-description">
           Make sure your microphone works and hear how translation sounds before you join a meeting.

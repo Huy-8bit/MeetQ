@@ -1,0 +1,10 @@
+# Cloudflare Pages response headers.
+# Hashed build assets never change: cache them for a year at the edge and in browsers.
+# HTML is left on Pages' default (revalidated on every request) so a new deploy shows up at once.
+/assets/*
+  Cache-Control: public, max-age=31536000, immutable
+
+/*
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: strict-origin-when-cross-origin
+  X-Frame-Options: DENY

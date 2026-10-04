@@ -1,0 +1,7 @@
+aws_region     = "ap-southeast-1"
+project_name   = "meetq"
+backup_prefix  = "database-backups"
+environments   = ["dev", "staging", "prod"]
+retention_days = { dev = 14, staging = 14, prod = 30 }
+allow_prune    = false
+# writer_role_names = ["meetq-prod-ec2"]

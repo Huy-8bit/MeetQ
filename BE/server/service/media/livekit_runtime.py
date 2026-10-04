@@ -57,7 +57,9 @@ class LiveKitRuntime:
             api_secret=self.settings.livekit_api_secret,
             kind="virtual_brse",
             livekit_identity=self.livekit_identity,
-            can_publish=self.output_audio_enabled,
+            # Always allowed: the relay mode can switch to Voice + Text mid-meeting, and
+            # OutputRouter only publishes a track while voice relay is on.
+            can_publish=True,
         )
 
         await self.room.connect(self.settings.livekit_ws_url_internal, token)
@@ -180,15 +182,15 @@ class LiveKitRuntime:
         if getattr(publication, "kind", None) != rtc.TrackKind.KIND_AUDIO:
             return False
 
+        # Only the microphone feeds BRSE. Screen-share audio (SOURCE_SCREENSHARE_AUDIO),
+        # and anything with an unknown source, is never interpreted. `source` is the
+        # protobuf enum value (an int), so compare values rather than names.
         source = getattr(publication, "source", None)
-        if source is None:
-            return True
-        source_label = getattr(source, "name", str(source)).lower()
-        if "screen" in source_label:
+        if source != rtc.TrackSource.SOURCE_MICROPHONE:
             logger.debug(
                 "Ignoring non-microphone audio publication for %s source=%s",
                 participant.identity,
-                source_label,
+                source,
             )
             return False
         return True

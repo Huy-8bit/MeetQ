@@ -1,0 +1,271 @@
+/* ─── Recording: room indicator, control, dialogs, history ───────────── */
+
+/* Always visible while a meeting is recorded (header, every screen size). */
+.rec-indicator {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: var(--space-2);
+  height: 28px;
+  padding: 0 var(--space-3);
+  border-radius: var(--radius-full);
+  background: var(--color-danger-soft);
+  color: var(--color-danger-text);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+
+.rec-indicator.is-pending {
+  background: var(--color-surface-muted);
+  color: var(--color-text-secondary);
+  font-weight: 500;
+  letter-spacing: 0;
+}
+
+.rec-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: var(--radius-full);
+  background: var(--color-danger);
+  animation: rec-pulse 1.6s ease-in-out infinite;
+}
+
+.rec-time {
+  font-variant-numeric: tabular-nums;
+  font-weight: 500;
+}
+
+@keyframes rec-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rec-dot {
+    animation: none;
+  }
+}
+
+.control-btn .rec-icon {
+  color: var(--color-danger);
+  fill: var(--color-danger);
+}
+
+.control-btn.is-recording {
+  border-color: transparent;
+  background: var(--color-danger);
+  color: var(--color-text-on-danger);
+}
+
+.control-btn.is-recording:hover:not(:disabled) {
+  background: var(--color-danger-hover);
+}
+
+/* ─── Confirmation dialog ─────────────────────────────────────────────── */
+.dialog-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 950;
+  display: grid;
+  place-items: center;
+  padding: var(--space-4);
+}
+
+.dialog-backdrop {
+  position: absolute;
+  inset: 0;
+  background: var(--color-overlay);
+  animation: fade-in var(--duration) var(--ease);
+}
+
+.dialog {
+  position: relative;
+  width: min(440px, 100%);
+  box-shadow: var(--shadow-lg);
+  animation: fade-in var(--duration) var(--ease);
+}
+
+.dialog-body {
+  display: grid;
+  gap: var(--space-4);
+}
+
+.dialog-text {
+  display: grid;
+  gap: var(--space-2);
+  color: var(--color-text);
+}
+
+.dialog-text ul {
+  margin: 0;
+  padding-left: var(--space-5);
+}
+
+.dialog-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+
+/* ─── Recording segments ──────────────────────────────────────────────── */
+.recording-list {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.recording-item {
+  display: grid;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+}
+
+.recording-item-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.recording-item-text {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.recording-item-title {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-weight: 600;
+}
+
+.recording-item-meta,
+.recording-item-note {
+  color: var(--color-text-secondary);
+  font-size: var(--text-sm);
+}
+
+.recording-item-note {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.recording-item-actions {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.recording-player {
+  width: 100%;
+  max-height: 60vh;
+  border-radius: var(--radius-md);
+  background: var(--color-stage);
+}
+
+.ended-recording {
+  display: grid;
+  gap: var(--space-4);
+}
+
+.ended-recording-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+/* ─── My meetings ─────────────────────────────────────────────────────── */
+.table-wrap {
+  overflow-x: auto;
+}
+
+.meetings-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--text-sm);
+}
+
+.meetings-table th,
+.meetings-table td {
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--color-border);
+  text-align: left;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+
+.meetings-table th {
+  color: var(--color-text-tertiary);
+  font-weight: 500;
+}
+
+.meetings-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.meetings-room-link {
+  display: block;
+  color: var(--color-text);
+  font-weight: 600;
+}
+
+.meetings-room-id {
+  font-size: var(--text-xs);
+}
+
+.archive-detail {
+  display: grid;
+  gap: var(--space-4);
+}
+
+.archive-message-list,
+.archive-people {
+  display: grid;
+  gap: var(--space-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.archive-message {
+  display: grid;
+  gap: var(--space-1);
+  padding-bottom: var(--space-3);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.archive-message-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  color: var(--color-text-tertiary);
+  font-size: var(--text-xs);
+}
+
+.archive-message-meta strong {
+  color: var(--color-text-secondary);
+}
+
+.archive-messages {
+  display: grid;
+  gap: var(--space-3);
+}
+
+@media (max-width: 767px) {
+  .meetings-table th:nth-child(3),
+  .meetings-table td:nth-child(3) {
+    display: none;
+  }
+}

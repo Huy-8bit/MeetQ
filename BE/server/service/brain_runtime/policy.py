@@ -5,14 +5,20 @@ from dataclasses import dataclass
 from typing import Any, Dict, Optional
 
 from server.brain.realtime.source_policy import (
+    SOURCE_UNBOUND_OUTPUT_REASONS,
     assess_public_relay_readiness,
     assess_relay_output_text,
     assess_source_transcript,
     relay_text_has_narrator_opening,
     relay_text_needs_more_opening_context,
+    weighted_text_length,
 )
 
 logger = logging.getLogger(__name__)
+
+# Sources shorter than this (CJK-weighted chars) release text/audio only after
+# the complete relay text passed validation.
+SHORT_SOURCE_FINAL_TEXT_GATE_CHARS = 60
 
 
 @dataclass(frozen=True)
@@ -260,10 +266,18 @@ class ConversationPolicyEngine:
         final: bool,
         relay_style: str,
         min_partial_meaningful_chars: int,
+        source_text: Optional[str] = None,
     ) -> RelayOutputDecision:
-        output_ok, reason, signal = assess_relay_output_text(text)
+        output_ok, reason, signal = assess_relay_output_text(
+            text,
+            source_text=source_text,
+            final=final,
+            relay_style=relay_style,
+        )
         if not output_ok:
-            reject = final
+            # A reply-style or over-long partial cannot become a translation by
+            # growing, so it is rejected at once to stop its audio early.
+            reject = final or reason in SOURCE_UNBOUND_OUTPUT_REASONS
             logger.info(
                 "BRSE policy output_%s room=%s speaker=%s utterance=%s publishable=False "
                 "reason=%s relay_style=%s reject=%s signal=%s",
@@ -290,6 +304,21 @@ class ConversationPolicyEngine:
                 reason="narrator_style_output",
                 signal=signal,
                 reject=True,
+            )
+
+        if (
+            not final
+            and source_text is not None
+            and relay_style != "summary"
+            and weighted_text_length(source_text) < SHORT_SOURCE_FINAL_TEXT_GATE_CHARS
+        ):
+            # Short sources yield short translations: wait for the complete text
+            # so a reply-style response is rejected before any of its audio plays.
+            return RelayOutputDecision(
+                publishable=False,
+                reason="short_source_waits_for_final_text",
+                signal=signal,
+                hold=True,
             )
 
         meaningful_chars = int(signal.get("meaningful_chars") or 0)

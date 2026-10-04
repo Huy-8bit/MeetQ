@@ -5,15 +5,18 @@ import App from "./App";
 import "./index.css";
 import { initThemePreference } from "./lib/uiPreferences";
 import { SessionProvider } from "./state/session";
+import { AuthProvider } from "./auth/AuthProvider";
 
 initThemePreference();
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
     <BrowserRouter>
-      <SessionProvider>
-        <App />
-      </SessionProvider>
+      <AuthProvider>
+        <SessionProvider>
+          <App />
+        </SessionProvider>
+      </AuthProvider>
     </BrowserRouter>
   </React.StrictMode>,
 );

@@ -1,4 +1,4 @@
-import { startTransition, useEffect, useRef, useState } from "react";
+import { startTransition, useCallback, useEffect, useRef, useState } from "react";
 import { api, leaveRoomBestEffort, ApiError } from "../../lib/api";
 import { setRoomAudioOutputDevice } from "../../lib/audioOutput";
 import {
@@ -26,10 +26,15 @@ import {
   unpublishScreenShareTrack,
 } from "../../lib/livekit";
 import {
+  applyRelayModeToRoom,
+  getSelectableRelayModes,
   isBrseAudioExpected,
+  isBrseAudioPossible,
+  relayModeErrorMessage,
   resolveBrseEnabled,
   resolveBrseOutputMode,
   resolveBrseRoomMode,
+  type RelayModeState,
 } from "../../lib/brseModes";
 import {
   GatewaySocket,
@@ -38,6 +43,7 @@ import {
   retainGatewaySocket,
 } from "../../lib/ws";
 import type {
+  BrseOutputMode,
   ChatMessage,
   ChatTranslation,
   ChatTranslationMode,
@@ -71,6 +77,7 @@ import type {
   ParticipantUpdatedEvent,
   RoomBrseUpdatedEvent,
   RoomExpiredEvent,
+  RoomRelayModeUpdatedEvent,
   RoomHostChangedEvent,
   RoomSnapshotEvent,
   ScreenShareStartedEvent,
@@ -80,6 +87,7 @@ import type {
   TranscriptPartialEvent,
 } from "../../types/ws";
 import type { RoomSession } from "../../state/session";
+import type { RecordingEvent } from "../../types/ws";
 import { type LocalTrack, type LocalVideoTrack } from "livekit-client";
 import {
   hydrateTranscriptEntries,
@@ -191,6 +199,21 @@ export function useMeetingRoom({
   const [isLeaving, setIsLeaving] = useState(false);
   const [isTogglingBrse, setIsTogglingBrse] = useState(false);
   const [brseToggleError, setBrseToggleError] = useState<string | null>(null);
+  // AI relay mode (Voice + Text / Text Only) is room state owned by the server.
+  // No optimistic update: the selector shows "Updating…" until the server answers.
+  const [isUpdatingRelayMode, setIsUpdatingRelayMode] = useState(false);
+  const [relayModeError, setRelayModeError] = useState<string | null>(null);
+  // Bumped on every room.relay_mode_updated event so a slower REST response can't
+  // overwrite a newer change made by another participant.
+  const relayModeEventSeqRef = useRef(0);
+  // useRoomRecording subscribes here; recording state is not kept in this hook.
+  const recordingListenersRef = useRef(new Set<(event: RecordingEvent) => void>());
+  const subscribeRecordingEvents = useCallback((listener: (event: RecordingEvent) => void) => {
+    recordingListenersRef.current.add(listener);
+    return () => {
+      recordingListenersRef.current.delete(listener);
+    };
+  }, []);
 
   // ─── Chat state ──────────────────────────────────────────────────────────────
   const [chatMessages, setChatMessages] = useState<RoomChatMessage[]>(() =>
@@ -502,7 +525,7 @@ export function useMeetingRoom({
       setVideos(media.videos);
       setHumanAudioFeeds(media.humanAudio);
       setBrseAudioFeeds(
-        isBrseAudioExpected(roomMetaRef.current ?? session.room)
+        isBrseAudioPossible(roomMetaRef.current ?? session.room)
           ? media.brseAudio
           : [],
       );
@@ -1103,7 +1126,14 @@ export function useMeetingRoom({
   }
 
   async function toggleBrseMode(nextEnabled = !brseEnabledRef.current): Promise<void> {
-    if (!session || expiredShutdownRef.current || isRoomExpired || isTogglingBrse || isLeaving) {
+    if (
+      !session
+      || expiredShutdownRef.current
+      || isRoomExpired
+      || isTogglingBrse
+      || isUpdatingRelayMode
+      || isLeaving
+    ) {
       return;
     }
 
@@ -1145,7 +1175,7 @@ export function useMeetingRoom({
 
       if (!brseEnabledRef.current) {
         clearBrseRuntimeSurfaces();
-      } else if (!isBrseAudioExpected(mergedRoom)) {
+      } else if (!isBrseAudioPossible(mergedRoom)) {
         setBrseAudioFeeds([]);
       }
     } catch (error) {
@@ -1297,6 +1327,19 @@ export function useMeetingRoom({
       case "room.brse_updated":
         applyBrseUpdated(event);
         return;
+      case "room.relay_mode_updated":
+        applyRelayModeUpdated(event);
+        return;
+      case "recording.starting":
+      case "recording.started":
+      case "recording.stopping":
+      case "recording.stopped":
+      case "recording.processing":
+      case "recording.ready":
+      case "recording.failed":
+        // Recording state lives in useRoomRecording; forward the event.
+        recordingListenersRef.current.forEach((listener) => listener(event));
+        return;
       case "room.expired":
         applyRoomExpired(event);
         return;
@@ -1444,7 +1487,7 @@ export function useMeetingRoom({
       ...event.payload.room,
     };
     const snapshotBrseEnabled = resolveBrseEnabled(snapshotRoomForMode);
-    const snapshotBrseAudioExpected = isBrseAudioExpected(snapshotRoomForMode);
+    const snapshotBrseAudioPossible = isBrseAudioPossible(snapshotRoomForMode);
     brseEnabledRef.current = snapshotBrseEnabled;
 
     const snapshotRoomLanguages = normalizeRoomLanguages(event.payload.room);
@@ -1476,7 +1519,7 @@ export function useMeetingRoom({
 
     if (!snapshotBrseEnabled) {
       clearBrseRuntimeSurfaces();
-    } else if (!snapshotBrseAudioExpected) {
+    } else if (!snapshotBrseAudioPossible) {
       setBrseAudioFeeds([]);
     }
 
@@ -1720,8 +1763,53 @@ export function useMeetingRoom({
 
     if (!nextEnabled) {
       clearBrseRuntimeSurfaces();
-    } else if (!isBrseAudioExpected(nextRoomForMode)) {
+    } else if (!isBrseAudioPossible(nextRoomForMode)) {
       setBrseAudioFeeds([]);
+    }
+  }
+
+  function applyRelayModeState(next: RelayModeState): void {
+    setRoomMeta((current) => (current ? applyRelayModeToRoom(current, next) : current));
+  }
+
+  function applyRelayModeUpdated(event: RoomRelayModeUpdatedEvent): void {
+    relayModeEventSeqRef.current += 1;
+    applyRelayModeState(event.payload);
+    setRelayModeError(null);
+  }
+
+  async function changeRelayMode(nextMode: BrseOutputMode): Promise<void> {
+    if (
+      !session
+      || expiredShutdownRef.current
+      || isRoomExpired
+      || isUpdatingRelayMode
+      || isTogglingBrse
+      || isLeaving
+    ) {
+      return;
+    }
+    const currentRoom = roomMetaRef.current ?? session.room;
+    if (
+      !getSelectableRelayModes(currentRoom).includes(nextMode)
+      || resolveBrseOutputMode(currentRoom) === nextMode
+    ) {
+      return;
+    }
+
+    const eventSeqAtStart = relayModeEventSeqRef.current;
+    setIsUpdatingRelayMode(true);
+    setRelayModeError(null);
+    try {
+      const nextRoom = await api.updateRelayMode(roomId, session.roomToken, nextMode);
+      // If another participant's change was broadcast meanwhile, that event is newer.
+      if (relayModeEventSeqRef.current === eventSeqAtStart) {
+        applyRelayModeState(nextRoom);
+      }
+    } catch (error) {
+      setRelayModeError(relayModeErrorMessage(error instanceof ApiError ? error.code : null));
+    } finally {
+      setIsUpdatingRelayMode(false);
     }
   }
 
@@ -1890,7 +1978,7 @@ export function useMeetingRoom({
     }
 
     try {
-      const response = await api.getRoomSummary(roomId, type);
+      const response = await api.getRoomSummary(roomId, type, session?.roomToken ?? null);
       if (requestId !== summaryRequestSeqRef.current) {
         return null;
       }
@@ -2222,7 +2310,7 @@ export function useMeetingRoom({
     ? transcripts
     : transcripts.filter((entry) => entry.kind !== "relay");
   const visibleInterpreterStatuses = brseEnabled ? relayStatuses : [];
-  const visibleBrseAudioFeeds = brseEnabled && brseAudioExpected ? brseAudioFeeds : [];
+  const visibleBrseAudioFeeds = isBrseAudioPossible(roomForBrseMode) ? brseAudioFeeds : [];
 
   return {
     roomMeta,
@@ -2277,8 +2365,24 @@ export function useMeetingRoom({
       && !!selfState
       && !isLeaving
       && !isTogglingBrse
+      && !isUpdatingRelayMode
       && !isRoomExpired
       && !expiredShutdownRef.current,
+    // AI relay mode: room-level, independent of brseEnabled.
+    relayMode: brseOutputMode,
+    selectableRelayModes: getSelectableRelayModes(roomForBrseMode),
+    isUpdatingRelayMode,
+    relayModeError,
+    canChangeRelayMode:
+      !!session
+      && !!selfState
+      && !isLeaving
+      && !isTogglingBrse
+      && !isUpdatingRelayMode
+      && !isRoomExpired
+      && !expiredShutdownRef.current,
+    changeRelayMode,
+    subscribeRecordingEvents,
     changeLanguage,
     toggleBrseMode,
     toggleMicrophoneMuted,

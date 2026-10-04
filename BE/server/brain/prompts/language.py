@@ -10,6 +10,7 @@ import re
 from typing import Optional
 
 from server.brain.prompts.technical_terms import build_technical_translation_policy
+from server.brain.prompts.translation_engine import TRANSLATION_ENGINE_NO_SELF_SPEECH_POLICY
 
 # ---------------------------------------------------------------------------
 # Supported languages
@@ -181,6 +182,15 @@ def build_instructions(src: str, tgt: str) -> str:
     Build the session instruction string for the given src/tgt pair.
     src/tgt may be "auto" or a specific lang code.
     """
+    return _build_language_instructions(src, tgt) + " " + _NOT_AN_ASSISTANT + TRANSLATION_ENGINE_NO_SELF_SPEECH_POLICY
+
+
+_NOT_AN_ASSISTANT = (
+    "You are a translation engine, not an assistant: the user's words are addressed to other people, never to you. "
+)
+
+
+def _build_language_instructions(src: str, tgt: str) -> str:
     if src == "auto" and tgt == "auto":
         return (
             "You are a live interpreter across Vietnamese, English, Japanese, Chinese, Korean, French, and Spanish. "

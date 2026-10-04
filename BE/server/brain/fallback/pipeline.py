@@ -19,7 +19,9 @@ from typing import Optional
 
 from server.shared.audio import record_clip, DEFAULT_SAMPLE_RATE
 from server.brain.prompts.language import build_instructions, LANG_NAMES
-from server.shared.logging_utils import get_logger
+from server.brain.prompts.translation_engine import wrap_source_text
+from server.brain.realtime.source_policy import assess_source_transcript, validated_translation
+from server.shared.logging_utils import get_logger, loggable_text
 
 logger = get_logger("fallback.pipeline")
 
@@ -59,7 +61,7 @@ def _transcribe(wav_path: Path, api_key: str, model: str) -> str:
         )
     elapsed = time.monotonic() - t0
     transcript = result.strip() if isinstance(result, str) else result.text.strip()
-    logger.info(f"Transcription done in {elapsed:.2f}s: {transcript!r}")
+    logger.info(f"Transcription done in {elapsed:.2f}s: {loggable_text(transcript)}")
     return transcript
 
 
@@ -72,13 +74,19 @@ def _translate(transcript: str, api_key: str, model: str, system_prompt: str) ->
         temperature=0.3,
         messages=[
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": transcript},
+            {"role": "user", "content": wrap_source_text(transcript)},
         ],
     )
     elapsed = time.monotonic() - t0
-    translation = resp.choices[0].message.content.strip()
-    logger.info(f"Translation done in {elapsed:.2f}s: {translation!r}")
-    return translation
+    translation = (resp.choices[0].message.content or "").strip()
+    logger.info(f"Translation done in {elapsed:.2f}s: {loggable_text(translation)}")
+    return validated_translation(
+        translation,
+        source_text=transcript,
+        context="fallback",
+        src_lang="auto",
+        tgt_lang="auto",
+    ) or ""
 
 
 def run_fallback(
@@ -129,8 +137,13 @@ def run_fallback(
     print("Transcribing...", flush=True)
     transcript = _transcribe(wav_path, api_key, transcribe_model)
 
-    if not transcript:
-        logger.warning("Empty transcript. No speech detected.")
+    accepted, reason, _normalized, _signal = assess_source_transcript(
+        transcript,
+        duration_ms=None,
+        final=True,
+    )
+    if not accepted:
+        logger.warning(f"Transcript not translated: reason={reason}")
         return ""
 
     print(f"[You] {transcript}", flush=True)

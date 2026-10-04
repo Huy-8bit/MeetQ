@@ -1,0 +1,10 @@
+cloudflare_account_id = "0123456789abcdef0123456789abcdef"
+cloudflare_zone_id    = "fedcba9876543210fedcba9876543210"
+
+project_name      = "meetq"
+environment       = "dev"
+domain_name       = "dev.meetq.example.com"
+production_branch = "main"
+
+# prod owns the zone-wide HTTPS setting.
+manage_always_use_https = false

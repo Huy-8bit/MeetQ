@@ -1,3 +1,4 @@
+import type { RecordingState } from "./recording";
 export type Language =
   | "vi"
   | "en"
@@ -157,7 +158,11 @@ export interface RoomSummary {
   meeting_mode?: MeetingMode;
   interpreter_mode?: InterpreterMode;
   audio_routing?: AudioRouting;
+  /** Joining needs the meeting password. The password itself is never returned. */
+  password_required?: boolean;
 }
+
+export type RoomAccess = "link" | "password";
 
 export interface CreateRoomRequest {
   room_languages: MeetingLanguage[];
@@ -167,6 +172,8 @@ export interface CreateRoomRequest {
   brse_enabled?: boolean;
   brse_mode?: BrseMode;
   brse_output_mode?: BrseOutputMode;
+  access?: RoomAccess;
+  password?: string;
 }
 
 export interface CreateRoomResponse {
@@ -234,6 +241,9 @@ export interface RoomSnapshotResponse {
   room: RoomSummary & {
     participant_count: number;
     host_participant_id?: string | null;
+    /** Active room recording (starting/recording/stopping), shown in the lobby. */
+    recording?: RecordingState | null;
+    recording_available?: boolean;
   };
   participants: ParticipantSnapshot[];
   recent_transcripts: RecentTranscriptSnapshot[];
@@ -247,6 +257,8 @@ export interface JoinRoomRequest {
     sdk: "web";
     version: string;
   };
+  /** Only for password-protected rooms; sent in the request body, never in the URL. */
+  password?: string;
 }
 
 // ─── Test session types ───────────────────────────────────────────────────────

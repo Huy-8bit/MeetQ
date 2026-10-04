@@ -236,3 +236,82 @@ export function buildCreateBrsePayload(
     brse_output_mode: effectiveMode === "text_only" ? "text_only" : "voice_text",
   };
 }
+
+// ─── In-room relay mode (room-level, independent of AI on/off) ────────────────
+
+export const RELAY_MODE_OPTIONS: Array<{
+  value: BrseOutputMode;
+  label: string;
+  description: string;
+}> = [
+  {
+    value: "voice_text",
+    label: "Voice + Text",
+    description: "Live translation appears as text and AI voice.",
+  },
+  {
+    value: "text_only",
+    label: "Text Only",
+    description: "Live translation appears as text without AI voice.",
+  },
+];
+
+/**
+ * Relay modes participants can switch between during the meeting. Only rooms with
+ * exactly two languages (and normal relay, not summary capture) have a choice; other
+ * rooms return [] so no selector is shown. Does not depend on AI being on.
+ */
+export function getSelectableRelayModes(room: BrseRoomLike): BrseOutputMode[] {
+  if (!room || isSilentSummaryRoom(room)) {
+    return [];
+  }
+  return isVoiceRelayAvailable(normalizeRoomLanguages(room).length)
+    ? ["voice_text", "text_only"]
+    : [];
+}
+
+/**
+ * Whether BRSE voice tracks should be played in this room. True whenever voice relay
+ * is possible (AI on, two languages), regardless of the current mode: the server only
+ * sends audio for relays that started in Voice + Text, so a sentence already being
+ * spoken when someone switches to Text Only can finish instead of being cut.
+ */
+export function isBrseAudioPossible(room: BrseRoomLike): boolean {
+  return (
+    resolveBrseEnabled(room) &&
+    !isSilentSummaryRoom(room) &&
+    isVoiceRelayAvailable(normalizeRoomLanguages(room).length)
+  );
+}
+
+export function relayModeErrorMessage(code: string | null | undefined): string {
+  switch (code) {
+    case "room_expired":
+      return "This meeting has ended, so the AI relay mode can't be changed.";
+    case "relay_mode_not_supported":
+      return "AI voice is only available in rooms with exactly two languages.";
+    case "relay_mode_forbidden":
+    case "session_mismatch":
+      return "Your session is no longer active in this room. Rejoin to change the AI relay mode.";
+    default:
+      return "Could not update AI relay mode. Try again.";
+  }
+}
+
+export interface RelayModeState {
+  brse_enabled?: boolean;
+  brse_mode?: BrseMode;
+  brse_output_mode?: BrseOutputMode;
+  audio_routing?: RoomSummary["audio_routing"];
+}
+
+/** Applies server relay-mode state (REST response or room.relay_mode_updated) to room meta. */
+export function applyRelayModeToRoom<T extends Partial<RoomSummary>>(room: T, next: RelayModeState): T {
+  return {
+    ...room,
+    brse_enabled: next.brse_enabled ?? room.brse_enabled,
+    brse_mode: next.brse_mode ?? room.brse_mode,
+    brse_output_mode: next.brse_output_mode ?? room.brse_output_mode,
+    audio_routing: next.audio_routing ?? room.audio_routing,
+  };
+}

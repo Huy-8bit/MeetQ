@@ -18,6 +18,11 @@ def fake_settings() -> Settings:
     os.environ["LIVEKIT_API_SECRET"] = "test-lk-secret"
     os.environ["LIVEKIT_WS_URL_PUBLIC"] = "ws://localhost:7880"
     os.environ["LIVEKIT_WS_URL_INTERNAL"] = "ws://localhost:7880"
+    # Auth is configured explicitly per test (tests/test_auth_api.py); the container's
+    # own ADMIN_*/GOOGLE_* values must not leak in. Room tests run without sign-in.
+    os.environ["USER_AUTH_REQUIRED"] = "false"
+    for key in ("ADMIN_USERNAME", "ADMIN_PASSWORD", "ADMIN_PASSWORD_HASH", "GOOGLE_CLIENT_ID", "GOOGLE_ALLOWED_DOMAINS"):
+        os.environ[key] = ""
     return Settings()
 
 class FakePipeline:
@@ -54,12 +59,16 @@ class FakePipeline:
 class FakeRedis:
     def __init__(self):
         self.data: Dict[str, Any] = {}
+        self.published: List[tuple] = []
     
     async def get(self, key: str) -> Any:
         return self.data.get(key)
         
-    async def set(self, key: str, value: str, ex: int = None) -> None:
+    async def set(self, key: str, value: str, ex: int = None, nx: bool = False) -> Any:
+        if nx and key in self.data:
+            return None
         self.data[key] = value
+        return True
         
     async def hset(self, name: str, key: str, value: str) -> None:
         if name not in self.data:
@@ -90,6 +99,7 @@ class FakeRedis:
         return FakePipeline(self)
         
     async def publish(self, channel: str, message: str) -> int:
+        self.published.append((channel, message))
         return 1
 
     def pubsub(self):
@@ -107,6 +117,24 @@ class FakeRedis:
 
     async def ping(self) -> bool:
         return True
+
+    async def expire(self, key: str, ttl: int) -> None:
+        pass
+
+    async def incr(self, key: str) -> int:
+        self.data[key] = int(self.data.get(key) or 0) + 1
+        return self.data[key]
+
+    async def rpush(self, name: str, *values: str) -> int:
+        self.data.setdefault(name, []).extend(values)
+        return len(self.data[name])
+
+    async def scan_iter(self, match: str = "*", count: int = 100):
+        import fnmatch
+
+        for key in list(self.data.keys()):
+            if fnmatch.fnmatchcase(key, match):
+                yield key
         
     async def aclose(self) -> None:
         pass

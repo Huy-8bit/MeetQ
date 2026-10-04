@@ -9,6 +9,16 @@ class EventType:
     ROOM_CREATED = "room.created"
     ROOM_EXPIRED = "room.expired"
     ROOM_BRSE_UPDATED = "room.brse_updated"
+    # Room-level AI relay output mode (voice_text <-> text_only) changed in a live room.
+    ROOM_RELAY_MODE_UPDATED = "room.relay_mode_updated"
+    # Room-level recording state; every participant converges on the latest `version`.
+    RECORDING_STARTING = "recording.starting"
+    RECORDING_STARTED = "recording.started"
+    RECORDING_STOPPING = "recording.stopping"
+    RECORDING_STOPPED = "recording.stopped"
+    RECORDING_PROCESSING = "recording.processing"
+    RECORDING_READY = "recording.ready"
+    RECORDING_FAILED = "recording.failed"
     PARTICIPANT_JOINED = "participant.joined"
     PARTICIPANT_UPDATED = "participant.updated"
     PARTICIPANT_LEFT = "participant.left"
@@ -25,6 +35,10 @@ class EventType:
     SCREEN_SHARE_STOPPED = "screen_share.stopped"
 
     CHAT_MESSAGE = "chat.message"
+
+    # Operations events (brain runtime -> gateway only; never fanned out to rooms)
+    OPS_RELAY_TRACE = "ops.relay_trace"
+    OPS_AI_ERROR = "ops.ai_error"
 
     # Mic test events (server -> client over test WS)
     MIC_TEST_STARTED = "mic_test.started"
