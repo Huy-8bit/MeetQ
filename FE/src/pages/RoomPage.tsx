@@ -24,6 +24,7 @@ import { MeetingSummaryPanel } from "../components/MeetingSummaryPanel";
 import { MeetingStage, type PinnedStageTarget } from "../components/MeetingStage";
 import { MeetingViewPanel } from "../components/MeetingViewPanel";
 import { RoomControlBar } from "../components/RoomControlBar";
+import { ScreenShareDialog } from "../components/ScreenShareDialog";
 import { RecordButton, RecordingIndicator } from "../components/RecordingControls";
 import { MeetingRecordingSection } from "../components/MeetingRecordingSection";
 import { useRoomRecording } from "../features/room/useRoomRecording";
@@ -66,6 +67,7 @@ export function RoomPage() {
     () => typeof window === "undefined" || window.innerWidth >= SIDE_PANEL_INLINE_MIN_WIDTH,
   );
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [screenShareDialogOpen, setScreenShareDialogOpen] = useState(false);
   const [showEndedSummary, setShowEndedSummary] = useState(false);
   const [themeMode, setThemeMode] = useState<AppThemeMode>(() => loadThemePreference());
   const [layoutMode, setLayoutMode] = useState<RoomLayoutMode>(() => loadRoomLayoutPreference());
@@ -372,6 +374,7 @@ export function RoomPage() {
     meeting.relayModeError ? { tone: "warning" as const, message: meeting.relayModeError } : null,
     meeting.mediaError ? { tone: "warning" as const, message: meeting.mediaError } : null,
     meeting.screenShareError ? { tone: "warning" as const, message: meeting.screenShareError } : null,
+    meeting.screenShareNotice ? { tone: "warning" as const, message: meeting.screenShareNotice } : null,
     meeting.micToggleError ? { tone: "warning" as const, message: meeting.micToggleError } : null,
     meeting.cameraToggleError ? { tone: "warning" as const, message: meeting.cameraToggleError } : null,
     meeting.moderationError ? { tone: "warning" as const, message: meeting.moderationError } : null,
@@ -528,6 +531,7 @@ export function RoomPage() {
             isScreenSharing={meeting.isScreenSharing}
             isStartingScreenShare={meeting.isStartingScreenShare}
             isStoppingScreenShare={meeting.isStoppingScreenShare}
+            canShareScreen={meeting.canShareScreen}
             isLeaving={meeting.isLeaving}
             onToggleMic={() => {
               void meeting.toggleMicrophoneMuted();
@@ -541,7 +545,8 @@ export function RoomPage() {
                 void meeting.stopScreenShare({ reason: "manual_stop" });
                 return;
               }
-              void meeting.startScreenShare();
+              if (!meeting.canShareScreen) return;
+              setScreenShareDialogOpen(true);
             }}
             sidePanelOpen={sidePanelOpen}
             onToggleSidePanel={handleToggleSidePanel}
@@ -671,6 +676,16 @@ export function RoomPage() {
           onLayoutChange={handleLayoutChange}
         />
       </SettingsDrawer>
+
+      <ScreenShareDialog
+        open={screenShareDialogOpen}
+        onCancel={() => setScreenShareDialogOpen(false)}
+        onConfirm={(choice) => {
+          setScreenShareDialogOpen(false);
+          // Synchronous call: getDisplayMedia must run inside this click.
+          void meeting.startScreenShare(choice);
+        }}
+      />
 
       <div className="audio-sinks" aria-hidden="true">
         {meeting.humanAudioFeeds.map((feed) => (

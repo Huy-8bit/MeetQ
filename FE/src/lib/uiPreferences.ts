@@ -1,7 +1,11 @@
+import type { ScreenShareQuality } from "./livekit";
+
 export type AppThemeMode = "light" | "dark";
 export type RoomLayoutMode = "stage-focus" | "balanced" | "compact";
 
 const ROOM_LAYOUT_STORAGE_KEY = "brseai_room_layout_mode";
+// Only the quality choice is remembered; "Include shared audio" starts off every time.
+export const SCREEN_SHARE_QUALITY_STORAGE_KEY = "meetq:screen-share-quality";
 
 const DEFAULT_ROOM_LAYOUT_MODE: RoomLayoutMode = "balanced";
 
@@ -52,6 +56,23 @@ export function saveRoomLayoutPreference(layout: RoomLayoutMode): void {
   }
 
   writeStorageValue(ROOM_LAYOUT_STORAGE_KEY, layout);
+}
+
+export function loadScreenShareQualityPreference(): ScreenShareQuality {
+  if (typeof window === "undefined") {
+    return "detail";
+  }
+
+  const stored = readStorageValue(SCREEN_SHARE_QUALITY_STORAGE_KEY);
+  return stored === "motion" ? "motion" : "detail";
+}
+
+export function saveScreenShareQualityPreference(quality: ScreenShareQuality): void {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  writeStorageValue(SCREEN_SHARE_QUALITY_STORAGE_KEY, quality);
 }
 
 function readStorageValue(key: string): string | null {

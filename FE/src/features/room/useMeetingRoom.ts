@@ -16,14 +16,19 @@ import {
   getLocalMicrophoneTrack,
   isCameraMuted,
   isMicrophoneMuted,
+  isScreenShareSupported,
   publishLocalCameraTrack,
   publishScreenShareTrack,
   publishLocalMedia,
+  ScreenShareCancelledError,
+  ScreenShareUnsupportedError,
   setLocalCameraMuted,
   setLocalMicrophoneMuted,
   supportsAudioOutputSelection,
   switchLocalMicrophoneTrack,
   unpublishScreenShareTrack,
+  type PublishedScreenShare,
+  type ScreenShareQuality,
 } from "../../lib/livekit";
 import {
   applyRelayModeToRoom,
@@ -88,7 +93,7 @@ import type {
 } from "../../types/ws";
 import type { RoomSession } from "../../state/session";
 import type { RecordingEvent } from "../../types/ws";
-import { type LocalTrack, type LocalVideoTrack } from "livekit-client";
+import { type LocalAudioTrack, type LocalTrack, type LocalVideoTrack } from "livekit-client";
 import {
   hydrateTranscriptEntries,
   mergeTranscriptCollections,
@@ -102,6 +107,11 @@ import {
 
 const FINAL_SUMMARY_POLL_INTERVAL_MS = 3000;
 const FINAL_SUMMARY_MAX_POLLS = 8;
+
+export interface StartScreenShareOptions {
+  quality: ScreenShareQuality;
+  includeAudio: boolean;
+}
 
 interface UseMeetingRoomArgs {
   roomId: string;
@@ -181,6 +191,9 @@ export function useMeetingRoom({
   const [isScreenSharing, setIsScreenSharing] = useState(false);
   const [isStartingScreenShare, setIsStartingScreenShare] = useState(false);
   const [isStoppingScreenShare, setIsStoppingScreenShare] = useState(false);
+  // Non-error info about the running share (no shared audio, lower frame rate than asked).
+  const [screenShareNotice, setScreenShareNotice] = useState<string | null>(null);
+  const [canShareScreen] = useState(isScreenShareSupported);
   const [isMicMuted, setIsMicMuted] = useState(false);
   const [isTogglingMic, setIsTogglingMic] = useState(false);
   const [micToggleError, setMicToggleError] = useState<string | null>(null);
@@ -270,6 +283,7 @@ export function useMeetingRoom({
   const localAudioTrackRef = useRef<LocalTrack | null>(null);
   const localVideoTrackRef = useRef<LocalVideoTrack | null>(null);
   const localScreenTrackRef = useRef<LocalVideoTrack | null>(null);
+  const localScreenAudioTrackRef = useRef<LocalAudioTrack | null>(null);
   const localScreenTrackCleanupRef = useRef<(() => void) | null>(null);
   const stoppingScreenShareRef = useRef(false);
   const isScreenSharingRef = useRef(false);
@@ -400,6 +414,7 @@ export function useMeetingRoom({
       setConnectionError(null);
       setMediaError(null);
       setScreenShareError(null);
+      setScreenShareNotice(null);
       setIsScreenSharing(false);
       setIsStartingScreenShare(false);
       setIsStoppingScreenShare(false);
@@ -875,7 +890,13 @@ export function useMeetingRoom({
     }
   }
 
-  async function startScreenShare(): Promise<void> {
+  /**
+   * Must be called straight from a click handler: getDisplayMedia is invoked
+   * synchronously inside so the browser keeps the user activation.
+   */
+  async function startScreenShare(
+    options: StartScreenShareOptions = { quality: "detail", includeAudio: false },
+  ): Promise<void> {
     if (
       !session
       || expiredShutdownRef.current
@@ -895,22 +916,46 @@ export function useMeetingRoom({
 
     setIsStartingScreenShare(true);
     setScreenShareError(null);
+    setScreenShareNotice(null);
 
     try {
-      const published = await publishScreenShareTrack(livekitRoom);
+      const published = await publishScreenShareTrack(livekitRoom, options);
       localScreenTrackRef.current = published.track;
+      localScreenAudioTrackRef.current = published.audioTrack;
 
-      const handleTrackEnded = () => {
+      // Stopping from the browser's native "Stop sharing" ends the video track:
+      // take the whole share down (video + audio). This is not an error.
+      const handleVideoEnded = () => {
         void stopScreenShare({
           reason: "track_ended",
           notifyBackend: true,
           signalWsFallback: false,
         });
       };
+      // Shared audio can end on its own (e.g. the tab's audio source goes away):
+      // drop only the audio and keep the screen up.
+      const audioTrack = published.audioTrack;
+      const handleAudioEnded = () => {
+        if (localScreenAudioTrackRef.current !== audioTrack) {
+          return;
+        }
+        const room = livekitRoomRef.current;
+        try {
+          if (room && audioTrack) {
+            unpublishScreenShareTrack(room, null, audioTrack);
+          }
+        } catch {
+          audioTrack?.stop();
+        }
+        localScreenAudioTrackRef.current = null;
+        refreshMediaRef.current?.();
+      };
 
-      published.track.mediaStreamTrack.addEventListener("ended", handleTrackEnded);
+      published.track.mediaStreamTrack.addEventListener("ended", handleVideoEnded);
+      audioTrack?.mediaStreamTrack.addEventListener("ended", handleAudioEnded);
       localScreenTrackCleanupRef.current = () => {
-        published.track.mediaStreamTrack.removeEventListener("ended", handleTrackEnded);
+        published.track.mediaStreamTrack.removeEventListener("ended", handleVideoEnded);
+        audioTrack?.mediaStreamTrack.removeEventListener("ended", handleAudioEnded);
       };
 
       const response = await api.startScreenShare(roomId, session.roomToken, {
@@ -920,6 +965,7 @@ export function useMeetingRoom({
       });
 
       setIsScreenSharing(response.active);
+      setScreenShareNotice(buildScreenShareNotice(published));
       patchSelfScreenShareState({
         active: true,
         track_sid: response.track_sid ?? published.trackSid,
@@ -930,9 +976,7 @@ export function useMeetingRoom({
     } catch (error) {
       clearLocalScreenTrack(livekitRoom);
       refreshMediaRef.current?.();
-      setScreenShareError(
-        error instanceof Error ? error.message : "Failed to start screen sharing.",
-      );
+      setScreenShareError(screenShareStartErrorMessage(error));
     } finally {
       setIsStartingScreenShare(false);
     }
@@ -951,7 +995,6 @@ export function useMeetingRoom({
       return;
     }
 
-    const reason = options?.reason ?? "manual_stop";
     const notifyBackend = options?.notifyBackend ?? true;
     const signalWsFallback = options?.signalWsFallback ?? false;
     const hasLocalScreenTrack = !!localScreenTrackRef.current;
@@ -963,6 +1006,7 @@ export function useMeetingRoom({
     stoppingScreenShareRef.current = true;
     setIsStoppingScreenShare(true);
     setScreenShareError(null);
+    setScreenShareNotice(null);
 
     try {
       if (session && notifyBackend) {
@@ -992,10 +1036,6 @@ export function useMeetingRoom({
       refreshMediaRef.current?.();
       setIsStoppingScreenShare(false);
       stoppingScreenShareRef.current = false;
-    }
-
-    if (reason === "track_ended") {
-      setScreenShareError("Screen sharing ended from browser controls.");
     }
   }
 
@@ -1441,6 +1481,7 @@ export function useMeetingRoom({
     setIsSendingChat(false);
     setMediaError(null);
     setScreenShareError(null);
+    setScreenShareNotice(null);
     setIsScreenSharing(false);
     setIsStartingScreenShare(false);
     setIsStoppingScreenShare(false);
@@ -2339,6 +2380,8 @@ export function useMeetingRoom({
     connectionError,
     mediaError,
     screenShareError,
+    screenShareNotice,
+    canShareScreen,
     isScreenSharing,
     isStartingScreenShare,
     isStoppingScreenShare,
@@ -2432,20 +2475,24 @@ export function useMeetingRoom({
 
   function clearLocalScreenTrack(livekitRoom: ReturnType<typeof createMeetingRoom> | null): void {
     const localTrack = localScreenTrackRef.current;
+    const localAudioTrack = localScreenAudioTrackRef.current;
     localScreenTrackCleanupRef.current?.();
     localScreenTrackCleanupRef.current = null;
 
     if (livekitRoom) {
       try {
-        unpublishScreenShareTrack(livekitRoom, localTrack);
+        unpublishScreenShareTrack(livekitRoom, localTrack, localAudioTrack);
       } catch {
+        localAudioTrack?.stop();
         localTrack?.stop();
       }
-    } else if (localTrack) {
-      localTrack.stop();
+    } else {
+      localAudioTrack?.stop();
+      localTrack?.stop();
     }
 
     localScreenTrackRef.current = null;
+    localScreenAudioTrackRef.current = null;
   }
 
   function patchSelfScreenShareState(next: {
@@ -2522,6 +2569,35 @@ export function useMeetingRoom({
       current.filter((entry) => entry.kind !== "relay"),
     );
   }
+}
+
+/** Info shown while sharing: never claims more than the browser actually captures. */
+export function buildScreenShareNotice(
+  published: Pick<PublishedScreenShare, "audioUnavailable" | "requested" | "actual">,
+): string | null {
+  const notices: string[] = [];
+  if (published.audioUnavailable) {
+    notices.push("Screen sharing started, but shared audio isn't available for this source or browser.");
+  }
+  const requestedFps = published.requested.frameRate;
+  const actualFps = published.actual.frameRate;
+  if (requestedFps && actualFps && actualFps < requestedFps * 0.9) {
+    notices.push(
+      `Your browser is capturing at up to ${actualFps} FPS (${requestedFps} FPS requested).`,
+    );
+  }
+  return notices.length > 0 ? notices.join(" ") : null;
+}
+
+/** Closing the picker is not an error (null); other failures get a short, generic message. */
+export function screenShareStartErrorMessage(error: unknown): string | null {
+  if (error instanceof ScreenShareCancelledError) {
+    return null;
+  }
+  if (error instanceof ScreenShareUnsupportedError) {
+    return "Screen sharing isn't supported on this device.";
+  }
+  return "Could not start screen sharing.";
 }
 
 function normalizeChatMessages(messages: ChatMessage[]): RoomChatMessage[] {

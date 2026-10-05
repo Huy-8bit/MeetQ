@@ -3,7 +3,7 @@
 > **Mục đích:** Tài liệu này mô tả MeetQ **ở góc nhìn sản phẩm và người dùng**: có những màn hình nào, người dùng làm gì ở từng màn hình, hệ thống phản hồi ra sao, và các quy tắc nghiệp vụ. Tài liệu **không** đi vào công nghệ.
 > Dùng file này làm **context đầu vào cho AI** khi cần viết prompt/spec cho một tính năng mới, để AI hiểu đúng sản phẩm hiện có và không đề xuất trùng hoặc mâu thuẫn.
 >
-> Snapshot: 2026-10-03 (sau đợt làm lại giao diện ngày 2026-10-03). Nhãn giao diện được giữ nguyên **bằng tiếng Anh, trong dấu ngoặc kép**, đúng như người dùng thấy trên màn hình.
+> Snapshot: 2026-10-05 (sau đợt làm lại giao diện ngày 2026-10-03; thêm phòng có mật khẩu và chia sẻ màn hình chất lượng cao ngày 2026-10-05). Nhãn giao diện được giữ nguyên **bằng tiếng Anh, trong dấu ngoặc kép**, đúng như người dùng thấy trên màn hình.
 
 ## Mục lục
 
@@ -103,6 +103,13 @@ Ngôn ngữ hỗ trợ (7): **Vietnamese, English, Japanese, Chinese, Korean, Fr
 - **R-04** Khi **người thật cuối cùng rời phòng**, phòng được coi là "trống" và hệ thống **tự tạo Final summary**. Nếu có người vào lại trước khi hết giờ, phòng hoạt động tiếp.
 - **R-05** Không giới hạn số người trong phòng (về sau có thể cấu hình).
 
+### Truy cập phòng (mật khẩu)
+
+- **R-06** Lúc tạo phòng chọn **"Room access"**: "Anyone with the link" (mặc định — ai có link đều vào được) hoặc "Require a password" (cần cả link lẫn mật khẩu). Mật khẩu dài **6–128 ký tự**, mọi ký tự đều hợp lệ, không có quy tắc độ phức tạp; phải nhập 2 lần ("Password" và "Confirm password"). Sau khi tạo **không** đổi hay bỏ được mật khẩu.
+- **R-07** Vào phòng có mật khẩu: Lobby hiện "Access: Password protected", dòng "This meeting requires a password." và ô **"Meeting password"**. Máy chủ kiểm tra mật khẩu **trước** khi cho vào phòng. Sai → "Incorrect meeting password." ngay dưới ô nhập. Mật khẩu chỉ hỏi lúc vào; tải lại trang = vào lại như người mới nên phải nhập lại (G10).
+- **R-08** Chống dò mật khẩu: sai quá **10 lần trong 10 phút** (tính theo tài khoản và theo địa chỉ mạng) thì bị chặn tạm thời: "Too many incorrect password attempts. Please wait a few minutes and try again."
+- **R-09** Riêng tư của phòng có mật khẩu: trước khi vào, người mở link chỉ thấy cấu hình phòng (ngôn ngữ, AI relay, thời gian còn lại) và **số** người trong phòng, kèm "You'll see who's here after you join." — **không** thấy tên người tham gia, câu nói hay chat. Final summary của phòng này chỉ người **đã từng vào phòng** mới xem được. Mật khẩu không bao giờ được lưu ở dạng đọc lại được, không nằm trong link, không được trình duyệt ghi nhớ, và **admin cũng không thấy** (Admin Portal chỉ hiện "Password protected" / "Public link").
+
 ### Ngôn ngữ
 
 - **R-10** Lúc tạo phòng phải chọn **ít nhất 1** ngôn ngữ, tối đa cả 7.
@@ -151,6 +158,18 @@ Ngôn ngữ hỗ trợ (7): **Vietnamese, English, Japanese, Chinese, Korean, Fr
 - **R-56** Dữ liệu lưu trữ được giữ **7 ngày** (mặc định) tính từ lúc cuộc họp kết thúc. Admin đổi được **mặc định của hệ thống** (chỉ áp dụng cho các cuộc họp kết thúc sau đó) và **thời hạn riêng của từng cuộc họp**. Người dùng thường **không** đổi được thời hạn.
 - **R-57** Hết thời hạn, **toàn bộ** bản ghi hình, câu gốc, bản dịch, chat, tóm tắt và dữ liệu người tham gia của cuộc họp đó **bị xoá vĩnh viễn**; chỉ còn dấu vết tối thiểu (mã cuộc họp, thời điểm xoá) cho vận hành. Admin cũng có thể "Delete now".
 - **R-58** Chỉ người **đã tham gia** cuộc họp (theo tài khoản Google, không theo tên hiển thị) mới xem/phát/tải được bản ghi và nội dung lưu trữ, kể cả sau khi đã rời phòng, trong thời hạn lưu trữ. Link phát/tải chỉ có hiệu lực vài phút.
+
+### Chia sẻ màn hình
+
+- **R-60** Bấm "Share screen" mở hộp **"Share screen"** để chọn chất lượng **trước** khi trình duyệt hỏi chọn màn hình/cửa sổ/tab:
+  - "High quality — 1080p · 30 FPS — Best for text, slides, and coding." (mặc định): ưu tiên độ nét; mạng yếu thì giảm số khung hình, giữ chữ sắc nét.
+  - "Smooth motion — 1080p · Up to 60 FPS — Best for video and animations.": ưu tiên độ mượt; mạng yếu thì giảm độ phân giải, giữ chuyển động mượt.
+
+  Lựa chọn chất lượng được nhớ trên trình duyệt. Hình không bao giờ bị phóng to quá kích thước gốc (tối đa 1080p). Người xem có mạng yếu tự nhận bản nhẹ hơn (720p) mà không ảnh hưởng người khác.
+- **R-61** Ô **"Include shared audio"** luôn **tắt** mỗi lần mở hộp. Khi bật, âm thanh của tab/màn hình được phát cho mọi người trong phòng. Nếu trình duyệt hoặc nguồn chia sẻ không cung cấp âm thanh, việc chia sẻ hình **vẫn tiếp tục** và hiện cảnh báo vàng "Screen sharing started, but shared audio isn't available for this source or browser." Mỗi người chỉ chia sẻ một màn hình (kèm tối đa một luồng âm thanh) tại một thời điểm.
+- **R-62** Âm thanh chia sẻ màn hình **không** được đưa vào AI relay: AI chỉ nghe micro của người thật, nên âm thanh này không được dịch, không vào transcript hay tóm tắt. Tuy nhiên, nếu đang ghi hình thì bản ghi **có** âm thanh này (bản ghi trộn mọi âm thanh đang phát trong phòng, R-53).
+- **R-63** Trung thực về chất lượng: nếu trình duyệt chỉ cấp số khung hình thấp hơn mức đã chọn, hiện cảnh báo vàng "Your browser is capturing at up to N FPS (60 FPS requested)." Giao diện **không bao giờ** ghi "60 FPS" khi thực tế không đạt.
+- **R-64** Dừng chia sẻ bằng "Stop sharing" hoặc bằng nút dừng của chính trình duyệt đều dừng **cả hình lẫn tiếng**, không hiện lỗi. Đóng bảng chọn màn hình của trình duyệt (huỷ) thì không có gì xảy ra và cũng không báo lỗi. Lỗi thật hiện "Could not start screen sharing." Thiết bị không hỗ trợ (điện thoại, tablet) thấy nút "Share screen" bị mờ, rê chuột hoặc focus thấy "Screen sharing isn't supported on this device."
 
 ---
 
@@ -251,8 +270,10 @@ Trong lúc kiểm tra đăng nhập khi mở app, chỉ hiện spinner; không h
 │ MeetQ joins your call as an   │ │ Room languages: [chip]x7     │ │
 │ AI interpreter...             │ │ AI relay: [Voice+Text|Text   │ │
 │                               │ │           Only|Off]          │ │
-│ • Live captions in every      │ │ [      Create room       ]   │ │
-│   language                    │ │ Rooms stay open for N min.   │ │
+│ • Live captions in every      │ │ Room access: [Anyone with the│ │
+│   language                    │ │   link | Require a password] │ │
+│                               │ │ [      Create room       ]   │ │
+│                               │ │ Rooms stay open for N min.   │ │
 │ • AI voice relay              │ └──────────────────────────────┘ │
 │ • Summary when you're done    │ ┌──────────────────────────────┐ │
 │                               │ │ Have a room link?            │ │
@@ -273,6 +294,7 @@ Trên mobile, form tạo phòng nằm ngay dưới tiêu đề.
 | Khối giới thiệu | Tiêu đề, mô tả, 3 tính năng, và một **ví dụ tĩnh**: câu tiếng Việt kèm 2 dòng relay EN/JA. Không tương tác được |
 | **"Room languages"** | 7 chip bật/tắt, chọn được nhiều chip. Dòng gợi ý bên dưới: "Select at least one language." hoặc "Vietnamese, Japanese selected" |
 | **"AI relay"** | Nút chọn 3 lựa chọn "Voice + Text" / "Text Only" / "Off". Lựa chọn nào không hợp lệ theo số ngôn ngữ thì bị khoá, rê chuột để xem lý do (bảng ở R-20). Dòng gợi ý đổi theo số ngôn ngữ đã chọn |
+| **"Room access"** | Nút chọn "Anyone with the link" (mặc định) / "Require a password". Chọn "Require a password" thì hiện 2 ô "Password" (gợi ý "At least 6 characters. Share it separately from the link.") và "Confirm password", có nút hiện/ẩn mật khẩu. Lỗi hiện ngay dưới ô: "Password must be at least 6 characters." / "Passwords don't match." (R-06) |
 | **"Create room"** | Khoá khi chưa chọn ngôn ngữ nào. Khi bấm sẽ hiện "Creating room…". Thành công → chuyển sang S2 của phòng mới |
 | **"Room ID or link"** + "Join" | Chấp nhận cả mã phòng lẫn link đầy đủ. Không hợp lệ → "Enter a valid room ID or link." Hợp lệ → chuyển sang S2 |
 | Footer | Link Contact (email) và LinkedIn |
@@ -285,8 +307,9 @@ flowchart TD
     B --> C{"Số ngôn ngữ"}
     C -- "2" --> D["Chọn AI relay:<br/>Voice + Text / Text Only / Off<br/>(mặc định là lựa chọn lần trước)"]
     C -- "1 hoặc ≥3" --> E["AI relay tự đặt Text Only<br/>2 lựa chọn còn lại bị khoá"]
-    D --> F["Bấm Create room"]
-    E --> F
+    D --> P["Chọn Room access<br/>(Require a password → nhập 2 lần)"]
+    E --> P
+    P --> F["Bấm Create room"]
     F --> G{"Kết quả"}
     G -- "thành công" --> H["Chuyển tới Lobby của phòng mới<br/>→ copy link gửi người khác"]
     G -- "lỗi" --> I["Hiện lỗi đỏ trong card<br/>(vd: Unsupported language)"]
@@ -296,6 +319,7 @@ flowchart TD
 
 - Lựa chọn "AI relay" gần nhất được nhớ trên trình duyệt.
 - Room languages **không** được nhớ; lần nào cũng chọn lại.
+- Room access và mật khẩu **không** được nhớ; mặc định luôn là "Anyone with the link".
 
 ---
 
@@ -313,6 +337,7 @@ flowchart TD
 │  Room       rm_abc123def456                   │
 │  Languages  Vietnamese, Japanese              │
 │  AI relay   Text + AI voice                   │
+│  Access     🔒 Password protected (nếu có)     │
 │  Time left  27m left                          │
 │ ───────────────────────────────────────────── │
 │  Your name      [ Huy                    ]    │
@@ -337,8 +362,10 @@ flowchart TD
 | **Time left** | Đếm ngược ("27m left"). Hiện "Expired" nếu hết hạn |
 | **"Your name"** | Tối đa 40 ký tự. Tự điền **tên Google**; nếu lần trước người này đã đổi sang tên khác thì điền tên đã đổi (nhớ riêng theo từng tài khoản). Vẫn sửa được trước khi vào |
 | **"Your language"** | Chỉ liệt kê Room languages. Tự chọn ngôn ngữ lần trước nếu có trong phòng. Phòng chỉ có 1 ngôn ngữ thì tự chọn luôn |
-| **"Join meeting"** | Khoá cho tới khi có tên và ngôn ngữ. Khi bấm hiện "Joining…" |
-| **"In this room N"** | Hiện tối đa 5 người thật (thêm dòng "+N more participants"), mỗi người kèm "Ngôn ngữ · Trạng thái", cộng dòng BRSE AI kèm mô tả chế độ. Phòng trống: "No one has joined yet. You'll be the first." |
+| **Access** | Chỉ hiện ở phòng có mật khẩu: "🔒 Password protected" |
+| **"Meeting password"** | Chỉ ở phòng có mật khẩu, kèm dòng "This meeting requires a password." Lỗi hiện ngay dưới ô: "Enter the meeting password." / "Incorrect meeting password." / chặn tạm thời khi sai nhiều lần (R-07, R-08) |
+| **"Join meeting"** | Khoá cho tới khi có tên và ngôn ngữ (và mật khẩu, nếu phòng yêu cầu). Khi bấm hiện "Joining…" |
+| **"In this room N"** | Hiện tối đa 5 người thật (thêm dòng "+N more participants"), mỗi người kèm "Ngôn ngữ · Trạng thái", cộng dòng BRSE AI kèm mô tả chế độ. Phòng trống: "No one has joined yet. You'll be the first." Phòng có mật khẩu chỉ hiện **số** người và "You'll see who's here after you join." (R-09) |
 
 ### Workflow
 
@@ -348,11 +375,12 @@ flowchart TD
     B -- "không tồn tại" --> X["S6 Room unavailable"]
     B -- "hết hạn" --> Y["S4 Meeting Ended"]
     B -- "còn hạn" --> C["Hiện Lobby, tự điền tên & ngôn ngữ đã nhớ"]
-    C --> D["Nhập tên + chọn ngôn ngữ"]
+    C --> D["Nhập tên + chọn ngôn ngữ<br/>(+ Meeting password nếu phòng có mật khẩu)"]
     D --> E["Join meeting"]
     E --> F{"Kết quả"}
     F -- "OK" --> G["Lưu tên & ngôn ngữ → vào S3<br/>trình duyệt xin quyền mic + camera"]
-    F -- "lỗi" --> H["Hiện lỗi đỏ dưới form<br/>(xem mục 15)"]
+    F -- "sai mật khẩu" --> W["'Incorrect meeting password.'<br/>dưới ô mật khẩu, nhập lại"]
+    F -- "lỗi khác" --> H["Hiện lỗi đỏ dưới form<br/>(xem mục 15)"]
     C -. "đồng hồ về 0 khi đang chờ" .-> Z["Form biến mất:<br/>'This meeting has ended' + Back to home"]
 ```
 
@@ -410,6 +438,7 @@ Các cảnh báo hiện xếp chồng dưới header:
 | Đỏ | "The host muted your microphone." |
 | Đỏ | Lỗi kết nối (mất kết nối, ngôn ngữ không hợp lệ…) |
 | Vàng | Lỗi bật/tắt AI relay, lỗi mic/camera/thiết bị, lỗi chia sẻ màn hình, lỗi thao tác mute |
+| Vàng | Lưu ý khi đang chia sẻ màn hình: không có âm thanh chia sẻ (R-61), số khung hình thấp hơn mức đã chọn (R-63) |
 
 ### S3.3 Stage (khu video)
 
@@ -439,7 +468,7 @@ stateDiagram-v2
 | Viền sáng | Khi người đó đang nói | — |
 | Nút 📌 | "Pin to stage" / "Unpin" | Có |
 
-**Chia sẻ màn hình:** nhãn "<Tên> is sharing" (thêm "+ N more" nếu nhiều người cùng chia sẻ; chỉ một màn hình được hiện lớn, ưu tiên màn hình của chính bạn). Trong lúc chờ hình hiện "Screen share is connecting…". Có thể ghim màn hình chia sẻ.
+**Chia sẻ màn hình:** nhãn "<Tên> is sharing" (thêm "+ N more" nếu nhiều người cùng chia sẻ; chỉ một màn hình được hiện lớn, ưu tiên màn hình của chính bạn). Trong lúc chờ hình hiện "Screen share is connecting…". Màn hình chia sẻ luôn hiện **đủ khung, đúng tỉ lệ** (không cắt). Góc trên phải có 2 nút: **"Full screen"** (chỉ hiện khi trình duyệt hỗ trợ; xem toàn màn hình trên nền đen, thoát bằng "Exit" hoặc phím Esc) và **"Pin"** / "Unpin" để ghim màn hình chia sẻ.
 
 ### S3.4 Thanh điều khiển (Control bar)
 
@@ -447,7 +476,7 @@ stateDiagram-v2
 | --- | --- |
 | "Mute" / "Unmute" | Bật/tắt mic. Nếu bị host mute thì hiện "Muted by host" và không tự mở lại được |
 | "Start video" / "Stop video" | Bật/tắt camera |
-| "Share screen" / "Stop sharing" | Chọn cửa sổ hoặc màn hình để chia sẻ. Trong lúc xử lý hiện "Starting…" / "Stopping…" |
+| "Share screen" / "Stop sharing" | "Share screen" mở hộp "Share screen" (chọn chất lượng và "Include shared audio", R-60, R-61) → "Share" → trình duyệt hỏi chọn màn hình/cửa sổ/tab. Trong lúc xử lý hiện "Starting…" / "Stopping…". Bị mờ trên thiết bị không hỗ trợ (R-64) |
 | "Record" / "Stop recording" | Chỉ hiện khi máy chủ hỗ trợ ghi hình. "Record" mở hộp xác nhận (R-50) → "Start recording". Khi đang ghi, nút đỏ "Stop recording" (dừng ngay, không hỏi lại). Trong lúc xử lý: "Starting…" / "Stopping…". Trên điện thoại chỉ hiện biểu tượng; chỉ báo REC luôn ở đầu trang |
 | ▤ (Show/Hide side panel) | Mở/đóng side panel |
 | ⚙ "Settings" | Mở ngăn kéo cài đặt (S3.6) |
@@ -727,6 +756,8 @@ Các hành vi sau là **có chủ đích**. Prompt tính năng mới không nên
 | Lựa chọn "AI relay" khi tạo phòng | Trình duyệt | Lâu dài |
 | Chế độ chat "Original/Translated" | Trình duyệt | Lâu dài |
 | Layout phòng | Trình duyệt | Lâu dài |
+| Chất lượng chia sẻ màn hình ("High quality" / "Smooth motion"). "Include shared audio" **không** được nhớ | Trình duyệt | Lâu dài |
+| Mật khẩu phòng (chỉ dạng mã hoá một chiều, không đọc lại được) | Máy chủ | Đến khi phòng hết hạn |
 | Theme chọn tay | — | Mất khi tải lại trang |
 | Phiên đang ở trong phòng | Tab hiện tại | Mất khi tải lại trang |
 | Câu nói và tin chat **gần đây** (để người vào sau xem lại) | Máy chủ | Đến khi phòng hết hạn |
@@ -747,12 +778,18 @@ Hệ thống **chỉ ghi hình khi có người bấm Record** (R-50) và luôn 
 | Home | "Select at least one room language." | Tạo phòng mà chưa chọn ngôn ngữ |
 | Home | "Unsupported language: …" / "Remove duplicate languages." / "Could not create room." | Lỗi khi tạo phòng |
 | Home | "Enter a valid room ID or link." | Mã/link không hợp lệ |
+| Home | "Password must be at least 6 characters." / "Password must be at most 128 characters." / "Passwords don't match." | Mật khẩu phòng không hợp lệ (R-06) |
+| Lobby | "Enter the meeting password." / "Incorrect meeting password." | Phòng có mật khẩu (R-07) |
+| Lobby | "Too many incorrect password attempts. Please wait a few minutes and try again." | Sai mật khẩu quá nhiều lần (R-08) |
 | Lobby | "Please enter your display name." / "Choose your language from the room languages." | Thiếu thông tin |
 | Lobby | "Room languages are unavailable. Reload the page or ask the host to recreate the room." | Phòng không có cấu hình ngôn ngữ |
 | Lobby | "Room is full." / "Room not found." / "This meeting has expired and is no longer accepting participants." / "LiveKit is unavailable right now." / "Display name must be 1 to 40 characters." / "Your language must match the room languages: …" / "Could not join room. Check backend availability." | Join thất bại |
 | Room | "This meeting has ended. The room time limit has been reached." | Hết giờ |
 | Room | "The host muted your microphone." | Bị mute |
 | Room | "Language must match the room languages: …" | Đổi sang ngôn ngữ không hợp lệ |
+| Room | "Screen sharing started, but shared audio isn't available for this source or browser." | Chọn "Include shared audio" nhưng không có âm thanh (R-61) |
+| Room | "Your browser is capturing at up to N FPS (M FPS requested)." | Số khung hình thực tế thấp hơn mức đã chọn (R-63) |
+| Room | "Could not start screen sharing." / "Screen sharing isn't supported on this device." | Lỗi chia sẻ màn hình (R-64). Huỷ bảng chọn của trình duyệt **không** hiện gì |
 | Room/Chat | "Sending…" / "Not sent" / "Translating…" | Trạng thái tin nhắn |
 | Summary | "No summary yet" / "Summary is being prepared" / "Not enough content yet" / "Summary failed" | Trạng thái tóm tắt |
 | Device check | "Pick two different languages." / "No speech detected…" | Kiểm tra thiết bị |
@@ -782,6 +819,9 @@ Khi viết tính năng mới, coi các mục dưới đây là **khoảng trốn
 | G15 | ~~Lệch thông tin thời hạn phòng~~ | Đã sửa (2026-10-03): Home lấy thời lượng từ cấu hình máy chủ |
 | G16 | Khi tạo phòng 1 hoặc từ 3 ngôn ngữ trở lên, không chọn được "Off" | Phải tạo rồi tắt AI bằng công tắc trong phòng |
 | G17 | ~~Giao diện quản trị / thống kê~~ | Đã có Admin Portal `/admin` (2026-10-03): chỉ đọc, một mật khẩu chung, chưa RBAC; usage/cost AI chưa có dữ liệu |
+| G18 | Đổi / bỏ mật khẩu phòng sau khi tạo | Không có (R-06). Muốn đổi thì tạo phòng mới |
+| G19 | Giới hạn trình duyệt khi chia sẻ màn hình | Chrome và Edge chia sẻ được âm thanh của **tab**; âm thanh **toàn hệ thống** chỉ có trên Windows và ChromeOS. Firefox và Safari thường **không** có âm thanh chia sẻ (hiện cảnh báo, hình vẫn chia sẻ, R-61). Điện thoại và tablet **không** chia sẻ màn hình được (R-64). Mức 60 FPS phụ thuộc trình duyệt và máy; không đạt thì hiện cảnh báo (R-63) |
+| G20 | Dịch âm thanh của màn hình chia sẻ | AI chỉ dịch giọng nói qua micro (R-62) |
 
 ---
 

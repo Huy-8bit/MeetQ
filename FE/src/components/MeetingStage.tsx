@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { Pin, PinOff, Video } from "lucide-react";
+import { Maximize2, Minimize2, Pin, PinOff, Video } from "lucide-react";
 import type { ParticipantSnapshot } from "../types/api";
 import type { ScreenShareFeed, VideoFeed } from "../types/livekit";
 import type { BrseRoomMode } from "../lib/brseModes";
@@ -182,10 +182,10 @@ function SharedScreenStage({
             <p>Screen share is connecting…</p>
           </div>
         )}
-        <ScreenSharePinButton
+        <ScreenShareActions
           isPinned={isPinned}
           displayName={selectedScreenSharer.display_name}
-          onClick={handleToggleSharePin}
+          onTogglePin={handleToggleSharePin}
         />
       </StageMediaSurface>
 
@@ -513,24 +513,65 @@ function StageTile({
   );
 }
 
-function ScreenSharePinButton({
+function ScreenShareActions({
   isPinned,
   displayName,
-  onClick,
+  onTogglePin,
 }: {
   isPinned: boolean;
   displayName: string;
-  onClick: () => void;
+  onTogglePin: () => void;
 }) {
+  const actionsRef = useRef<HTMLDivElement | null>(null);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const fullscreenEnabled = typeof document !== "undefined" && document.fullscreenEnabled === true;
+
+  useEffect(() => {
+    if (!fullscreenEnabled) {
+      return;
+    }
+
+    const handleChange = () => {
+      const frame = actionsRef.current?.closest(".stage-share-frame") ?? null;
+      setIsFullscreen(!!frame && document.fullscreenElement === frame);
+    };
+    handleChange();
+    document.addEventListener("fullscreenchange", handleChange);
+    return () => {
+      document.removeEventListener("fullscreenchange", handleChange);
+    };
+  }, [fullscreenEnabled]);
+
+  const handleToggleFullscreen = () => {
+    if (isFullscreen) {
+      void document.exitFullscreen().catch(() => undefined);
+      return;
+    }
+    const frame = actionsRef.current?.closest(".stage-share-frame");
+    void frame?.requestFullscreen().catch(() => undefined);
+  };
+
   return (
-    <div className="stage-share-action">
+    <div className="stage-share-action" ref={actionsRef}>
+      {fullscreenEnabled ? (
+        <button
+          className="tile-action"
+          type="button"
+          aria-label={isFullscreen ? "Exit full screen" : `Show ${displayName}'s shared screen full screen`}
+          title={isFullscreen ? "Exit full screen" : "Full screen"}
+          onClick={handleToggleFullscreen}
+        >
+          {isFullscreen ? <Minimize2 size={14} aria-hidden="true" /> : <Maximize2 size={14} aria-hidden="true" />}
+          <span>{isFullscreen ? "Exit" : "Full screen"}</span>
+        </button>
+      ) : null}
       <button
         className="tile-action"
         type="button"
         aria-label={isPinned ? `Unpin ${displayName}'s shared screen` : `Pin ${displayName}'s shared screen`}
         aria-pressed={isPinned}
         title={isPinned ? "Unpin shared screen" : "Pin shared screen"}
-        onClick={onClick}
+        onClick={onTogglePin}
       >
         {isPinned ? <PinOff size={14} aria-hidden="true" /> : <Pin size={14} aria-hidden="true" />}
         <span>{isPinned ? "Unpin" : "Pin"}</span>

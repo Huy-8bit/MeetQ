@@ -17,13 +17,15 @@ Tài liệu này ghi lại toàn bộ quá trình làm việc với Claude Code 
 | Backend production | ❌ Chưa deploy (không có quyền vào server) |
 | Meeting Recording + Archive + Retention (LiveKit Egress → S3) | ✅ Xong, đã test E2E local |
 | Tool Database Backup & Restore (MongoDB → S3) | ✅ Xong, có test integration |
-| **Feature A** — Phòng họp có mật khẩu | ✅ Backend + FE xong, có test. Còn: cập nhật doc 03 |
-| **Feature B** — Chia sẻ màn hình chất lượng cao 30/60 FPS + âm thanh | 🟡 **Đang làm dở** (xem mục 6) |
+| **Feature A** — Phòng họp có mật khẩu | ✅ Xong (backend + FE + test + doc 03) |
+| **Feature B** — Chia sẻ màn hình chất lượng cao 30/60 FPS + âm thanh | ✅ Xong 2026-10-05 (xem mục 6), chưa test tay trên trình duyệt thật |
 
 Kết quả test tại thời điểm bàn giao:
 
 - Backend: `262 passed`.
-- Frontend: `76 passed`; `tsc --noEmit` OK.
+- Frontend: `103 passed` (2026-10-05); `tsc --noEmit` OK; `npm run build` OK.
+  - Trên Node 22+ (máy mới dùng Node 25), `localStorage` toàn cục của Node che mất bản của jsdom làm 13 test auth fail;
+    `FE/src/test/setup.ts` đã thay bằng Storage trong bộ nhớ.
 - Tool backup: 28 test (23 unit + 5 integration, integration cần Docker + S3 local).
 
 ---
@@ -264,11 +266,11 @@ Chi tiết: `docs/database-backup-restore.md`. Code ở `tools/db_backup/`. DB l
 **Test**
 - `BE/tests/test_room_password.py` (22 test).
 
-**Còn lại:** cập nhật `docs/system-design/03-product-features-and-workflows.md`, gồm các phần: tạo phòng, lobby, rule R mới và screen share. Có thể viết thêm test FE cho RoomAccessFields và lobby.
+Doc 03 đã cập nhật (R-06…R-09, S1, S2, mục 14–16). Có thể viết thêm test FE cho RoomAccessFields và lobby.
 
 ---
 
-## 6. Feature B — Screen share chất lượng cao (ĐANG DỞ)
+## 6. Feature B — Screen share chất lượng cao (XONG 2026-10-05)
 
 ### 6.1 Đã xong
 
@@ -295,48 +297,20 @@ Chi tiết: `docs/database-backup-restore.md`. Code ở `tools/db_backup/`. DB l
   - `HumanAudioFeed` có thêm `source` (`microphone` | `screen_share_audio`) và `trackSid`.
   - Audio màn hình của người khác đã phát được qua `AudioTrackSink`; key sink `human-${participantId}-${track.sid}` là duy nhất.
 
-### 6.2 Còn phải làm (theo thứ tự)
+### 6.2 Đã làm thêm ngày 2026-10-05
 
-1. **`FE/src/features/room/useMeetingRoom.ts`:**
-   - `startScreenShare(options: { quality, includeAudio })` truyền xuống `publishScreenShareTrack`.
-   - Thêm `localScreenAudioTrackRef`. `clearLocalScreenTrack` gọi `unpublishScreenShareTrack(room, videoRef, audioRef)`.
-   - Gắn listener `ended`:
-     - video kết thúc → dừng toàn bộ (gỡ cả 2 track và cập nhật UI);
-     - chỉ audio kết thúc → chỉ gỡ audio.
-   - Bỏ thông báo lỗi "Screen sharing ended from browser controls." khi người dùng dừng từ native.
-   - Xử lý lỗi:
-     - `ScreenShareCancelledError` → không hiện gì.
-     - `ScreenShareUnsupportedError` → "Screen sharing isn't supported on this device."
-     - Lỗi khác → "Could not start screen sharing."
-   - Thêm state `screenShareNotice`:
-     - Khi `audioUnavailable`: "Screen sharing started, but shared audio isn't available for this source or browser."
-     - Khi FPS thật thấp hơn yêu cầu: thông báo trung thực, **không** giả là 60 fps.
-   - Export thêm `canShareScreen` và `screenShareNotice`.
-2. **Dialog trước khi share** (component mới, ví dụ `ScreenShareDialog.tsx`):
-   - Tiêu đề "Share screen".
-   - Lựa chọn chất lượng (radio):
-     - "High quality — 1080p · 30 FPS — Best for text, slides, and coding." (mặc định)
-     - "Smooth motion — 1080p · Up to 60 FPS — Best for video and animations."
-   - Checkbox "Include shared audio": mặc định TẮT mỗi lần mở dialog.
-   - Chỉ lưu lựa chọn chất lượng vào localStorage (ví dụ `meetq:screen-share-quality`).
-   - Nút xác nhận phải gọi `getDisplayMedia` ngay, để không mất user activation.
-3. **Nối vào `RoomControlBar` / `RoomPage`:**
-   - Nút share mở dialog.
-   - Ẩn hoặc disable nút khi `!canShareScreen` và hiện tooltip "Screen sharing isn't supported on this device."
-   - Hiển thị notice.
-4. **`MeetingStage.tsx`:**
-   - Thêm nút Fullscreen cạnh nút Pin trong `.stage-share-action`.
-   - Dùng `requestFullscreen` trên `.stage-share-frame`, chỉ hiện khi `document.fullscreenEnabled`.
-   - Thêm CSS `:fullscreen { background:#000 }`.
-   - Stage đã dùng `object-fit: contain`. Giữ nguyên hành vi pin và nhiều người cùng share.
-5. **Test FE:**
-   - Dialog: mặc định, nhớ chất lượng, audio luôn tắt mặc định.
-   - Mock `getDisplayMedia`: hủy picker, không có audio track → warning, lỗi thật, không hỗ trợ.
-   - Dừng native gỡ cả 2 track.
-6. **Cập nhật doc 03:**
-   - Room creation, lobby, các rule R mới, screen share.
-   - Ghi rõ: audio màn hình **không** đưa vào AI (chỉ micro), nhưng bản ghi âm vẫn có vì Egress room composite trộn mọi audio.
-7. Báo cáo cuối theo §76 của spec A/B (tóm tắt thay đổi, bitrate, giới hạn trình duyệt, file đã sửa).
+- `useMeetingRoom.ts`: `startScreenShare({ quality, includeAudio })`; `localScreenAudioTrackRef`; video `ended` → dừng cả 2 track,
+  audio `ended` → chỉ gỡ audio; bỏ lỗi "ended from browser controls"; `screenShareNotice`, `canShareScreen`.
+  Helper export: `buildScreenShareNotice`, `screenShareStartErrorMessage`.
+- `ScreenShareDialog.tsx` (mới): 2 lựa chọn chất lượng, "Include shared audio" luôn tắt khi mở; chỉ nhớ chất lượng
+  (`meetq:screen-share-quality`, helper trong `lib/uiPreferences.ts`). Nút "Share" gọi `startScreenShare` đồng bộ.
+- `RoomControlBar`: prop `canShareScreen`; khi không hỗ trợ dùng `aria-disabled` + tooltip. `RoomPage`: mở dialog, hiện notice.
+- `MeetingStage`: `ScreenShareActions` = nút "Full screen" (chỉ khi `document.fullscreenEnabled`) + Pin; CSS `:fullscreen` nền đen.
+- Test mới: `lib/livekit.screenShare.test.ts`, `components/ScreenShareDialog.test.tsx`,
+  `features/room/useMeetingRoom.screenShare.test.ts`, `features/room/screenShareMessages.test.ts`.
+- Doc 03: R-60…R-64, S3.2–S3.4, mục 14–16 (G18–G20).
+
+**Còn lại:** test tay trên Chrome/Edge/Firefox/Safari (share tab có audio, 60 FPS, dừng bằng nút native, fullscreen).
 
 Giới hạn trình duyệt cần ghi vào doc:
 - Chrome và Edge chia sẻ được audio của tab. Audio toàn hệ thống chỉ có trên Windows/ChromeOS.
@@ -384,4 +358,4 @@ Giới hạn trình duyệt cần ghi vào doc:
 | `docs/security.md` | Bảo mật |
 | `docs/STATE.md`, `docs/TASKS.md` | Trạng thái/tác vụ cũ (cập nhật lần cuối 2026-04-29, đã lỗi thời so với file này) |
 
-Khi mở phiên Claude Code mới trên máy mới, hãy bảo Claude đọc `docs/HANDOFF.md` trước, rồi làm tiếp từ mục 6.2.
+Khi mở phiên Claude Code mới trên máy mới, hãy bảo Claude đọc `docs/HANDOFF.md` trước. Feature A/B đã xong; việc còn lại xem mục 3 và mục 6.2.

@@ -403,6 +403,20 @@
   z-index: 2;
   top: var(--space-2);
   right: var(--space-2);
+  display: flex;
+  gap: var(--space-1);
+}
+
+/* Fullscreen keeps the share letterboxed (object-fit: contain) on black. */
+.stage-share-frame:fullscreen {
+  width: 100% !important;
+  height: 100% !important;
+  border-radius: 0;
+  background: #000;
+}
+
+.stage-share-frame::backdrop {
+  background: #000;
 }
 
 .stage-strip {
@@ -664,8 +678,13 @@
   background: var(--color-surface-hover);
 }
 
-.control-btn:disabled {
+.control-btn:disabled,
+.control-btn.is-unavailable {
   opacity: 0.5;
+}
+
+.control-btn.is-unavailable {
+  cursor: not-allowed;
 }
 
 .control-btn-icon {
@@ -1192,4 +1211,76 @@
 /* Remote audio elements play but never take up layout space. */
 .audio-sinks {
   display: none;
+}
+
+/* ─── Share screen dialog ─────────────────────────────────────────────── */
+.share-quality {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.share-quality legend {
+  margin-bottom: var(--space-2);
+  padding: 0;
+}
+
+.share-quality-option {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: border-color var(--duration-fast) var(--ease), background-color var(--duration-fast) var(--ease);
+}
+
+.share-quality-option:hover {
+  background: var(--color-surface-hover);
+}
+
+.share-quality-option.is-selected {
+  border-color: var(--color-accent);
+  background: var(--color-accent-soft);
+}
+
+.share-quality-option input,
+.share-audio-option input {
+  margin-top: 2px;
+  accent-color: var(--color-accent);
+}
+
+.share-quality-text {
+  display: grid;
+  gap: 2px;
+}
+
+.share-quality-title {
+  font-weight: var(--weight-medium);
+}
+
+.share-quality-spec {
+  color: var(--color-text-secondary);
+  font-weight: var(--weight-regular);
+}
+
+.share-quality-detail {
+  color: var(--color-text-tertiary);
+  font-size: var(--text-sm);
+}
+
+.share-audio {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.share-audio-option {
+  display: inline-flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  cursor: pointer;
+  font-weight: var(--weight-medium);
 }

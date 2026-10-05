@@ -21,6 +21,8 @@ interface RoomControlBarProps {
   isScreenSharing: boolean;
   isStartingScreenShare: boolean;
   isStoppingScreenShare: boolean;
+  /** False when the browser has no getDisplayMedia (phones, tablets). */
+  canShareScreen?: boolean;
   isLeaving: boolean;
   onToggleMic: () => void;
   onToggleCamera: () => void;
@@ -42,6 +44,7 @@ export function RoomControlBar({
   isScreenSharing,
   isStartingScreenShare,
   isStoppingScreenShare,
+  canShareScreen = true,
   isLeaving,
   onToggleMic,
   onToggleCamera,
@@ -84,6 +87,9 @@ export function RoomControlBar({
             isScreenSharing ? "Stop sharing" : "Share screen"
           }
           icon={<MonitorUp size={18} />}
+          unavailableReason={
+            canShareScreen || isScreenSharing ? undefined : "Screen sharing isn't supported on this device."
+          }
         />
         {recordControl}
       </div>
@@ -130,6 +136,7 @@ function ControlButton({
   onClick,
   label,
   icon,
+  unavailableReason,
 }: {
   /** "off" = muted/camera off, "active" = presenting. Label text always states it too. */
   state: "on" | "off" | "active";
@@ -138,16 +145,23 @@ function ControlButton({
   onClick: () => void;
   label: string;
   icon: ReactNode;
+  /**
+   * The control can't work here. Uses aria-disabled (not `disabled`) so the
+   * tooltip explaining why still shows on hover/focus.
+   */
+  unavailableReason?: string;
 }) {
+  const unavailable = !!unavailableReason;
   return (
     <button
-      className={`control-btn is-${state}`}
+      className={`control-btn is-${state}${unavailable ? " is-unavailable" : ""}`}
       type="button"
-      onClick={onClick}
+      onClick={unavailable ? undefined : onClick}
       disabled={disabled}
-      aria-label={label}
+      aria-disabled={unavailable || undefined}
+      aria-label={unavailable ? `${label} (${unavailableReason})` : label}
       aria-busy={busy || undefined}
-      title={label}
+      title={unavailableReason ?? label}
     >
       <span className="control-btn-icon" aria-hidden="true">{busy ? <Spinner /> : icon}</span>
       <span className="control-btn-label">{label}</span>
