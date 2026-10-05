@@ -8,8 +8,9 @@ from server.service.media.livekit_runtime import LiveKitRuntime
 
 
 @pytest.fixture
-def runtime(fake_settings):
-    return LiveKitRuntime("rm_test", fake_settings, lambda _: None, lambda _: None, lambda *_: None)
+def runtime():
+    # The source filter needs no connection; skip __init__ (rtc.Room() wants an event loop).
+    return LiveKitRuntime.__new__(LiveKitRuntime)
 
 
 def _publication(source, kind=rtc.TrackKind.KIND_AUDIO):
