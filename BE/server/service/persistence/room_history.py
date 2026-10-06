@@ -48,6 +48,10 @@ class MongoRoomHistoryRepository:
     participants_collection = "room_participants"
     messages_collection = "room_messages"
     summaries_collection = "meeting_summaries"
+    # One per (room, signed-in user): role, first join, last leave, removal.
+    memberships_collection = "room_memberships"
+    settings_collection = "system_settings"
+    MEMBERSHIP_MIGRATION_ID = "history_membership_v1"
 
     def __init__(self, db: Optional[Any]):
         self.db = db
@@ -156,12 +160,51 @@ class MongoRoomHistoryRepository:
             [("summary_type", ASCENDING), ("status", ASCENDING), ("generated_at", DESCENDING)],
             name="meeting_summaries_by_status",
         )
+        # Meeting history ("My meetings"): every list query starts from the user ID.
+        await self.db[self.memberships_collection].create_index(
+            [("room_id", ASCENDING), ("user_id", ASCENDING)],
+            unique=True,
+            name="uniq_room_membership",
+        )
+        await self.db[self.memberships_collection].create_index(
+            [("user_id", ASCENDING), ("room_id", ASCENDING)],
+            name="memberships_by_user",
+        )
+        await self.db[self.rooms_collection].create_index(
+            [("member_user_ids", ASCENDING), ("history_sort_at_dt", DESCENDING), ("room_id", ASCENDING)],
+            name="rooms_by_member_recent",
+        )
+        await self.db[self.rooms_collection].create_index(
+            [("created_by_user_id", ASCENDING), ("history_sort_at_dt", DESCENDING), ("room_id", ASCENDING)],
+            name="rooms_by_creator_recent",
+        )
+        # Full transcript / relay / chat: cursor pages in (created_at, message_id) order.
+        await self.db[self.messages_collection].create_index(
+            [("room_id", ASCENDING), ("kind", ASCENDING), ("created_at", ASCENDING), ("message_id", ASCENDING)],
+            name="room_messages_by_kind_cursor",
+        )
+        # Full transcript: an utterance's translations are looked up by utterance ID.
+        await self.db[self.messages_collection].create_index(
+            [("room_id", ASCENDING), ("utterance_id", ASCENDING)],
+            name="room_messages_by_utterance",
+        )
+        await self.migrate_membership_history()
 
-    async def persist_room_created(self, room: RoomState, *, share_url: Optional[str] = None) -> None:
+    async def persist_room_created(
+        self,
+        room: RoomState,
+        *,
+        share_url: Optional[str] = None,
+        created_by_user_id: Optional[str] = None,
+    ) -> None:
         now = self._now_str()
         room_doc = self._room_doc_from_state(room, updated_at=now)
+        if created_by_user_id:
+            # Canonical owner of the room (its host). Never inferred from names.
+            room_doc["created_by_user_id"] = created_by_user_id
         room_doc.update(
             {
+                "history_sort_at_dt": self._parse_dt(room.created_at),
                 "activated_at": getattr(room, "activated_at", None),
                 "emptied_at": getattr(room, "emptied_at", None),
                 "ended_at": None,
@@ -187,9 +230,12 @@ class MongoRoomHistoryRepository:
                     "created_by": "gateway",
                 },
                 "$set": self._without_keys(room_doc, {"room_id"}),
+                **({"$addToSet": {"member_user_ids": created_by_user_id}} if created_by_user_id else {}),
             },
             upsert=True,
         )
+        if created_by_user_id:
+            await self.persist_membership(room.room_id, created_by_user_id, role="host", is_creator=True)
 
         for virtual_participant in room.virtual_participants:
             participant = (
@@ -842,6 +888,182 @@ class MongoRoomHistoryRepository:
             error=error[:1000],
         )
 
+    # ── Memberships (stable user ID ↔ room) ────────────────────────────────────
+
+    async def persist_membership(
+        self,
+        room_id: str,
+        user_id: str,
+        *,
+        role: Optional[str] = None,
+        display_name: Optional[str] = None,
+        language: Optional[str] = None,
+        joined_at: Optional[str] = None,
+        is_creator: bool = False,
+    ) -> None:
+        """Upsert the user's membership; a join also links the room to the user's history."""
+        now = self._now_str()
+        fields: Dict[str, Any] = {"updated_at": now, "updated_at_dt": self._parse_dt(now)}
+        if role:
+            fields["role"] = role
+        if display_name:
+            fields["display_name"] = display_name
+        if language:
+            fields["language"] = language
+        if joined_at:
+            fields.update(
+                {
+                    "last_joined_at": joined_at,
+                    "last_joined_at_dt": self._parse_dt(joined_at),
+                    "left_at": None,
+                    "left_at_dt": None,
+                }
+            )
+        on_insert: Dict[str, Any] = {
+            "room_id": room_id,
+            "user_id": user_id,
+            "is_creator": is_creator,
+            "removed_at": None,
+            "removed_by_user_id": None,
+            "created_at": now,
+            "created_at_dt": self._parse_dt(now),
+        }
+        if not role:
+            on_insert["role"] = "participant"
+        await self.db[self.memberships_collection].update_one(
+            {"room_id": room_id, "user_id": user_id},
+            {"$setOnInsert": on_insert, "$set": fields},
+            upsert=True,
+        )
+        if joined_at:
+            await self.db[self.memberships_collection].update_one(
+                {"room_id": room_id, "user_id": user_id, "first_joined_at": {"$exists": False}},
+                {"$set": {"first_joined_at": joined_at, "first_joined_at_dt": self._parse_dt(joined_at)}},
+            )
+        room_update: Dict[str, Any] = {"member_user_ids": user_id}
+        if joined_at:
+            room_update["joined_user_ids"] = user_id
+        await self.db[self.rooms_collection].update_one(
+            {"room_id": room_id},
+            {
+                "$setOnInsert": {"room_id": room_id, "created_by": "gateway"},
+                "$addToSet": room_update,
+            },
+            upsert=True,
+        )
+
+    async def persist_membership_left(self, room_id: str, user_id: str, *, left_at: str) -> None:
+        await self.db[self.memberships_collection].update_one(
+            {"room_id": room_id, "user_id": user_id},
+            {"$set": {"left_at": left_at, "left_at_dt": self._parse_dt(left_at), "updated_at": self._now_str()}},
+        )
+
+    async def persist_membership_removed(
+        self,
+        room_id: str,
+        user_id: str,
+        *,
+        removed_at: str,
+        removed_by_user_id: Optional[str],
+    ) -> None:
+        """Removed users keep a record (for the host) but lose access to the meeting's history."""
+        await self.db[self.memberships_collection].update_one(
+            {"room_id": room_id, "user_id": user_id},
+            {
+                "$set": {
+                    "removed_at": removed_at,
+                    "removed_at_dt": self._parse_dt(removed_at),
+                    "removed_by_user_id": removed_by_user_id,
+                    "left_at": removed_at,
+                    "left_at_dt": self._parse_dt(removed_at),
+                    "updated_at": self._now_str(),
+                }
+            },
+        )
+        await self.db[self.rooms_collection].update_one(
+            {"room_id": room_id},
+            {"$pull": {"member_user_ids": user_id}},
+        )
+
+    async def persist_room_flags(self, room_id: str, fields: Dict[str, Any]) -> None:
+        """Small room-level facts used by history filters (lock state, has_recording, …)."""
+        await self.db[self.rooms_collection].update_one(
+            {"room_id": room_id},
+            {"$setOnInsert": {"room_id": room_id, "created_by": "gateway"}, "$set": fields},
+            upsert=True,
+        )
+
+    async def migrate_membership_history(self, *, batch_limit: int = 20000) -> int:
+        """One-time backfill so meetings from before roles existed appear in My meetings.
+
+        Only the stable user ID recorded at join time (`room_participants.user_id`) is
+        used. Display names are never matched to accounts. Nobody is made host of an old
+        room: its creator was never recorded.
+        """
+        settings = self.db[self.settings_collection]
+        if await settings.find_one({"_id": self.MEMBERSHIP_MIGRATION_ID, "done": True}):
+            return 0
+        participants = await self.db[self.participants_collection].find(
+            {"user_id": {"$exists": True}, "is_virtual": {"$ne": True}}
+        ).to_list(length=batch_limit)
+        for doc in participants:
+            room_id = doc.get("room_id")
+            user_id = doc.get("user_id")
+            if not room_id or not user_id:
+                continue
+            joined_at = doc.get("first_joined_at") or doc.get("last_joined_at")
+            await self.db[self.memberships_collection].update_one(
+                {"room_id": room_id, "user_id": user_id},
+                {
+                    "$setOnInsert": {
+                        "room_id": room_id,
+                        "user_id": user_id,
+                        "role": "participant",
+                        "is_creator": False,
+                        "removed_at": None,
+                        "display_name": doc.get("display_name"),
+                        "language": doc.get("language"),
+                        "first_joined_at": joined_at,
+                        "last_joined_at": doc.get("last_joined_at") or joined_at,
+                        "left_at": doc.get("last_left_at"),
+                        "legacy_backfill": True,
+                        "created_at": self._now_str(),
+                    }
+                },
+                upsert=True,
+            )
+            await self.db[self.rooms_collection].update_one(
+                {"room_id": room_id},
+                {"$addToSet": {"member_user_ids": user_id, "joined_user_ids": user_id}},
+            )
+        rooms = await self.db[self.rooms_collection].find(
+            {"history_sort_at_dt": {"$exists": False}}
+        ).to_list(length=batch_limit)
+        for room in rooms:
+            sort_at = (
+                room.get("ended_at_dt")
+                or room.get("activated_at_dt")
+                or room.get("created_at_dt")
+                or self._parse_dt(room.get("ended_at") or room.get("created_at"))
+            )
+            await self.db[self.rooms_collection].update_one(
+                {"room_id": room["room_id"]},
+                {"$set": {"history_sort_at_dt": sort_at}},
+            )
+        done = len(participants) < batch_limit and len(rooms) < batch_limit
+        await settings.update_one(
+            {"_id": self.MEMBERSHIP_MIGRATION_ID},
+            {"$set": {"done": done, "updated_at": self._now_str(), "memberships": len(participants)}},
+            upsert=True,
+        )
+        logger.info(
+            "history membership backfill memberships=%s rooms_sorted=%s done=%s",
+            len(participants),
+            len(rooms),
+            done,
+        )
+        return len(participants)
+
     async def get_meeting_summary(self, room_id: str, *, summary_type: str = "final") -> Optional[Dict[str, Any]]:
         doc = await self.db[self.summaries_collection].find_one(
             {"room_id": room_id, "summary_type": summary_type},
@@ -907,6 +1129,8 @@ class MongoRoomHistoryRepository:
                 {
                     "state": "active",
                     "ended_at": None,
+                    "history_sort_at_dt": self._parse_dt(self._value(room, "activated_at"))
+                    or self._parse_dt(self._value(room, "created_at")),
                     "duration_seconds": None,
                     "status_summary": {
                         "state": "active",
@@ -963,6 +1187,8 @@ class MongoRoomHistoryRepository:
                     "state": state,
                     "ended_at": ended_at,
                     "ended_at_dt": self._parse_dt(ended_at),
+                    # My meetings sort by end time, active meetings by when they started.
+                    **({"history_sort_at_dt": self._parse_dt(ended_at)} if terminal and ended_at else {}),
                     "participant_count_current": current_human_count,
                     "status_summary": {
                         "state": state,
@@ -1022,6 +1248,8 @@ class MongoRoomHistoryRepository:
             "audio_routing": self._model_dump(self._value(room, "audio_routing", {})),
             # Only the flag; the password hash never leaves Redis.
             "password_required": bool(self._value(room, "password_required", False)),
+            "title": self._value(room, "title"),
+            "locked": bool(self._value(room, "locked", False)),
             "virtual_participants": [
                 self._model_dump(participant)
                 for participant in self._value(room, "virtual_participants", []) or []

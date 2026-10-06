@@ -24,6 +24,7 @@ import { MeetingSummaryPanel } from "../components/MeetingSummaryPanel";
 import { MeetingStage, type PinnedStageTarget } from "../components/MeetingStage";
 import { MeetingViewPanel } from "../components/MeetingViewPanel";
 import { RoomControlBar } from "../components/RoomControlBar";
+import { RoomSecurityPanel } from "../components/RoomSecurityPanel";
 import { ScreenShareDialog } from "../components/ScreenShareDialog";
 import { RecordButton, RecordingIndicator } from "../components/RecordingControls";
 import { MeetingRecordingSection } from "../components/MeetingRecordingSection";
@@ -366,9 +367,10 @@ export function RoomPage() {
     }
   }
 
-  const roomAlerts: Array<{ tone: "danger" | "warning"; message: string }> = [
+  const roomAlerts: Array<{ tone: "danger" | "warning" | "info"; message: string }> = [
     isRoomExpired ? { tone: "danger" as const, message: "This meeting has ended. The room time limit has been reached." } : null,
-    meeting.isMutedByHost ? { tone: "danger" as const, message: "The host muted your microphone." } : null,
+    meeting.isMutedByHost ? { tone: "warning" as const, message: "The host muted your microphone. You can unmute when you're ready." } : null,
+    meeting.roleNotice ? { tone: "info" as const, message: meeting.roleNotice } : null,
     meeting.connectionError ? { tone: "danger" as const, message: meeting.connectionError } : null,
     meeting.brseToggleError ? { tone: "warning" as const, message: meeting.brseToggleError } : null,
     meeting.relayModeError ? { tone: "warning" as const, message: meeting.relayModeError } : null,
@@ -383,7 +385,7 @@ export function RoomPage() {
       tone: notice.tone === "danger" ? ("danger" as const) : ("warning" as const),
       message: notice.message,
     })),
-  ].filter((alert): alert is { tone: "danger" | "warning"; message: string } => alert !== null);
+  ].filter((alert): alert is { tone: "danger" | "warning" | "info"; message: string } => alert !== null);
 
   if (loadingSnapshot && !roomSnapshot && !session) {
     return (
@@ -392,6 +394,24 @@ export function RoomPage() {
           <Spinner size="lg" />
           <p className="text-secondary">Loading room…</p>
         </div>
+      </main>
+    );
+  }
+
+  // Removed by the host: the server refuses a rejoin, so don't offer one.
+  if (meeting.removedFromMeeting) {
+    return (
+      <main className="room-removed">
+        <EmptyState
+          icon={<AlertCircle size={20} />}
+          title="You were removed from the meeting by the host."
+          description={
+            meeting.removedFromMeeting.by
+              ? `${meeting.removedFromMeeting.by} removed you. You can't rejoin this meeting.`
+              : "You can't rejoin this meeting."
+          }
+          action={<Link to="/" className={buttonClassName({ variant: "primary" })}>Back to home</Link>}
+        />
       </main>
     );
   }
@@ -468,7 +488,10 @@ export function RoomPage() {
         brseEnabled={meeting.brseEnabled}
         brseRoomMode={meeting.brseRoomMode}
         isTogglingBrse={meeting.isTogglingBrse}
-        canToggleBrse={meeting.canToggleBrse && !isRoomExpired}
+        canToggleBrse={meeting.canToggleBrse && meeting.permissions.can_manage_ai && !isRoomExpired}
+        canManageAi={meeting.permissions.can_manage_ai}
+        title={meeting.roomTitle}
+        locked={meeting.roomLocked}
         onChangeLanguage={(language) => meeting.changeLanguage(language)}
         onToggleBrse={(nextEnabled) => {
           void meeting.toggleBrseMode(nextEnabled);
@@ -476,7 +499,7 @@ export function RoomPage() {
         relayMode={meeting.relayMode}
         relayModes={meeting.selectableRelayModes}
         isUpdatingRelayMode={meeting.isUpdatingRelayMode}
-        canChangeRelayMode={meeting.canChangeRelayMode && !isRoomExpired}
+        canChangeRelayMode={meeting.canChangeRelayMode && meeting.permissions.can_manage_ai && !isRoomExpired}
         onChangeRelayMode={(mode) => {
           void meeting.changeRelayMode(mode);
         }}
@@ -512,7 +535,8 @@ export function RoomPage() {
 
           <RoomControlBar
             recordControl={
-              recording.available ? (
+              // Only the host and co-hosts start/stop recording; everyone sees ● REC.
+              recording.available && meeting.permissions.can_manage_recording ? (
                 <RecordButton
                   recording={recording.active}
                   isStarting={recording.isStarting}
@@ -604,19 +628,33 @@ export function RoomPage() {
           }
           summary={renderSummaryPanel(isRoomExpired)}
           people={
-            <ParticipantList
-              participants={meeting.participants}
-              selfParticipantId={meeting.selfState?.participant_id}
-              isCurrentUserHost={meeting.isCurrentUserHost}
-              onMuteParticipant={(participantId) => {
-                void meeting.muteParticipant(participantId);
-              }}
-              isMutingParticipant={meeting.isMutingParticipant}
-              brseEnabled={meeting.brseEnabled}
-              brseRoomMode={meeting.brseRoomMode}
-              brseAudioExpected={meeting.brseAudioExpected}
-              embedded
-            />
+            <>
+              <RoomSecurityPanel
+                passwordRequired={meeting.passwordRequired}
+                locked={meeting.roomLocked}
+                permissions={meeting.permissions}
+                pendingAction={meeting.pendingManagementAction}
+                disabled={isRoomExpired || meeting.isLeaving}
+                onSetLocked={(locked) => void meeting.setRoomLocked(locked)}
+                onChangePassword={meeting.changeRoomPassword}
+                onRemovePassword={() => void meeting.removeRoomPassword()}
+              />
+              <ParticipantList
+                participants={meeting.participants}
+                selfParticipantId={meeting.selfState?.participant_id}
+                selfRole={meeting.selfRole}
+                permissions={meeting.permissions}
+                pendingAction={meeting.pendingManagementAction}
+                isMutingParticipant={meeting.isMutingParticipant}
+                onMuteParticipant={(participantId) => void meeting.muteParticipant(participantId)}
+                onRemoveParticipant={(participantId) => void meeting.removeParticipant(participantId)}
+                onSetRole={(participantId, role) => void meeting.setParticipantRole(participantId, role)}
+                brseEnabled={meeting.brseEnabled}
+                brseRoomMode={meeting.brseRoomMode}
+                brseAudioExpected={meeting.brseAudioExpected}
+                embedded
+              />
+            </>
           }
         />
       </div>
@@ -643,6 +681,7 @@ export function RoomPage() {
             void meeting.changeRelayMode(mode);
           }}
           relayModeError={meeting.relayModeError}
+          readOnly={!meeting.permissions.can_manage_ai}
         />
         <AudioDevicePanel
           isMicMuted={meeting.isMicMuted}
@@ -741,6 +780,12 @@ function mapJoinError(error: ApiError, meetingLanguages: MeetingLanguage[]): str
   }
   if (error.code === "livekit_unavailable") {
     return "LiveKit is unavailable right now.";
+  }
+  if (error.code === "room_locked") {
+    return "This meeting is locked by the host.";
+  }
+  if (error.code === "removed_from_room") {
+    return "You were removed from this meeting.";
   }
   if (error.code === "room_password_rate_limited") {
     return "Too many incorrect password attempts. Please wait a few minutes and try again.";

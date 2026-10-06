@@ -5,6 +5,8 @@ import type {
   CreateRoomResponse,
   MuteParticipantRequest,
   MuteParticipantResponse,
+  RoomPermissionsResponse,
+  RoomRole,
   ScreenShareStartRequest,
   ScreenShareStateResponse,
   CreateTranslationTestRequest,
@@ -253,10 +255,55 @@ export const api = {
   },
 
   muteParticipant(roomId: string, token: string, body: MuteParticipantRequest) {
-    return requestJson<MuteParticipantResponse>(`/api/rooms/${roomId}/moderation/mute`, {
+    return requestJson<MuteParticipantResponse>(
+      `/api/rooms/${roomId}/participants/${encodeURIComponent(body.target_participant_id)}/mute`,
+      { method: "POST", headers: buildAuthHeaders(token), body: JSON.stringify({}) },
+    );
+  },
+
+  // ─── Room management (the server checks the caller's role every time) ────
+
+  getRoomPermissions(roomId: string, token: string) {
+    return requestJson<RoomPermissionsResponse>(`/api/rooms/${roomId}/permissions`, {
+      headers: buildAuthHeaders(token),
+    });
+  },
+
+  removeParticipant(roomId: string, token: string, participantId: string) {
+    return requestJson<{ participant_id: string; removed: boolean }>(
+      `/api/rooms/${roomId}/participants/${encodeURIComponent(participantId)}/remove`,
+      { method: "POST", headers: buildAuthHeaders(token), body: JSON.stringify({}) },
+    );
+  },
+
+  setParticipantRole(roomId: string, token: string, participantId: string, role: Exclude<RoomRole, "host">) {
+    return requestJson<{ participant_id: string; role: RoomRole; changed: boolean }>(
+      `/api/rooms/${roomId}/participants/${encodeURIComponent(participantId)}/role`,
+      { method: "PATCH", headers: buildAuthHeaders(token), body: JSON.stringify({ role }) },
+    );
+  },
+
+  setRoomLocked(roomId: string, token: string, locked: boolean) {
+    return requestJson<RoomSummary>(`/api/rooms/${roomId}/${locked ? "lock" : "unlock"}`, {
       method: "POST",
       headers: buildAuthHeaders(token),
-      body: JSON.stringify(body),
+      body: JSON.stringify({}),
+    });
+  },
+
+  /** Sent in the body, never in the URL; the response never contains it. */
+  changeRoomPassword(roomId: string, token: string, password: string) {
+    return requestJson<RoomSummary>(`/api/rooms/${roomId}/password`, {
+      method: "PATCH",
+      headers: buildAuthHeaders(token),
+      body: JSON.stringify({ password }),
+    });
+  },
+
+  removeRoomPassword(roomId: string, token: string) {
+    return requestJson<RoomSummary>(`/api/rooms/${roomId}/password`, {
+      method: "DELETE",
+      headers: buildAuthHeaders(token),
     });
   },
 

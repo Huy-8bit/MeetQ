@@ -14,6 +14,18 @@ from server.events import EventType, build_envelope
 from server.service.gateway.auth import issue_room_token
 from server.service.gateway.livekit_tokens import generate_livekit_token
 from server.service.gateway.room_access import RoomAccessStore
+from server.service.gateway.room_membership import RoomMembershipStore
+from server.service.gateway.room_permissions import (
+    PERMISSION_DENIED_MESSAGE,
+    ROLE_CO_HOST,
+    ROLE_HOST,
+    ROLE_PARTICIPANT,
+    Permission,
+    RoomPermissionError,
+    capabilities,
+    has_permission,
+    outranks,
+)
 from server.service.gateway.room_store import RoomStore
 from server.integrations.telegram import TelegramNotifier
 from server.meeting_modes import (
@@ -53,6 +65,7 @@ from server.models import (
     MeetingSummaryType,
     MeetingLanguage,
     ParticipantState,
+    RoomPermissionsResponse,
     RoomSnapshotResponse,
     RoomState,
     ScreenShareTrackInfo,
@@ -115,6 +128,24 @@ class RoomExpiredError(Exception):
     pass
 
 
+class RoomLockedError(Exception):
+    """The host locked the meeting: no new participants (a correct password doesn't help)."""
+
+
+class ParticipantRemovedError(Exception):
+    """This user was removed from the meeting by the host and cannot rejoin it."""
+
+
+class RoomActionError(Exception):
+    """A room management request that can't be carried out (bad target, missing setup…)."""
+
+    def __init__(self, status_code: int, code: str, message: str) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+        self.code = code
+        self.message = message
+
+
 class MeetingSummaryNotFoundError(Exception):
     pass
 
@@ -162,6 +193,10 @@ class RoomService:
         self.ops_recorder = ops_recorder
         # Password hashes + failed-attempt counters for protected rooms.
         self.access = RoomAccessStore(store.client, store.ttl)
+        # Roles by stable user ID (host / co-host / participant) and removals.
+        self.members = RoomMembershipStore(store.client, store.ttl)
+        # server.service.gateway.livekit_moderation.LiveKitModerator, set at startup.
+        self.moderator: Optional[Any] = None
         self.gateway_control_channel = settings.redis_channel_gateway_control
         self.telegram_notifier = TelegramNotifier(settings)
         self.meeting_summary_service = MeetingSummaryService(
@@ -192,6 +227,92 @@ class RoomService:
             lock = asyncio.Lock()
             self._room_state_locks[room_id] = lock
         return lock
+
+    # ── Roles & permissions ────────────────────────────────────────────────
+    # The caller is always identified by the room token's participant ID, resolved
+    # server-side to a stable user ID and that user's membership. Nothing about the
+    # caller's role is ever read from the request.
+
+    @property
+    def permissions_enforced(self) -> bool:
+        # Without sign-in there is no stable identity, hence no roles (local tests only).
+        return bool(self.settings.user_auth_required)
+
+    async def roles_enforced(self, room_id: str) -> bool:
+        """Roles apply to rooms created by a signed-in user (see RoomState.roles_enabled)."""
+        if not self.permissions_enforced:
+            return False
+        room = await self.store.get_room_state(room_id)
+        return bool(room is not None and room.roles_enabled)
+
+    async def participant_role(self, room_id: str, participant_id: Optional[str]) -> tuple[Optional[str], str]:
+        """(user_id, role) for a realtime participant; unknown users are participants."""
+        user_id = await self.members.user_for_participant(room_id, participant_id)
+        member = await self.members.get(room_id, user_id)
+        if member is None or member.get("removed_at"):
+            return user_id, ROLE_PARTICIPANT
+        return user_id, member["role"]
+
+    async def is_removed_participant(self, room_id: str, participant_id: Optional[str]) -> bool:
+        """True when this realtime session belongs to a user the host removed (token revoked)."""
+        user_id = await self.members.user_for_participant(room_id, participant_id)
+        member = await self.members.get(room_id, user_id)
+        return bool(member and member.get("removed_at"))
+
+    async def _active_actor(
+        self,
+        room_id: str,
+        participant_id: Optional[str],
+        session_id: Optional[str],
+    ) -> ParticipantState:
+        actor = await self.store.get_participant(room_id, participant_id) if participant_id else None
+        if actor is None or actor.status == "disconnected" or actor.is_virtual:
+            raise RoomPermissionError("Join the meeting to manage it.", code="not_in_room")
+        if session_id and actor.session_id != session_id:
+            raise RoomActionError(409, "session_mismatch", "Session no longer valid for participant")
+        return actor
+
+    async def require_room_permission(
+        self,
+        room_id: str,
+        participant_id: Optional[str],
+        permission: Permission,
+    ) -> tuple[Optional[str], str]:
+        user_id, role = await self.participant_role(room_id, participant_id)
+        if not has_permission(role, permission, enforced=await self.roles_enforced(room_id)):
+            self._audit(
+                "permission_denied",
+                room_id,
+                actor=participant_id,
+                permission=permission.value,
+                role=role,
+            )
+            raise RoomPermissionError()
+        return user_id, role
+
+    async def get_permissions(
+        self,
+        room_id: str,
+        participant_id: str,
+        session_id: Optional[str],
+    ) -> RoomPermissionsResponse:
+        if await self.store.get_room_state(room_id) is None:
+            raise RoomNotFoundError()
+        await self._active_actor(room_id, participant_id, session_id)
+        _user_id, role = await self.participant_role(room_id, participant_id)
+        enforced = await self.roles_enforced(room_id)
+        return RoomPermissionsResponse(
+            room_id=room_id,
+            participant_id=participant_id,
+            role=role,
+            enforced=enforced,
+            permissions=capabilities(role, enforced=enforced),
+        )
+
+    def _audit(self, action: str, room_id: str, **fields: Any) -> None:
+        # Structured audit trail: identifiers only, never names, passwords or tokens.
+        details = " ".join(f"{key}={value}" for key, value in fields.items() if value is not None)
+        logger.info("event=room_audit action=%s room_id=%s %s", action, room_id, details)
 
     def _generate_id(self, prefix: str) -> str:
         return f"{prefix}_{uuid.uuid4().hex[:12]}"
@@ -718,6 +839,8 @@ class RoomService:
         brse_output_mode: str = DEFAULT_BRSE_OUTPUT_MODE,
         *,
         password: Optional[str] = None,
+        title: Optional[str] = None,
+        created_by_user_id: Optional[str] = None,
     ) -> CreateRoomResponse:
         room_id = self._generate_id("rm")
         now = self._now_str()
@@ -787,11 +910,18 @@ class RoomService:
                 else []
             ),
             password_required=bool(password),
+            title=title,
+            roles_enabled=bool(created_by_user_id),
         )
         if password:
             # Store the hash before the room exists, so a protected room is never joinable without it.
             await self.access.set_password(room_id, password)
+        if created_by_user_id:
+            # The signed-in creator is the room's host for its whole lifetime: identified by
+            # user ID, so leaving, reconnecting or other people joining first never changes it.
+            await self.members.set_host(room_id, created_by_user_id, created_at=now)
         await self.store.create_room(room)
+        self._audit("room_created", room_id, host_user=created_by_user_id, password=bool(password))
 
         await self._publish(EventType.ROOM_CREATED, room_id, room.model_dump())
         if room.virtual_participants:
@@ -802,7 +932,11 @@ class RoomService:
         self._schedule_history(
             "room_created",
             room_id,
-            lambda: self.room_history.persist_room_created(room, share_url=share_url),
+            lambda: self.room_history.persist_room_created(
+                room,
+                share_url=share_url,
+                created_by_user_id=created_by_user_id,
+            ),
         )
         self._schedule_room_expiry_summary(room)
         self._schedule_room_created_notification(room, share_url)
@@ -867,6 +1001,7 @@ class RoomService:
                 )
             if session_id and actor.session_id != session_id:
                 raise BrseToggleForbiddenError("session is no longer valid", code="session_mismatch")
+            await self._require_ai_permission(room_id, actor_participant_id)
 
             room_languages = self._room_languages_from_snapshot(snapshot)
             brse_mode = normalize_brse_mode(getattr(snapshot.room, "brse_mode", DEFAULT_BRSE_MODE))
@@ -911,6 +1046,7 @@ class RoomService:
                 actor_participant_id,
                 reason,
             )
+            self._audit("ai_mode_changed", room_id, actor=actor_participant_id, mode=mode)
             self._schedule_history(
                 "room_mode_updated",
                 room_id,
@@ -933,6 +1069,13 @@ class RoomService:
             )
             return self._room_response_from_state(updated_room)
 
+    async def _require_ai_permission(self, room_id: str, participant_id: str) -> None:
+        """Room-level AI relay (on/off, Voice + Text ↔ Text Only): host and co-hosts only."""
+        try:
+            await self.require_room_permission(room_id, participant_id, Permission.MANAGE_AI)
+        except RoomPermissionError:
+            raise BrseToggleForbiddenError(PERMISSION_DENIED_MESSAGE, code="permission_denied")
+
     async def _set_brse_enabled_locked(
         self,
         room_id: str,
@@ -954,6 +1097,7 @@ class RoomService:
             raise BrseToggleForbiddenError("active human participant is required to change BRSE mode")
         if session_id and actor.session_id != session_id:
             raise BrseToggleForbiddenError("session is no longer valid", code="session_mismatch")
+        await self._require_ai_permission(room_id, actor_participant_id)
 
         if snapshot.room.brse_enabled == brse_enabled:
             if not brse_enabled:
@@ -1016,6 +1160,11 @@ class RoomService:
 
         if not brse_enabled:
             await self.store.clear_transcripts(room_id)
+        self._audit(
+            "ai_relay_enabled" if brse_enabled else "ai_relay_disabled",
+            room_id,
+            actor=actor_participant_id,
+        )
 
         self._schedule_history(
             "room_mode_updated",
@@ -1480,7 +1629,31 @@ class RoomService:
         if not snapshot:
             raise RoomNotFoundError()
 
-        # Protected rooms: verify before anything else (and before any token is issued).
+        # Admission order: exists → not expired → not removed → not locked → password →
+        # capacity / language. Nothing here issues a token before every check passed.
+        if self._is_room_expired(snapshot):
+            self.schedule_room_expired_archival(
+                snapshot.room,
+                expired_at=snapshot.room.expires_at,
+                current_human_count=active_human_participant_count(snapshot.participants),
+                reason="join_rejected_expired",
+            )
+            raise RoomExpiredError()
+
+        member = await self.members.get(room_id, user_id)
+        if member is not None and member.get("removed_at"):
+            self._audit("join_rejected_removed", room_id, user=user_id)
+            raise ParticipantRemovedError()
+
+        # A locked room admits nobody new — not even with the right password. People who
+        # were already in it (host, co-hosts, anyone who joined before) can come back.
+        if snapshot.room.locked and not (
+            member is not None and (member.get("joined_at") or member["role"] in (ROLE_HOST, ROLE_CO_HOST))
+        ):
+            self._audit("join_rejected_locked", room_id, user=user_id)
+            raise RoomLockedError()
+
+        # Protected rooms: verify before anything else is created (and before any token).
         if snapshot.room.password_required:
             await self.access.check_join(room_id, password, client_ip=client_ip, user_id=user_id)
 
@@ -1491,16 +1664,6 @@ class RoomService:
             and active_human_participant_count(snapshot.participants) >= snapshot.room.participant_limit
         ):
             raise RoomFullError()
-
-        # Check room expiry: 30-minute meeting duration
-        if self._is_room_expired(snapshot):
-            self.schedule_room_expired_archival(
-                snapshot.room,
-                expired_at=snapshot.room.expires_at,
-                current_human_count=active_human_participant_count(snapshot.participants),
-                reason="join_rejected_expired",
-            )
-            raise RoomExpiredError()
 
         room_languages = self._room_languages_from_snapshot(snapshot)
         if language == "auto" or language not in room_languages:
@@ -1542,6 +1705,14 @@ class RoomService:
         participant_id = self._generate_id("pt")
         session_id = self._generate_id("ses")
 
+        role = ROLE_PARTICIPANT
+        if user_id:
+            # Role comes from the user's membership (the creator is already HOST), so a
+            # reconnect gets the same role back; first-time joiners become PARTICIPANT.
+            member = await self.members.ensure_member(room_id, user_id, joined_at=now)
+            role = member["role"]
+            await self.members.link_participant(room_id, participant_id, user_id)
+
         participant = ParticipantState(
             participant_id=participant_id,
             session_id=session_id,
@@ -1552,6 +1723,7 @@ class RoomService:
             last_seen_at=now,
             ws_connected=False,
             livekit_identity=participant_id,
+            role=role,
         )
 
         await self.store.add_participant(room_id, participant)
@@ -1592,6 +1764,19 @@ class RoomService:
                 user_id=user_id,
             ),
         )
+        if user_id:
+            self._schedule_history(
+                "membership_joined",
+                room_id,
+                lambda: self.room_history.persist_membership(
+                    room_id,
+                    user_id,
+                    role=role,
+                    display_name=display_name,
+                    language=language,
+                    joined_at=now,
+                ),
+            )
         self._schedule_participant_joined_notification(
             fresh_snapshot.room,
             participant,
@@ -1609,6 +1794,7 @@ class RoomService:
                 session_id=session_id,
                 display_name=display_name,
                 language=language,
+                role=role,
             ),
             room_token=JoinRoomResponseRoomToken(
                 token=room_token,
@@ -1816,6 +2002,7 @@ class RoomService:
 
         now = self._now_str()
         await self.store.remove_participant(room_id, participant_id)
+        user_id = await self.members.user_for_participant(room_id, participant_id)
 
         await self._publish(
             EventType.PARTICIPANT_LEFT,
@@ -1835,6 +2022,11 @@ class RoomService:
             await self.store.mark_room_empty(room_id, emptied_at=now)
             self._notify_room_ended(room_id, "last_participant_left")
 
+        still_here = False
+        if user_id and fresh_snapshot:
+            other_ids = set(await self.members.participants_for_user(room_id, user_id)) - {participant_id}
+            still_here = any(p.participant_id in other_ids for p in fresh_snapshot.participants)
+
         async def persist_left_and_summary() -> None:
             await self.room_history.persist_participant_left(
                 room_id,
@@ -1844,6 +2036,8 @@ class RoomService:
                 current_human_count=current_human_count,
                 terminal_state=terminal_state,
             )
+            if user_id and not still_here:
+                await self.room_history.persist_membership_left(room_id, user_id, left_at=now)
             if terminal_state:
                 summary_language, language_reason = self._resolve_summary_language(
                     requester_language=participant.language,
@@ -2047,6 +2241,336 @@ class RoomService:
         await self._publish(EventType.PARTICIPANT_UPDATED, room_id, updated_p.model_dump())
         return updated_p
 
+    # ── Room management (host / co-host) ─────────────────────────────────────
+
+    async def _live_room(self, room_id: str) -> RoomSnapshotResponse:
+        snapshot = await self.store.get_room_snapshot(room_id)
+        if not snapshot:
+            raise RoomNotFoundError()
+        if self._is_room_expired(snapshot):
+            raise RoomExpiredError()
+        return snapshot
+
+    async def set_room_locked(
+        self,
+        room_id: str,
+        locked: bool,
+        *,
+        actor_participant_id: str,
+        session_id: Optional[str],
+    ) -> CreateRoomResponseRoom:
+        async with self._room_state_lock(room_id):
+            snapshot = await self._live_room(room_id)
+            actor = await self._active_actor(room_id, actor_participant_id, session_id)
+            await self.require_room_permission(room_id, actor.participant_id, Permission.LOCK_ROOM)
+            if snapshot.room.locked == locked:
+                return self._room_response_from_state(await self.store.get_room_state(room_id))
+            updated = await self.store.update_room(room_id, {"locked": locked})
+            if updated is None:
+                raise RoomNotFoundError()
+            now = self._now_str()
+            await self._publish(
+                EventType.ROOM_LOCK_CHANGED,
+                room_id,
+                {
+                    "room_id": room_id,
+                    "locked": locked,
+                    "changed_by": actor.participant_id,
+                    "changed_by_name": actor.display_name,
+                    "changed_at": now,
+                },
+            )
+            self._schedule_history(
+                "room_lock_changed",
+                room_id,
+                lambda: self.room_history.persist_room_flags(room_id, {"locked": locked}),
+            )
+            self._audit("room_locked" if locked else "room_unlocked", room_id, actor=actor.participant_id)
+            return self._room_response_from_state(updated)
+
+    async def set_room_password(
+        self,
+        room_id: str,
+        password: Optional[str],
+        *,
+        actor_participant_id: str,
+        session_id: Optional[str],
+    ) -> CreateRoomResponseRoom:
+        """Set/replace (password) or remove (None) the room password. Host only."""
+        async with self._room_state_lock(room_id):
+            await self._live_room(room_id)
+            actor = await self._active_actor(room_id, actor_participant_id, session_id)
+            await self.require_room_permission(room_id, actor.participant_id, Permission.MANAGE_PASSWORD)
+            if password:
+                # Replacing the hash invalidates the old password at once; people already
+                # in the meeting are not affected.
+                await self.access.set_password(room_id, password)
+            else:
+                await self.access.delete(room_id)
+            updated = await self.store.update_room(room_id, {"password_required": bool(password)})
+            if updated is None:
+                raise RoomNotFoundError()
+            now = self._now_str()
+            await self._publish(
+                EventType.ROOM_ACCESS_UPDATED,
+                room_id,
+                {
+                    "room_id": room_id,
+                    "password_required": bool(password),
+                    "changed_by": actor.participant_id,
+                    "changed_by_name": actor.display_name,
+                    "changed_at": now,
+                },
+            )
+            self._schedule_history(
+                "room_access_updated",
+                room_id,
+                lambda: self.room_history.persist_room_flags(room_id, {"password_required": bool(password)}),
+            )
+            self._audit(
+                "room_password_changed" if password else "room_password_removed",
+                room_id,
+                actor=actor.participant_id,
+            )
+            return self._room_response_from_state(updated)
+
+    async def _moderation_target(
+        self,
+        room_id: str,
+        actor: ParticipantState,
+        target_participant_id: str,
+    ) -> tuple[ParticipantState, Optional[str], str]:
+        target = await self.store.get_participant(room_id, target_participant_id)
+        if target is None or target.status == "disconnected" or target.is_virtual:
+            raise RoomActionError(404, "participant_not_found", "Participant not found in room")
+        if target.participant_id == actor.participant_id:
+            raise RoomActionError(422, "cannot_target_self", "You can't do this to yourself.")
+        target_user_id, target_role = await self.participant_role(room_id, target.participant_id)
+        actor_user_id, actor_role = await self.participant_role(room_id, actor.participant_id)
+        if target_user_id and target_user_id == actor_user_id:
+            raise RoomActionError(422, "cannot_target_self", "You can't do this to yourself.")
+        # Nobody acts on the host; co-hosts act on participants only.
+        if not outranks(actor_role, target_role):
+            self._audit(
+                "permission_denied",
+                room_id,
+                actor=actor.participant_id,
+                target=target.participant_id,
+                reason="target_role",
+            )
+            raise RoomPermissionError()
+        return target, target_user_id, target_role
+
+    async def mute_participant(
+        self,
+        room_id: str,
+        target_participant_id: str,
+        *,
+        actor_participant_id: str,
+        session_id: Optional[str],
+    ) -> Dict[str, Any]:
+        await self._live_room(room_id)
+        actor = await self._active_actor(room_id, actor_participant_id, session_id)
+        await self.require_room_permission(room_id, actor.participant_id, Permission.MUTE_PARTICIPANT)
+        target, _target_user_id, _target_role = await self._moderation_target(room_id, actor, target_participant_id)
+
+        # Enforced on the SFU when LiveKit is reachable; the target's client is also told
+        # to mute. Nobody can turn someone else's microphone on.
+        provider_muted = False
+        if self.moderator is not None:
+            provider_muted = await self.moderator.mute_microphone(
+                room_id,
+                target.livekit_identity or target.participant_id,
+            )
+        now = self._now_str()
+        await self.store.update_participant(room_id, target.participant_id, {"muted_by_host": True})
+        updated = await self.store.get_participant(room_id, target.participant_id)
+        if updated is not None:
+            await self._publish(EventType.PARTICIPANT_UPDATED, room_id, updated.model_dump())
+        await self._publish(
+            EventType.MODERATION_PARTICIPANT_MUTED,
+            room_id,
+            {
+                "participant_id": target.participant_id,
+                "muted_by_host": True,
+                "muted_by": actor.display_name,
+                "muted_by_participant_id": actor.participant_id,
+                "timestamp": now,
+            },
+        )
+        self._audit(
+            "participant_muted",
+            room_id,
+            actor=actor.participant_id,
+            target=target.participant_id,
+            provider_muted=provider_muted,
+        )
+        return {
+            "participant_id": target.participant_id,
+            "muted_by_host": True,
+            "provider_muted": provider_muted,
+            "timestamp": now,
+        }
+
+    async def clear_muted_by_host(self, room_id: str, participant_id: str, session_id: Optional[str]) -> None:
+        """The muted participant turned their own microphone back on (allowed)."""
+        participant = await self.store.get_participant(room_id, participant_id)
+        if participant is None or not participant.muted_by_host:
+            return
+        if session_id and participant.session_id != session_id:
+            return
+        await self.store.update_participant(room_id, participant_id, {"muted_by_host": False})
+        updated = await self.store.get_participant(room_id, participant_id)
+        if updated is not None:
+            await self._publish(EventType.PARTICIPANT_UPDATED, room_id, updated.model_dump())
+        await self._publish(
+            EventType.MODERATION_PARTICIPANT_MUTED,
+            room_id,
+            {
+                "participant_id": participant_id,
+                "muted_by_host": False,
+                "muted_by": participant.display_name,
+                "timestamp": self._now_str(),
+            },
+        )
+
+    async def remove_participant(
+        self,
+        room_id: str,
+        target_participant_id: str,
+        *,
+        actor_participant_id: str,
+        session_id: Optional[str],
+    ) -> Dict[str, Any]:
+        await self._live_room(room_id)
+        actor = await self._active_actor(room_id, actor_participant_id, session_id)
+        actor_user_id, _ = await self.require_room_permission(
+            room_id, actor.participant_id, Permission.REMOVE_PARTICIPANT
+        )
+        target, target_user_id, _target_role = await self._moderation_target(room_id, actor, target_participant_id)
+        now = self._now_str()
+
+        # Removal belongs to the person (user ID), not the session: every open session of
+        # that user leaves, and they stay out for the rest of this room's lifetime.
+        session_ids = [target.participant_id]
+        if target_user_id:
+            await self.members.update(
+                room_id,
+                target_user_id,
+                {"removed_at": now, "removed_by_user_id": actor_user_id},
+            )
+            session_ids = sorted(
+                set(session_ids) | set(await self.members.participants_for_user(room_id, target_user_id))
+            )
+            self._schedule_history(
+                "membership_removed",
+                room_id,
+                lambda: self.room_history.persist_membership_removed(
+                    room_id,
+                    target_user_id,
+                    removed_at=now,
+                    removed_by_user_id=actor_user_id,
+                ),
+            )
+
+        removed: List[str] = []
+        for participant_id in session_ids:
+            participant = await self.store.get_participant(room_id, participant_id)
+            if participant is None or participant.status == "disconnected":
+                continue
+            # Everyone is told first; each gateway then closes the removed websocket (4409).
+            await self._publish(
+                EventType.PARTICIPANT_REMOVED,
+                room_id,
+                {
+                    "participant_id": participant_id,
+                    "removed_by": actor.display_name,
+                    "removed_by_participant_id": actor.participant_id,
+                    "removed_at": now,
+                    "reason": "removed_by_host",
+                },
+            )
+            if self.moderator is not None:
+                await self.moderator.remove_participant(room_id, participant.livekit_identity or participant_id)
+            await self.cleanup_participant(
+                room_id=room_id,
+                participant_id=participant_id,
+                session_id=None,
+                reason="removed_by_host",
+            )
+            removed.append(participant_id)
+
+        self._audit(
+            "participant_removed",
+            room_id,
+            actor=actor.participant_id,
+            target=target.participant_id,
+            sessions=len(removed),
+        )
+        return {"participant_id": target.participant_id, "removed": True, "removed_at": now}
+
+    async def set_participant_role(
+        self,
+        room_id: str,
+        target_participant_id: str,
+        role: str,
+        *,
+        actor_participant_id: str,
+        session_id: Optional[str],
+    ) -> Dict[str, Any]:
+        """Host makes a participant co-host or back. The host role itself can't change here."""
+        if role not in (ROLE_CO_HOST, ROLE_PARTICIPANT):
+            raise RoomActionError(422, "invalid_role", "Role must be co_host or participant.")
+        async with self._room_state_lock(room_id):
+            await self._live_room(room_id)
+            actor = await self._active_actor(room_id, actor_participant_id, session_id)
+            await self.require_room_permission(room_id, actor.participant_id, Permission.ASSIGN_COHOST)
+            target, target_user_id, old_role = await self._moderation_target(room_id, actor, target_participant_id)
+            if not target_user_id:
+                raise RoomActionError(409, "participant_not_signed_in", "This participant has no MeetQ account.")
+            if old_role == role:
+                return {"participant_id": target.participant_id, "role": role, "changed": False}
+
+            await self.members.update(room_id, target_user_id, {"role": role})
+            now = self._now_str()
+            session_ids = await self.members.participants_for_user(room_id, target_user_id)
+            updated_ids: List[str] = []
+            for participant_id in session_ids:
+                participant = await self.store.get_participant(room_id, participant_id)
+                if participant is None or participant.status == "disconnected":
+                    continue
+                await self.store.update_participant(room_id, participant_id, {"role": role})
+                updated = await self.store.get_participant(room_id, participant_id)
+                if updated is not None:
+                    await self._publish(EventType.PARTICIPANT_UPDATED, room_id, updated.model_dump())
+                updated_ids.append(participant_id)
+            await self._publish(
+                EventType.PARTICIPANT_ROLE_CHANGED,
+                room_id,
+                {
+                    "room_id": room_id,
+                    "participant_id": target.participant_id,
+                    "participant_ids": updated_ids,
+                    "old_role": old_role,
+                    "new_role": role,
+                    "changed_by": actor.participant_id,
+                    "changed_by_name": actor.display_name,
+                    "changed_at": now,
+                },
+            )
+            self._schedule_history(
+                "membership_role_changed",
+                room_id,
+                lambda: self.room_history.persist_membership(room_id, target_user_id, role=role),
+            )
+            self._audit(
+                "cohost_assigned" if role == ROLE_CO_HOST else "cohost_removed",
+                room_id,
+                actor=actor.participant_id,
+                target=target.participant_id,
+            )
+            return {"participant_id": target.participant_id, "role": role, "changed": True}
+
     def _room_response_from_state(self, room: Any) -> CreateRoomResponseRoom:
         if hasattr(room, "model_dump"):
             payload = room.model_dump()
@@ -2077,4 +2601,6 @@ class RoomService:
             interpreter_mode=payload.get("interpreter_mode", INTERPRETER_MODE_BRSE_PARTICIPANT),
             audio_routing=payload["audio_routing"],
             password_required=bool(payload.get("password_required", False)),
+            title=payload.get("title"),
+            locked=bool(payload.get("locked", False)),
         )

@@ -187,6 +187,7 @@ export function JoinRoomCard({
             <h1 id="lobby-title" className="lobby-title">
               {isExpired ? "Meeting ended" : "Join meeting"}
             </h1>
+            {room.title ? <p className="lobby-meeting-title">{room.title}</p> : null}
             <dl className="meta-list">
               <div className="meta-item">
                 <dt>Room</dt>
@@ -205,6 +206,14 @@ export function JoinRoomCard({
                   <dt>Access</dt>
                   <dd className="lobby-access">
                     <Lock size={14} aria-hidden="true" /> Password protected
+                  </dd>
+                </div>
+              ) : null}
+              {room.locked ? (
+                <div className="meta-item">
+                  <dt>Status</dt>
+                  <dd className="lobby-access">
+                    <Lock size={14} aria-hidden="true" /> Locked
                   </dd>
                 </div>
               ) : null}
@@ -271,6 +280,11 @@ export function JoinRoomCard({
                   />
                 </Field>
 
+                {room.locked ? (
+                  <p className="lobby-password-note" role="status">
+                    <Lock size={14} aria-hidden="true" /> This meeting is locked by the host.
+                  </p>
+                ) : null}
                 {passwordRequired ? (
                   <p className="lobby-password-note">
                     <Lock size={14} aria-hidden="true" /> This meeting requires a password.
@@ -372,7 +386,11 @@ function ParticipantPreviewList({
             <div className="people-main">
               <p className="people-name">
                 {participant.display_name}
-                {participant.is_host ? <Badge>Host</Badge> : null}
+                {participant.role === "host" || participant.is_host ? (
+                  <Badge tone="accent">Host</Badge>
+                ) : participant.role === "co_host" ? (
+                  <Badge>Co-host</Badge>
+                ) : null}
               </p>
               <p className="people-details">
                 {getLanguageLabel(participant.language)} · {formatParticipantStatus(participant.status)}

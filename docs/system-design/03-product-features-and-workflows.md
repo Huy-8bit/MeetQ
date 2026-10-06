@@ -3,7 +3,7 @@
 > **Mục đích:** Tài liệu này mô tả MeetQ **ở góc nhìn sản phẩm và người dùng**: có những màn hình nào, người dùng làm gì ở từng màn hình, hệ thống phản hồi ra sao, và các quy tắc nghiệp vụ. Tài liệu **không** đi vào công nghệ.
 > Dùng file này làm **context đầu vào cho AI** khi cần viết prompt/spec cho một tính năng mới, để AI hiểu đúng sản phẩm hiện có và không đề xuất trùng hoặc mâu thuẫn.
 >
-> Snapshot: 2026-10-05 (sau đợt làm lại giao diện ngày 2026-10-03; thêm phòng có mật khẩu và chia sẻ màn hình chất lượng cao ngày 2026-10-05). Nhãn giao diện được giữ nguyên **bằng tiếng Anh, trong dấu ngoặc kép**, đúng như người dùng thấy trên màn hình.
+> Snapshot: 2026-10-05 (sau đợt làm lại giao diện ngày 2026-10-03; thêm phòng có mật khẩu, chia sẻ màn hình chất lượng cao, **host / co-host thật**, **My meetings với lịch sử đầy đủ và tìm kiếm** ngày 2026-10-05). Nhãn giao diện được giữ nguyên **bằng tiếng Anh, trong dấu ngoặc kép**, đúng như người dùng thấy trên màn hình.
 
 ## Mục lục
 
@@ -78,13 +78,14 @@ Ngôn ngữ hỗ trợ (7): **Vietnamese, English, Japanese, Chinese, Korean, Fr
 
 | Vai trò | Ai | Có thể làm |
 | --- | --- | --- |
-| **Người dùng MeetQ** | Bất kỳ ai **đăng nhập bằng Google** | Dùng mọi màn hình người dùng (Home, Lobby, Meeting Room, Device check). Chưa đăng nhập thì chỉ thấy màn hình Sign in |
-| **Người tạo phòng** | Người dùng MeetQ đã đăng nhập, ở trang chủ | Tạo phòng, chọn ngôn ngữ và chế độ AI, gửi link. **Không có quyền gì đặc biệt** so với người khác sau khi vào phòng |
-| **Người tham gia** | Người dùng MeetQ đã đăng nhập, có link | Vào phòng, nói, bật/tắt mic & camera, chia sẻ màn hình, chat, đổi ngôn ngữ, **bật/tắt AI relay cho cả phòng**, tạo tóm tắt |
-| **BRSE AI** | Thành viên ảo do hệ thống thêm vào | Nghe, dịch, phát giọng dịch. Không có camera, không chat, không bị điều khiển |
+| **Người dùng MeetQ** | Bất kỳ ai **đăng nhập bằng Google** (định danh bằng **user ID ổn định** của tài khoản, không bao giờ bằng tên hiển thị) | Dùng mọi màn hình người dùng (Home, Lobby, Meeting Room, Device check, My meetings). Chưa đăng nhập thì chỉ thấy màn hình Sign in |
+| **Host** | Người dùng **đã tạo phòng** (R-70) | Mọi việc của Participant, cộng: bật/tắt AI relay và đổi relay mode, Start/Stop recording, mute / mời ra khỏi phòng người khác, **khoá / mở khoá phòng**, **đặt / đổi / bỏ mật khẩu phòng**, chỉ định / bỏ Co-host (R-70…R-79) |
+| **Co-host** | Participant được Host chỉ định | Mọi việc của Participant, cộng: bật/tắt AI relay và đổi relay mode, Start/Stop recording, mute / mời ra khỏi phòng **Participant**. **Không** đụng tới Host, không quản lý mật khẩu, không khoá phòng, không chỉ định Co-host |
+| **Participant** | Người dùng đã đăng nhập, vào phòng bằng link | Vào/rời phòng, nói, bật/tắt mic & camera, chia sẻ màn hình, chat, đổi ngôn ngữ của mình, xem Relay và Summary, tạo Live summary. **Không** có quyền quản lý cấp phòng; vẫn **thấy** trạng thái AI relay, ghi hình, khoá phòng |
+| **BRSE AI** | Thành viên ảo do hệ thống thêm vào | Nghe, dịch, phát giọng dịch. Không có camera, không chat, không bị điều khiển, không có vai trò quản lý |
 | **Admin vận hành** | Người vận hành hệ thống, có **tài khoản admin riêng** | Đăng nhập Admin Portal `/admin/login` bằng **Username + Password** (không dùng Google; đăng nhập Google **không** cho quyền admin, và đăng xuất ở bên này không đăng xuất bên kia) để xem phòng đang chạy, chẩn đoán BRSE AI, lịch sử meeting, bản ghi hình & thời hạn lưu trữ (R-56, R-57), issues, analytics. Nhận thông báo Telegram (phòng mới / có người vào) nếu bật. Xem [docs/admin/admin-overview.md](../admin/admin-overview.md) |
 
-> **Lưu ý về "Host":** giao diện có sẵn nhãn "Host", nút "Mute" người khác và thông báo "The host muted your microphone". Tuy nhiên hiện **hệ thống không chỉ định host**, và chức năng mute người khác **chưa hoạt động** phía máy chủ. Xem [mục 16](#16-những-gì-chưa-có--giới-hạn-đã-biết).
+> **Vai trò là của máy chủ:** Host / Co-host / Participant được máy chủ lưu theo **tài khoản** (user ID) và kiểm tra lại ở **mọi** thao tác quản lý. Giao diện chỉ dùng vai trò để quyết định hiện nút nào; ẩn nút không phải là cơ chế bảo vệ.
 
 ---
 
@@ -105,7 +106,7 @@ Ngôn ngữ hỗ trợ (7): **Vietnamese, English, Japanese, Chinese, Korean, Fr
 
 ### Truy cập phòng (mật khẩu)
 
-- **R-06** Lúc tạo phòng chọn **"Room access"**: "Anyone with the link" (mặc định — ai có link đều vào được) hoặc "Require a password" (cần cả link lẫn mật khẩu). Mật khẩu dài **6–128 ký tự**, mọi ký tự đều hợp lệ, không có quy tắc độ phức tạp; phải nhập 2 lần ("Password" và "Confirm password"). Sau khi tạo **không** đổi hay bỏ được mật khẩu.
+- **R-06** Lúc tạo phòng chọn **"Room access"**: "Anyone with the link" (mặc định — ai có link đều vào được) hoặc "Require a password" (cần cả link lẫn mật khẩu). Mật khẩu dài **6–128 ký tự**, mọi ký tự đều hợp lệ, không có quy tắc độ phức tạp; phải nhập 2 lần ("Password" và "Confirm password"). Trong lúc họp, **chỉ Host** đặt / đổi / bỏ được mật khẩu (R-77); mật khẩu hiện tại không bao giờ được hiển thị.
 - **R-07** Vào phòng có mật khẩu: Lobby hiện "Access: Password protected", dòng "This meeting requires a password." và ô **"Meeting password"**. Máy chủ kiểm tra mật khẩu **trước** khi cho vào phòng. Sai → "Incorrect meeting password." ngay dưới ô nhập. Mật khẩu chỉ hỏi lúc vào; tải lại trang = vào lại như người mới nên phải nhập lại (G10).
 - **R-08** Chống dò mật khẩu: sai quá **10 lần trong 10 phút** (tính theo tài khoản và theo địa chỉ mạng) thì bị chặn tạm thời: "Too many incorrect password attempts. Please wait a few minutes and try again."
 - **R-09** Riêng tư của phòng có mật khẩu: trước khi vào, người mở link chỉ thấy cấu hình phòng (ngôn ngữ, AI relay, thời gian còn lại) và **số** người trong phòng, kèm "You'll see who's here after you join." — **không** thấy tên người tham gia, câu nói hay chat. Final summary của phòng này chỉ người **đã từng vào phòng** mới xem được. Mật khẩu không bao giờ được lưu ở dạng đọc lại được, không nằm trong link, không được trình duyệt ghi nhớ, và **admin cũng không thấy** (Admin Portal chỉ hiện "Password protected" / "Public link").
@@ -129,7 +130,7 @@ Ngôn ngữ hỗ trợ (7): **Vietnamese, English, Japanese, Chinese, Korean, Fr
 - **R-21** Với phòng có **đúng 2 ngôn ngữ**, người tham gia có thể chuyển giữa "Voice + Text" và "Text Only" **ngay trong cuộc họp** (selector cạnh công tắc AI relay trên header ở màn hình rộng, và trong Settings → AI relay ở mọi màn hình). Thay đổi áp dụng cho **cả phòng**, đồng bộ realtime tới mọi người, người vào sau và người tải lại trang đều thấy mode hiện tại. Phòng 1 ngôn ngữ (Captions) và phòng từ 3 ngôn ngữ (Text Only) không có lựa chọn này; máy chủ từ chối mọi yêu cầu bật voice cho các phòng đó. Phòng đã hết hạn không đổi được mode.
 - **R-21a** Bật/tắt AI và relay mode là **hai state độc lập**. Đổi mode khi AI đang tắt chỉ lưu mode, **không** tự bật AI; khi bật lại, AI chạy theo mode đã lưu.
 - **R-21b** Ranh giới khi đổi mode: STT, dịch và text relay chạy liên tục, không gián đoạn. Mỗi câu dịch quyết định có giọng AI hay không **tại thời điểm bắt đầu dịch câu đó**: câu đang được đọc bằng giọng AI sẽ đọc hết; câu đang chờ trong hàng đợi và mọi câu sau đi theo mode mới. Không phát lại bằng giọng các câu đã dịch trước đó. BRSE AI không rời phòng, không ai bị ngắt kết nối.
-- **R-22** **Bất kỳ người tham gia nào** cũng có thể bật/tắt AI relay và đổi relay mode, và thay đổi áp dụng cho **cả phòng**. Nếu hai người đổi gần như cùng lúc, máy chủ xử lý tuần tự; mọi màn hình hội tụ về thay đổi được chấp nhận sau cùng.
+- **R-22** Chỉ **Host và Co-host** được bật/tắt AI relay và đổi relay mode (Voice + Text ↔ Text Only); thay đổi áp dụng cho **cả phòng**. Participant vẫn thấy trạng thái (công tắc và mode hiện ở dạng chỉ đọc, kèm "Only the host or a co-host can change AI relay for this room."); gọi thẳng API cũng bị từ chối ("You don't have permission to perform this action."). Nếu hai người có quyền đổi gần như cùng lúc, máy chủ xử lý tuần tự; mọi màn hình hội tụ về thay đổi được chấp nhận sau cùng.
 - **R-23** Khi tắt AI: BRSE AI rời phòng, không còn bản dịch mới, các dòng relay gần đây lưu tạm trên máy chủ bị xoá. Khi bật lại: AI vào lại phòng với **relay mode hiện tại của phòng** (mode chọn lúc tạo, hoặc mode được đổi sau đó). Nếu lúc tạo chọn "Off" ở phòng 2 ngôn ngữ, mode lưu sẵn là "Voice + Text" và có thể đổi sang "Text Only" trước khi bật.
 - **R-23a** BRSE AI là **người phiên dịch, không phải trợ lý**: chỉ lên tiếng khi có người thật vừa nói một câu hợp lệ, và chỉ nói bản dịch của đúng câu đó. Không chào khi vào phòng, không nói "tôi sẵn sàng dịch", "mời bạn nói", "xin nói lại", không tự giới thiệu, không lên tiếng khi im lặng, tạp âm hay chỉ có "ừm/à/uh". Câu ngắn có nghĩa ("OK", "Vâng", "Đúng ạ", "はい", "Hello") vẫn được dịch. Câu hỏi gửi tới AI ("AI ơi, dịch được không?") được **dịch như một câu hỏi**, không được trả lời; câu ra lệnh cho AI được dịch nguyên văn, không được làm theo. Nếu bản dịch trông như một câu trả lời của trợ lý, nó bị huỷ trước khi ai nghe thấy hoặc đọc thấy — người nghe không nhận gì cho câu đó, thay vì nhận một câu sai. Nếu giọng AI lỗi, bản dịch dạng chữ vẫn hiện.
 - **R-24** Có chế độ nội bộ **"Summary capture"**: AI nghe im lặng để phục vụ tóm tắt, không hiện bản dịch cho ai. Người dùng **không chọn được** chế độ này trên giao diện.
@@ -149,15 +150,15 @@ Ngôn ngữ hỗ trợ (7): **Vietnamese, English, Japanese, Chinese, Korean, Fr
 
 ### Ghi hình & lưu trữ cuộc họp
 
-- **R-50** Người tham gia (đã đăng nhập, đang ở trong phòng) có thể **Start / Stop recording** bằng nút "Record" trên thanh điều khiển. Cuộc họp **không tự ghi hình**; bấm Record luôn hiện hộp xác nhận "Start recording? Everyone in this meeting will be notified that recording has started." Admin **không** bắt đầu ghi hình được.
-- **R-51** Ghi hình là **trạng thái của cả phòng**: ai bấm Stop cũng được; người bấm Record rời phòng, mất mạng hay tải lại trang thì ghi hình **vẫn tiếp tục** (ghi ở phía máy chủ). Mỗi phòng chỉ có **một** bản ghi đang chạy; bấm Record lần nữa không tạo bản ghi thứ hai.
+- **R-50** Chỉ **Host và Co-host** (đang ở trong phòng) có thể **Start / Stop recording** bằng nút "Record" trên thanh điều khiển; Participant không thấy nút này nhưng vẫn thấy chỉ báo "● REC" và mọi thông báo ghi hình (R-52). Cuộc họp **không tự ghi hình**; bấm Record luôn hiện hộp xác nhận "Start recording? Everyone in this meeting will be notified that recording has started." Admin **không** bắt đầu ghi hình được.
+- **R-51** Ghi hình là **trạng thái của cả phòng**: Host hoặc bất kỳ Co-host nào cũng Stop được; người bấm Record rời phòng, mất mạng hay tải lại trang thì ghi hình **vẫn tiếp tục** (ghi ở phía máy chủ). Mỗi phòng chỉ có **một** bản ghi đang chạy; bấm Record lần nữa không tạo bản ghi thứ hai.
 - **R-52** **Không có ghi hình ẩn**: khi đang ghi, mọi người thấy chỉ báo cố định **"● REC 12:34"** ở đầu trang (hoặc "Starting recording…" / "Stopping recording…"), và nhận thông báo "Recording started by <tên>." / "Recording stopped." / "Recording failed." Người vào sau thấy "This meeting is being recorded." ngay ở Lobby và khi vào phòng.
 - **R-53** Bản ghi gồm âm thanh, video, chia sẻ màn hình và giọng AI **đang phát trong phòng** (định dạng MP4). Ghi hình không phụ thuộc chế độ AI (Voice + Text, Text Only, Captions, AI tắt) và không thay đổi quy tắc ngôn ngữ (R-20). Lỗi ghi hình **không** làm hỏng cuộc họp: relay, chat, video vẫn chạy bình thường.
 - **R-54** Ghi hình tự dừng khi phòng hết giờ hoặc người thật cuối cùng rời phòng. Start → Stop → Start tạo **nhiều đoạn** (segment) riêng, không ghi đè nhau.
 - **R-55** Khi cuộc họp kết thúc, hệ thống tự **lưu trữ (archive)** toàn bộ dữ liệu cuộc họp — thông tin cuộc họp, người tham gia, câu gốc, bản dịch, chat, tóm tắt và các bản ghi hình (nếu có) — vào kho lưu trữ riêng tư. Cuộc họp không ghi hình vẫn được lưu trữ phần dữ liệu.
 - **R-56** Dữ liệu lưu trữ được giữ **7 ngày** (mặc định) tính từ lúc cuộc họp kết thúc. Admin đổi được **mặc định của hệ thống** (chỉ áp dụng cho các cuộc họp kết thúc sau đó) và **thời hạn riêng của từng cuộc họp**. Người dùng thường **không** đổi được thời hạn.
 - **R-57** Hết thời hạn, **toàn bộ** bản ghi hình, câu gốc, bản dịch, chat, tóm tắt và dữ liệu người tham gia của cuộc họp đó **bị xoá vĩnh viễn**; chỉ còn dấu vết tối thiểu (mã cuộc họp, thời điểm xoá) cho vận hành. Admin cũng có thể "Delete now".
-- **R-58** Chỉ người **đã tham gia** cuộc họp (theo tài khoản Google, không theo tên hiển thị) mới xem/phát/tải được bản ghi và nội dung lưu trữ, kể cả sau khi đã rời phòng, trong thời hạn lưu trữ. Link phát/tải chỉ có hiệu lực vài phút.
+- **R-58** Chỉ người **đã tạo hoặc đã tham gia** cuộc họp (theo tài khoản Google, không theo tên hiển thị) mới xem/phát/tải được bản ghi và nội dung lưu trữ, kể cả sau khi đã rời phòng, trong thời hạn lưu trữ. Người **bị mời ra khỏi phòng** (R-75) mất quyền này. Link phát/tải chỉ được tạo **sau** khi kiểm tra quyền và chỉ có hiệu lực vài phút.
 
 ### Chia sẻ màn hình
 
@@ -170,6 +171,47 @@ Ngôn ngữ hỗ trợ (7): **Vietnamese, English, Japanese, Chinese, Korean, Fr
 - **R-62** Âm thanh chia sẻ màn hình **không** được đưa vào AI relay: AI chỉ nghe micro của người thật, nên âm thanh này không được dịch, không vào transcript hay tóm tắt. Tuy nhiên, nếu đang ghi hình thì bản ghi **có** âm thanh này (bản ghi trộn mọi âm thanh đang phát trong phòng, R-53).
 - **R-63** Trung thực về chất lượng: nếu trình duyệt chỉ cấp số khung hình thấp hơn mức đã chọn, hiện cảnh báo vàng "Your browser is capturing at up to N FPS (60 FPS requested)." Giao diện **không bao giờ** ghi "60 FPS" khi thực tế không đạt.
 - **R-64** Dừng chia sẻ bằng "Stop sharing" hoặc bằng nút dừng của chính trình duyệt đều dừng **cả hình lẫn tiếng**, không hiện lỗi. Đóng bảng chọn màn hình của trình duyệt (huỷ) thì không có gì xảy ra và cũng không báo lỗi. Lỗi thật hiện "Could not start screen sharing." Thiết bị không hỗ trợ (điện thoại, tablet) thấy nút "Share screen" bị mờ, rê chuột hoặc focus thấy "Screen sharing isn't supported on this device."
+
+### Vai trò & quyền trong phòng
+
+- **R-70** Người dùng **tạo phòng** là **Host** của phòng đó. Host được xác định bằng **tài khoản** (user ID) của người tạo và được lưu ở máy chủ — **không** phải "người vào phòng đầu tiên", không theo tên hiển thị. Một phòng có đúng một Host; chưa có chức năng chuyển Host.
+- **R-71** Vai trò gắn với **tài khoản**, không với phiên kết nối: Host / Co-host mất mạng, tải lại trang hay rời phòng rồi vào lại thì **vẫn giữ vai trò** đó. Khi Host vắng mặt, hệ thống **không** tự chọn Host khác; phòng vẫn chạy, Co-host tiếp tục quản lý trong phạm vi quyền của mình. Host rời phòng không làm kết thúc phòng.
+- **R-72** Bảng quyền:
+
+  | Thao tác | Host | Co-host | Participant |
+  | --- | --- | --- | --- |
+  | Vào/rời phòng, mic, camera, chia sẻ màn hình, chat, đổi ngôn ngữ của mình, xem Relay/Summary, tạo Live summary | ✓ | ✓ | ✓ |
+  | Bật/tắt AI relay, đổi Voice + Text ↔ Text Only (R-22) | ✓ | ✓ | — |
+  | Start / Stop recording (R-50) | ✓ | ✓ | — |
+  | Mute người khác (R-74) | ✓ (Co-host, Participant) | ✓ (chỉ Participant) | — |
+  | Mời ra khỏi phòng (R-75) | ✓ (Co-host, Participant) | ✓ (chỉ Participant) | — |
+  | Khoá / mở khoá phòng (R-76) | ✓ | — | — |
+  | Đặt / đổi / bỏ mật khẩu phòng (R-77) | ✓ | — | — |
+  | Chỉ định / bỏ Co-host (R-73) | ✓ | — | — |
+
+  Không ai thao tác được lên **Host** (mute, mời ra, hạ quyền); Co-host chỉ thao tác lên Participant; không ai thao tác lên chính mình qua các chức năng này. Mọi thao tác bị từ chối đều trả "You don't have permission to perform this action."
+- **R-73** Host mở menu "⋯" cạnh một người trong tab People → "Make co-host" / "Remove co-host". Thay đổi đồng bộ realtime: nhãn "Co-host" hiện ngay với mọi người, và người được chỉ định thấy "<Host> made you a co-host. You can now manage AI relay, recording and participants." cùng các nút quản lý mà **không** cần tải lại trang. Bị hạ quyền thì thấy "You're no longer a co-host."
+- **R-74** **Mute** người khác là mute thật ở máy chủ media (micro của người đó bị tắt cho cả phòng), không chỉ đổi biểu tượng. Người bị mute thấy "The host muted your microphone. You can unmute when you're ready." Không ai bật được micro của người khác; người bị mute **tự bật lại** được.
+- **R-75** **Remove from meeting** (có hộp xác nhận): người đó bị ngắt khỏi phòng ngay (cả mọi tab/thiết bị đang mở của cùng tài khoản), thấy "You were removed from the meeting by the host." và nút về Home. Người bị mời ra **không vào lại được** phòng đó trong suốt thời gian còn lại của phòng ("You were removed from this meeting."), và mất quyền xem lịch sử cuộc họp đó (R-58).
+- **R-76** **Lock meeting**: người đang ở trong phòng ở lại; **người mới không vào được**, kể cả khi nhập đúng mật khẩu ("This meeting is locked by the host."). Người đã từng vào phòng này (và Host, Co-host) vẫn vào lại được khi mất kết nối. Mọi người thấy nhãn "Locked" ở header; Lobby hiện "This meeting is locked by the host." Thứ tự kiểm tra khi vào phòng: phòng tồn tại → chưa hết hạn → chưa bị mời ra → không bị khoá → mật khẩu đúng (nếu có) → các điều kiện khác.
+- **R-77** **Mật khẩu phòng** chỉ Host quản lý: "Set password" / "Change password" (nhập 2 lần, 6–128 ký tự) và "Remove password" (có xác nhận). Đổi mật khẩu = thay mã băm cũ; người đang trong phòng không bị ảnh hưởng. Mật khẩu hiện tại **không bao giờ** được hiển thị, trả về qua API, đưa vào URL hay ghi log.
+- **R-78** Phòng không có người tạo đã đăng nhập — phòng **đang chạy từ trước** khi có vai trò, hoặc server chạy không yêu cầu đăng nhập (chỉ khi test, `USER_AUTH_REQUIRED=false`) — **không có vai trò**: AI relay và ghi hình mở cho mọi người như trước, các thao tác quản lý (mute, mời ra, khoá, mật khẩu, co-host) không khả dụng; không ai được tự động làm Host. Production luôn yêu cầu đăng nhập, nên mọi phòng mới đều có Host.
+- **R-79** Mọi thao tác quản lý (khoá/mở khoá, mute, mời ra, chỉ định/bỏ co-host, đổi/bỏ mật khẩu, đổi AI mode, bật/tắt AI, start/stop recording, và các lần bị từ chối) được ghi **nhật ký kiểm tra** có cấu trúc ở máy chủ (chỉ mã định danh, không có tên, mật khẩu hay nội dung).
+
+### My meetings & lịch sử cuộc họp
+
+- **R-80** Mỗi người dùng đã đăng nhập có trang **My meetings** liệt kê các cuộc họp **mình đã tạo hoặc đã tham gia** (theo tài khoản, không theo tên hiển thị), **mới nhất trước** (theo thời điểm kết thúc; cuộc họp đang diễn ra theo thời điểm bắt đầu), **20 cuộc họp mỗi trang**. Bộ lọc: "All" / "Created by me" / "Recorded" / "With summary" và khoảng thời gian "Any time" / "Today" / "Last 7 days" / "Last 30 days".
+- **R-81** Có thể đặt **"Meeting title"** (không bắt buộc, tối đa 120 ký tự) khi tạo phòng. Không có tiêu đề thì hiện "<Ngôn ngữ ⇄ Ngôn ngữ> meeting". Phòng tạo trước khi có tính năng này vẫn hiển thị bình thường.
+- **R-82** Lịch sử **đầy đủ** của một cuộc họp (Transcript, Relay, Chat) **không** bị giới hạn 25 dòng như tab Relay lúc họp: tải theo từng trang 50 mục từ máy chủ, theo đúng thứ tự thời gian. Bản dịch chỉ hiện nếu đã thực sự được tạo trong cuộc họp — **không** dịch lại hay dựng lại bản dịch.
+- **R-83** Lịch sử tuân theo thời hạn lưu trữ (R-56, R-57): hiện "Available until <ngày> (expires in N days)"; hết hạn thì cuộc họp **biến mất khỏi My meetings và khỏi kết quả tìm kiếm ngay**, kể cả trước khi dữ liệu bị xoá thật; mở link cũ thấy "This meeting has expired".
+- **R-84** Cuộc họp từ **trước** khi có vai trò chỉ được gắn vào My meetings của những tài khoản **đã đăng nhập khi vào phòng** (theo user ID lưu lúc đó). Hệ thống **không bao giờ** gắn cuộc họp cũ cho ai chỉ vì trùng tên hiển thị, và không chỉ định Host cho phòng cũ (vai trò hiện "—").
+
+### Tìm kiếm
+
+- **R-90** **Search meetings** (ô tìm ở My meetings) tìm theo tiêu đề, mã phòng, tên người tham gia và ngôn ngữ; đồng thời hiện "In meeting content" — các đoạn khớp trong transcript, relay, chat và summary của **các cuộc họp của chính mình**. **Search this meeting** (trong trang chi tiết) tìm trong transcript, relay, chat và summary của cuộc họp đó.
+- **R-91** Mỗi kết quả có nguồn ("Transcript" / "Relay" / "Chat" / "Summary"), giờ, người nói và một **đoạn trích ngắn** có tô sáng từ khớp. Bấm vào kết quả mở đúng tab và **cuộn tới đúng câu/tin nhắn** (kèm "Load earlier" để xem phía trước). Kết quả phân trang (20 mỗi trang, "Show more results").
+- **R-92** Đây là **tìm theo từ khoá** (khớp chuỗi con, không phân biệt hoa/thường) — **không** phải tìm theo ngữ nghĩa. Khớp chuỗi con được chọn để tìm được tiếng Nhật, Trung, Hàn (không có khoảng trắng giữa các từ); không dùng stemming tiếng Anh. Tối thiểu 2 ký tự (1 ký tự với chữ Hán/Kana/Hangul). Gõ xong khoảng 0,3 giây mới gửi yêu cầu.
+- **R-93** Tìm kiếm **chỉ** chạy trong phạm vi cuộc họp người dùng được phép xem (lọc ở máy chủ trước khi so khớp); nội dung đã hết hạn/bị xoá không bao giờ xuất hiện trong kết quả.
 
 ---
 
@@ -294,6 +336,7 @@ Trên mobile, form tạo phòng nằm ngay dưới tiêu đề.
 | Khối giới thiệu | Tiêu đề, mô tả, 3 tính năng, và một **ví dụ tĩnh**: câu tiếng Việt kèm 2 dòng relay EN/JA. Không tương tác được |
 | **"Room languages"** | 7 chip bật/tắt, chọn được nhiều chip. Dòng gợi ý bên dưới: "Select at least one language." hoặc "Vietnamese, Japanese selected" |
 | **"AI relay"** | Nút chọn 3 lựa chọn "Voice + Text" / "Text Only" / "Off". Lựa chọn nào không hợp lệ theo số ngôn ngữ thì bị khoá, rê chuột để xem lý do (bảng ở R-20). Dòng gợi ý đổi theo số ngôn ngữ đã chọn |
+| **"Meeting title (optional)"** | Ô nhập tối đa 120 ký tự, gợi ý "Helps you find it later in My meetings." Để trống thì dùng "<ngôn ngữ> meeting" (R-81). Người tạo phòng trở thành **Host** (R-70) |
 | **"Room access"** | Nút chọn "Anyone with the link" (mặc định) / "Require a password". Chọn "Require a password" thì hiện 2 ô "Password" (gợi ý "At least 6 characters. Share it separately from the link.") và "Confirm password", có nút hiện/ẩn mật khẩu. Lỗi hiện ngay dưới ô: "Password must be at least 6 characters." / "Passwords don't match." (R-06) |
 | **"Create room"** | Khoá khi chưa chọn ngôn ngữ nào. Khi bấm sẽ hiện "Creating room…". Thành công → chuyển sang S2 của phòng mới |
 | **"Room ID or link"** + "Join" | Chấp nhận cả mã phòng lẫn link đầy đủ. Không hợp lệ → "Enter a valid room ID or link." Hợp lệ → chuyển sang S2 |
@@ -363,9 +406,10 @@ flowchart TD
 | **"Your name"** | Tối đa 40 ký tự. Tự điền **tên Google**; nếu lần trước người này đã đổi sang tên khác thì điền tên đã đổi (nhớ riêng theo từng tài khoản). Vẫn sửa được trước khi vào |
 | **"Your language"** | Chỉ liệt kê Room languages. Tự chọn ngôn ngữ lần trước nếu có trong phòng. Phòng chỉ có 1 ngôn ngữ thì tự chọn luôn |
 | **Access** | Chỉ hiện ở phòng có mật khẩu: "🔒 Password protected" |
+| **Status** + "This meeting is locked by the host." | Chỉ hiện khi Host đã khoá phòng (R-76). Người mới bấm "Join meeting" sẽ thấy lỗi "This meeting is locked by the host." |
 | **"Meeting password"** | Chỉ ở phòng có mật khẩu, kèm dòng "This meeting requires a password." Lỗi hiện ngay dưới ô: "Enter the meeting password." / "Incorrect meeting password." / chặn tạm thời khi sai nhiều lần (R-07, R-08) |
 | **"Join meeting"** | Khoá cho tới khi có tên và ngôn ngữ (và mật khẩu, nếu phòng yêu cầu). Khi bấm hiện "Joining…" |
-| **"In this room N"** | Hiện tối đa 5 người thật (thêm dòng "+N more participants"), mỗi người kèm "Ngôn ngữ · Trạng thái", cộng dòng BRSE AI kèm mô tả chế độ. Phòng trống: "No one has joined yet. You'll be the first." Phòng có mật khẩu chỉ hiện **số** người và "You'll see who's here after you join." (R-09) |
+| **"In this room N"** | Hiện tối đa 5 người thật (thêm dòng "+N more participants"), mỗi người kèm nhãn vai trò thật ("Host" / "Co-host"), "Ngôn ngữ · Trạng thái", cộng dòng BRSE AI kèm mô tả chế độ. Phòng trống: "No one has joined yet. You'll be the first." Phòng có mật khẩu chỉ hiện **số** người và "You'll see who's here after you join." (R-09) |
 
 ### Workflow
 
@@ -419,13 +463,13 @@ Khi vào phòng, trình duyệt **tự bật mic và camera** (sau khi người 
 
 | Thành phần | Hành vi |
 | --- | --- |
-| Tiêu đề | Ghép các ngôn ngữ của phòng, ví dụ "Vietnamese ⇄ Japanese" |
+| Tiêu đề | "Meeting title" nếu có (dòng phụ là các ngôn ngữ), không thì ghép các ngôn ngữ của phòng, ví dụ "Vietnamese ⇄ Japanese". Có nhãn "🔒 Locked" khi phòng bị khoá |
 | Mã phòng | Hiện để người dùng copy hoặc đọc cho người khác |
 | 👥 số người | Tính cả BRSE AI |
 | 🕒 thời gian | "24m left". Chuyển màu cảnh báo khi còn **dưới 5 phút**. Hết giờ thì hiện "Ended" |
 | Trạng thái kết nối | "Connecting" / "Connected" / "Reconnecting" / "Disconnected" |
 | **"Your language"** | Đổi ngôn ngữ của bạn (chỉ trong Room languages). Có hiệu lực ngay cho bạn và cho AI |
-| **Công tắc AI relay** | Nhãn "AI relay" (hoặc "Captions" ở phòng 1 ngôn ngữ). Bật/tắt cho **cả phòng**. Trong lúc xử lý hiện "Updating…". Bị khoá khi phòng hết hạn hoặc khi đang đổi relay mode |
+| **Công tắc AI relay** | Nhãn "AI relay" (hoặc "Captions" ở phòng 1 ngôn ngữ). Bật/tắt cho **cả phòng** — chỉ Host / Co-host; Participant thấy công tắc ở dạng chỉ đọc (R-22). Trong lúc xử lý hiện "Updating…". Bị khoá khi phòng hết hạn hoặc khi đang đổi relay mode |
 | **Relay mode** | Chỉ ở phòng đúng 2 ngôn ngữ, màn hình từ 1024px trở lên (màn nhỏ hơn: Settings → AI relay). Dropdown "Voice + Text" ("Live translation appears as text and AI voice.") / "Text Only" ("Live translation appears as text without AI voice."). Hiện "Updating…" và khoá trong lúc máy chủ xử lý; lỗi hiện cảnh báo vàng (vd "Could not update AI relay mode. Try again.") và giữ mode thật của phòng. Bị khoá khi phòng hết hạn |
 
 ### S3.2 Danh sách cảnh báo (Alerts)
@@ -435,7 +479,8 @@ Các cảnh báo hiện xếp chồng dưới header:
 | Mức | Nội dung |
 | --- | --- |
 | Đỏ | "This meeting has ended. The room time limit has been reached." |
-| Đỏ | "The host muted your microphone." |
+| Vàng | "The host muted your microphone. You can unmute when you're ready." (R-74) |
+| Xanh | "<Host> made you a co-host. …" / "You're no longer a co-host." (R-73) |
 | Đỏ | Lỗi kết nối (mất kết nối, ngôn ngữ không hợp lệ…) |
 | Vàng | Lỗi bật/tắt AI relay, lỗi mic/camera/thiết bị, lỗi chia sẻ màn hình, lỗi thao tác mute |
 | Vàng | Lưu ý khi đang chia sẻ màn hình: không có âm thanh chia sẻ (R-61), số khung hình thấp hơn mức đã chọn (R-63) |
@@ -474,10 +519,10 @@ stateDiagram-v2
 
 | Nút | Hành vi |
 | --- | --- |
-| "Mute" / "Unmute" | Bật/tắt mic. Nếu bị host mute thì hiện "Muted by host" và không tự mở lại được |
+| "Mute" / "Unmute" | Bật/tắt mic. Sau khi bị Host/Co-host mute vẫn tự bấm "Unmute" được (R-74) |
 | "Start video" / "Stop video" | Bật/tắt camera |
 | "Share screen" / "Stop sharing" | "Share screen" mở hộp "Share screen" (chọn chất lượng và "Include shared audio", R-60, R-61) → "Share" → trình duyệt hỏi chọn màn hình/cửa sổ/tab. Trong lúc xử lý hiện "Starting…" / "Stopping…". Bị mờ trên thiết bị không hỗ trợ (R-64) |
-| "Record" / "Stop recording" | Chỉ hiện khi máy chủ hỗ trợ ghi hình. "Record" mở hộp xác nhận (R-50) → "Start recording". Khi đang ghi, nút đỏ "Stop recording" (dừng ngay, không hỏi lại). Trong lúc xử lý: "Starting…" / "Stopping…". Trên điện thoại chỉ hiện biểu tượng; chỉ báo REC luôn ở đầu trang |
+| "Record" / "Stop recording" | Chỉ hiện với **Host / Co-host** và khi máy chủ hỗ trợ ghi hình (R-50). "Record" mở hộp xác nhận (R-50) → "Start recording". Khi đang ghi, nút đỏ "Stop recording" (dừng ngay, không hỏi lại). Trong lúc xử lý: "Starting…" / "Stopping…". Trên điện thoại chỉ hiện biểu tượng; chỉ báo REC luôn ở đầu trang |
 | ▤ (Show/Hide side panel) | Mở/đóng side panel |
 | ⚙ "Settings" | Mở ngăn kéo cài đặt (S3.6) |
 | "Leave" | Rời phòng (xem workflow S3.7) |
@@ -546,9 +591,10 @@ stateDiagram-v2
 
 | Thành phần | Hành vi |
 | --- | --- |
-| Mỗi dòng | Ảnh chữ cái đầu tên (AI hiện "AI"), tên, "(You)", nhãn "Host", "Ngôn ngữ · In room / Joining / Reconnecting / Disconnected / Muted by host", biểu tượng đang chia sẻ màn hình |
+| **"Room security"** (đầu tab) | **Chỉ Host thấy** (R-76, R-77): "Meeting access" — "Password protected" / "Anyone with the link" với "Change password" / "Set password" và "Remove password"; "Meeting lock" — "Lock meeting" / "Unlock meeting". Người khác chỉ thấy dòng "This meeting is locked by the host. Nobody new can join." khi phòng bị khoá |
+| Mỗi dòng | Ảnh chữ cái đầu tên (AI hiện "AI"), tên, "(You)", nhãn vai trò thật "Host" / "Co-host", "Ngôn ngữ · In room / Joining / Reconnecting / Disconnected / Muted by host", biểu tượng đang chia sẻ màn hình |
 | Dòng AI | Mô tả chế độ: "AI voice + text relay participant" / "BRSE text relay participant" / "BRSE summary participant" / "BRSE relay is off" |
-| Nút "Mute" | Chỉ host thấy, cạnh người khác (xem giới hạn ở mục 16) |
+| Menu "⋯" | Chỉ hiện khi bạn có quyền với người đó (R-72): Host nhìn Participant → "Mute", "Make co-host", "Remove from meeting"; Host nhìn Co-host → "Mute", "Remove co-host", "Remove from meeting"; Co-host nhìn Participant → "Mute", "Remove from meeting". Participant không có menu |
 
 ### S3.6 Ngăn kéo cài đặt (Settings)
 
@@ -556,7 +602,7 @@ Mở từ ⚙. Đóng bằng ✕, phím Esc, hoặc bấm ra ngoài.
 
 | Phần | Thành phần | Hành vi |
 | --- | --- | --- |
-| **AI relay** | "Enabled" (công tắc) | Giống công tắc AI relay trên header (cùng một state) |
+| **AI relay** | "Enabled" (công tắc) | Giống công tắc AI relay trên header (cùng một state). Với Participant là chỉ đọc, kèm "Only the host or a co-host can change AI relay for this room." |
 | | "Mode" | Giống selector Relay mode trên header (cùng một state). Khi AI tắt ghi "AI relay is off. This mode is used when it's turned back on." Phòng 1 hoặc ≥3 ngôn ngữ không có lựa chọn, chỉ có dòng giải thích |
 | **Audio** | "Microphone" (công tắc) | Giống nút Mute |
 | | "Input device" | Chọn micro |
@@ -649,15 +695,22 @@ Bản thử dịch hiện chỉ trả về **chữ**, không có giọng đọc.
 
 ## S7 — My meetings & Meeting archive
 
-**Mục đích:** xem lại cuộc họp mình đã tham gia trong thời hạn lưu trữ.
+**Mục đích:** xem lại và tìm lại các cuộc họp mình đã tạo hoặc tham gia, trong thời hạn lưu trữ (R-80…R-93).
 
-- **`/meetings`**: bảng "Meeting · Date · Duration · Recording (None / Processing / Ready / Failed) · Expires (vd "6 days")". Trống: "No meetings yet". Cuộc họp hết hạn tự biến mất.
-- **`/meetings/<mã>`**: tiêu đề ngôn ngữ phòng, ngày, thời lượng; dòng "Available until <ngày> (expires in N days)". Các tab:
+- **`/meetings`** ("My meetings"; mở từ nút "My meetings" ở Home):
+  - Ô **"Search meetings…"**, bộ lọc **All / Created by me / Recorded / With summary**, chọn **Any time / Today / Last 7 days / Last 30 days**.
+  - Mỗi cuộc họp là một **thẻ**: tiêu đề (hoặc "<ngôn ngữ> meeting"), ngôn ngữ · mã phòng, "Oct 5, 2026 · 14:00 · 28 min · 4 participants", nhãn "In progress" / "Host" / "Co-host", "Summary ready", "Recording available" / "Recording is being prepared" / "Recording failed" / "No recording", và "Available until Oct 12, 2026 · 6 days left". Điện thoại và máy tính đều dùng thẻ (không ép bảng vào màn hình hẹp).
+  - Phân trang "Previous / Page N of M / Next". Trống: "No meetings yet" (hoặc "No meetings match" khi đang lọc).
+  - Khi có từ khoá: thêm khối **"In meeting content"** — kết quả khớp trong transcript/relay/chat/summary (R-90, R-91), bấm vào mở đúng cuộc họp, đúng tab, đúng chỗ.
+- **`/meetings/<mã>`**: tiêu đề, ngày giờ, thời lượng, mã phòng, vai trò của bạn; dòng "Available until <ngày> (expires in N days)". Ô **"Search this meeting…"** ở trên các tab. Các tab:
+  - **Overview**: tiêu đề, mã phòng, ngôn ngữ, thời điểm tạo / bắt đầu / kết thúc, thời lượng, chế độ AI relay, Host, Co-hosts, số người tham gia, ghi hình, summary, quyền truy cập, hạn lưu trữ. Trường nào không có dữ liệu thì hiện "—" (không bịa).
   - **Recording**: từng đoạn ghi ("Recording 1", "Recording 2" kèm giờ bắt đầu–kết thúc, thời lượng, dung lượng) với **Play** (phát ngay trên trang) và **Download**. Đang xử lý: "Recording is being prepared." (tự cập nhật, không hiện trình phát lỗi). Không ghi hình: "This meeting wasn't recorded."
-  - **Summary**: Final summary.
-  - **Transcript / Relay / Chat**: **toàn bộ** nội dung (không giới hạn 25 dòng), tải thêm bằng "Show more".
-  - **People**: người tham gia (đánh dấu "(you)").
-- Hết hạn: "This meeting has expired — Its recording, summary, transcript and chat were deleted when the retention period ended." Không phải người tham gia: "Meeting not found".
+  - **Transcript**: **toàn bộ** câu nói theo thứ tự thời gian — giờ (hh:mm:ss), người nói, ngôn ngữ, câu gốc, và "Translated · <ngôn ngữ>" nếu bản dịch đã được tạo trong cuộc họp. Tải 50 câu một lần ("Load more"; "Load earlier" khi mở từ kết quả tìm kiếm).
+  - **Relay**: giờ, người nói, "<ngôn ngữ nguồn> → <ngôn ngữ đích>", bản relay và "Original".
+  - **Chat**: giờ, người gửi, ngôn ngữ, nội dung, và các bản dịch đã lưu cùng tin nhắn.
+  - **Summary**: Final summary với các mục Overview, Key points, Decisions, Action items, Risks and blockers, Open questions, Next steps, Participants, nguồn ("Based on …"). Không suy diễn thêm ở giao diện.
+  - **Participants**: mỗi người một dòng — tên, nhãn vai trò thật ("Host" / "Co-host"; cuộc họp cũ không có vai trò), "Removed" nếu bị mời ra, ngôn ngữ, "Joined hh:mm", "Left hh:mm".
+- Hết hạn: "This meeting has expired — Its recording, summary, transcript and chat were deleted when the retention period ended." Không phải cuộc họp của bạn: "Meeting not found" (không tiết lộ cuộc họp có tồn tại hay không).
 
 **Admin** có thêm trang "Recordings" (`/admin/recordings`): danh sách archive với bộ lọc Ready / Processing / Failed / Expiring in 48 h / Expired, trang chi tiết (đoạn ghi, dung lượng, file lưu trữ, đổi thời hạn có cảnh báo "Apply and expire", "Delete now" phải gõ DELETE), và "Settings → Data & retention" để đổi mặc định.
 
@@ -669,7 +722,7 @@ Bản thử dịch hiện chỉ trả về **chữ**, không có giọng đọc.
 
 ```mermaid
 sequenceDiagram
-    actor H as Huy (VI) — người tạo
+    actor H as Huy (VI) — người tạo, Host
     actor K as Kenji (JA) — khách
     participant M as MeetQ
     participant AI as BRSE AI
@@ -693,7 +746,7 @@ sequenceDiagram
     K->>M: Leave → về Home
     H->>M: Leave (người cuối) → S4 Meeting Ended
     M-->>H: Final summary tiếng Việt + Recording "Ready" (Play / Download)
-    K->>M: Vài ngày sau: My meetings → mở cuộc họp → xem lại bản ghi (trước khi hết hạn 7 ngày)
+    K->>M: Vài ngày sau: My meetings → tìm "deploy" → mở đúng câu trong Transcript → xem lại bản ghi (trước khi hết hạn 7 ngày)
 ```
 
 ### J2 — Họp nhiều quốc gia (VI, JA, EN)
@@ -754,6 +807,8 @@ Các hành vi sau là **có chủ đích**. Prompt tính năng mới không nên
 | Phiên Admin (tách riêng) | Máy chủ + cookie riêng | Tới khi Sign out hoặc phiên hết hạn |
 | Tên hiển thị đã đổi (theo tài khoản), ngôn ngữ lần gần nhất | Trình duyệt | Lâu dài |
 | Lựa chọn "AI relay" khi tạo phòng | Trình duyệt | Lâu dài |
+| Vai trò trong phòng (Host / Co-host / Participant), người bị mời ra, trạng thái khoá phòng | Máy chủ | Vai trò lúc họp: đến khi phòng hết hạn. Bản ghi vai trò cho lịch sử: theo thời hạn lưu trữ của cuộc họp, rồi bị xoá |
+| "Meeting title" | Máy chủ | Như phòng / theo thời hạn lưu trữ |
 | Chế độ chat "Original/Translated" | Trình duyệt | Lâu dài |
 | Layout phòng | Trình duyệt | Lâu dài |
 | Chất lượng chia sẻ màn hình ("High quality" / "Smooth motion"). "Include shared audio" **không** được nhớ | Trình duyệt | Lâu dài |
@@ -781,11 +836,17 @@ Hệ thống **chỉ ghi hình khi có người bấm Record** (R-50) và luôn 
 | Home | "Password must be at least 6 characters." / "Password must be at most 128 characters." / "Passwords don't match." | Mật khẩu phòng không hợp lệ (R-06) |
 | Lobby | "Enter the meeting password." / "Incorrect meeting password." | Phòng có mật khẩu (R-07) |
 | Lobby | "Too many incorrect password attempts. Please wait a few minutes and try again." | Sai mật khẩu quá nhiều lần (R-08) |
+| Lobby | "This meeting is locked by the host." | Phòng bị khoá, người mới (R-76) |
+| Lobby | "You were removed from this meeting." | Người đã bị mời ra thử vào lại (R-75) |
+| Room | "You don't have permission to perform this action." | Thao tác quản lý không đủ quyền (R-72) |
+| Room | "You were removed from the meeting by the host." | Bị mời ra khỏi phòng (R-75) |
+| Room | "<Host> made you a co-host. You can now manage AI relay, recording and participants." / "You're no longer a co-host." | Đổi vai trò (R-73) |
+| My meetings | "No meetings yet" / "No meetings match" / "No matches in meeting content." / "Enter at least 2 characters to search." | Danh sách & tìm kiếm (R-80, R-92) |
 | Lobby | "Please enter your display name." / "Choose your language from the room languages." | Thiếu thông tin |
 | Lobby | "Room languages are unavailable. Reload the page or ask the host to recreate the room." | Phòng không có cấu hình ngôn ngữ |
 | Lobby | "Room is full." / "Room not found." / "This meeting has expired and is no longer accepting participants." / "LiveKit is unavailable right now." / "Display name must be 1 to 40 characters." / "Your language must match the room languages: …" / "Could not join room. Check backend availability." | Join thất bại |
 | Room | "This meeting has ended. The room time limit has been reached." | Hết giờ |
-| Room | "The host muted your microphone." | Bị mute |
+| Room | "The host muted your microphone. You can unmute when you're ready." | Bị Host/Co-host mute (R-74) |
 | Room | "Language must match the room languages: …" | Đổi sang ngôn ngữ không hợp lệ |
 | Room | "Screen sharing started, but shared audio isn't available for this source or browser." | Chọn "Include shared audio" nhưng không có âm thanh (R-61) |
 | Room | "Your browser is capturing at up to N FPS (M FPS requested)." | Số khung hình thực tế thấp hơn mức đã chọn (R-63) |
@@ -802,8 +863,8 @@ Khi viết tính năng mới, coi các mục dưới đây là **khoảng trốn
 
 | # | Chưa có / giới hạn | Ghi chú |
 | --- | --- | --- |
-| G1 | **Lịch sử cuộc họp của tôi** | Đã có đăng nhập Google (R-01) nhưng **chưa** có trang "cuộc họp của tôi". Final summary chỉ xem được qua link phòng. Phòng chưa gắn với tài khoản người tạo |
-| G2 | **Host thật sự** | Giao diện có sẵn nhãn Host và nút Mute, nhưng hệ thống chưa chỉ định host và mute người khác chưa hoạt động. Hiện ai cũng ngang quyền, kể cả bật/tắt AI cho cả phòng |
+| G1 | ~~Lịch sử cuộc họp của tôi~~ | Đã có (2026-10-05): My meetings, lịch sử đầy đủ, tìm kiếm (R-80…R-93, S7). Chưa có: xuất transcript/summary ra file |
+| G2 | ~~Host thật sự~~ | Đã có (2026-10-05): Host / Co-host / Participant (R-70…R-79). Chưa có: **chuyển Host** cho người khác, **cho phép người bị mời ra vào lại**, chỉ định Co-host trước khi người đó vào phòng |
 | G3 | ~~Đổi chế độ Voice+Text ↔ Text Only trong phòng~~ | Đã có (2026-10-03), xem R-21 |
 | G4 | Thêm/bớt ngôn ngữ của phòng sau khi tạo | Không có |
 | G5 | Gia hạn thời gian phòng | Không có |
@@ -819,9 +880,11 @@ Khi viết tính năng mới, coi các mục dưới đây là **khoảng trốn
 | G15 | ~~Lệch thông tin thời hạn phòng~~ | Đã sửa (2026-10-03): Home lấy thời lượng từ cấu hình máy chủ |
 | G16 | Khi tạo phòng 1 hoặc từ 3 ngôn ngữ trở lên, không chọn được "Off" | Phải tạo rồi tắt AI bằng công tắc trong phòng |
 | G17 | ~~Giao diện quản trị / thống kê~~ | Đã có Admin Portal `/admin` (2026-10-03): chỉ đọc, một mật khẩu chung, chưa RBAC; usage/cost AI chưa có dữ liệu |
-| G18 | Đổi / bỏ mật khẩu phòng sau khi tạo | Không có (R-06). Muốn đổi thì tạo phòng mới |
+| G18 | ~~Đổi / bỏ mật khẩu phòng sau khi tạo~~ | Đã có (2026-10-05): chỉ Host (R-77) |
 | G19 | Giới hạn trình duyệt khi chia sẻ màn hình | Chrome và Edge chia sẻ được âm thanh của **tab**; âm thanh **toàn hệ thống** chỉ có trên Windows và ChromeOS. Firefox và Safari thường **không** có âm thanh chia sẻ (hiện cảnh báo, hình vẫn chia sẻ, R-61). Điện thoại và tablet **không** chia sẻ màn hình được (R-64). Mức 60 FPS phụ thuộc trình duyệt và máy; không đạt thì hiện cảnh báo (R-63) |
 | G20 | Dịch âm thanh của màn hình chia sẻ | AI chỉ dịch giọng nói qua micro (R-62) |
+| G21 | Tìm kiếm theo ngữ nghĩa / gần đúng | Hiện chỉ tìm theo từ khoá, khớp chuỗi con (R-92): không bỏ dấu tiếng Việt ("deploy" khớp, "trien khai" không khớp "triển khai"), không hiểu từ đồng nghĩa. Tìm "In meeting content" chỉ quét **200 cuộc họp gần nhất** của bạn |
+| G22 | Cuộc họp cũ (trước 2026-10-05) không có Host / vai trò | Chỉ gắn theo tài khoản đã đăng nhập lúc vào phòng (R-84); cuộc họp kết thúc trước khi có lưu trữ (legacy) không có hạn lưu trữ và không tự xoá |
 
 ---
 
@@ -836,7 +899,7 @@ Khi viết tính năng mới, coi các mục dưới đây là **khoảng trốn
 ### 17.2 Checklist ảnh hưởng: mỗi tính năng mới cần trả lời
 
 - [ ] Ảnh hưởng **màn hình nào** (S1–S6)? Thêm vào **khu vực nào** (Header, Stage, Control bar, tab nào của Side panel, Settings)?
-- [ ] Ai được dùng: mọi người tham gia hay chỉ một số người? (Hiện chưa có host thật — G2)
+- [ ] Ai được dùng: Host, Co-host hay mọi Participant? Cập nhật bảng quyền R-72 và kiểm tra lại ở máy chủ
 - [ ] Hành vi khác nhau thế nào theo **số ngôn ngữ của phòng** (1 / 2 / ≥3) và **chế độ AI** (Voice+Text / Text Only / Off)?
 - [ ] Có xung đột với **R-xx** nào không? (vd: R-21a bật/tắt AI và relay mode là hai state riêng)
 - [ ] Hành vi khi **phòng hết hạn**, khi **mất kết nối**, khi **tải lại trang**?
@@ -893,8 +956,8 @@ Khi viết tính năng mới, coi các mục dưới đây là **khoảng trốn
 | Ý tưởng | Dựa trên | Màn hình |
 | --- | --- | --- |
 | Tải transcript và summary về máy (PDF/Markdown) | G6, G7 | S3 tab Summary, S4 |
-| Chỉ định host + chỉ host được bật/tắt AI, mute người khác | G2, R-22 | S2, S3 Header, S3 People |
+| Chuyển Host cho người khác / cho người bị mời ra vào lại | G2, R-70, R-75 | S3 People |
 | Glossary thuật ngữ riêng của dự án khi tạo phòng | G14, A7 | S1, S3 Settings |
 | Lọc giọng AI: chỉ nghe bản dịch sang ngôn ngữ của mình | G8, A12 | S3 Settings |
 | Gia hạn phòng thêm 15 phút | G5, R-02 | S3 Header |
-| Trang "Cuộc họp của tôi" (theo tài khoản Google) liệt kê phòng và summary đã tham gia | G1 | S1 |
+| Xuất transcript + summary của một cuộc họp ra Markdown/PDF | G1, R-82 | S7 |

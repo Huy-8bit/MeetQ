@@ -104,6 +104,23 @@ class WSHub:
             asyncio.create_task(self.on_connection_lost(room_id, participant_id, session_id, reason))
         return True
 
+    async def close_participant(self, room_id: str, participant_id: str, *, code: int, reason: str) -> bool:
+        """Close one participant's socket on this gateway without triggering cleanup."""
+        entry = self.active_connections.get(room_id, {}).get(participant_id)
+        if entry is None:
+            return False
+        try:
+            await entry.websocket.close(code=code, reason=reason)
+        except Exception:
+            logger.debug("Failed to close websocket for %s in room %s", participant_id, room_id)
+        return self._remove_connection(
+            room_id,
+            participant_id,
+            entry.websocket,
+            reason=reason,
+            trigger_cleanup=False,
+        )
+
     async def send_to_participant(self, room_id: str, participant_id: str, message: dict):
         if room_id in self.active_connections and participant_id in self.active_connections[room_id]:
             entry = self.active_connections[room_id][participant_id]

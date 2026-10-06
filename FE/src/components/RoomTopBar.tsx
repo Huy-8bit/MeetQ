@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { Clock, Users } from "lucide-react";
+import { Clock, Lock, Users } from "lucide-react";
 import type { GatewayConnectionState } from "../types/livekit";
 import type { BrseOutputMode, Language, MeetingLanguage } from "../types/api";
 import { formatMeetingLanguageBridge, getLanguageLabel } from "../lib/languages";
@@ -23,6 +23,11 @@ interface RoomTopBarProps {
   brseRoomMode: BrseRoomMode;
   isTogglingBrse: boolean;
   canToggleBrse: boolean;
+  /** False for participants: AI relay is shown read-only. */
+  canManageAi?: boolean;
+  /** Optional meeting title (falls back to the language bridge). */
+  title?: string | null;
+  locked?: boolean;
   onChangeLanguage: (language: Language) => void;
   onToggleBrse: (nextEnabled: boolean) => void;
   relayMode: BrseOutputMode;
@@ -45,6 +50,9 @@ export function RoomTopBar({
   brseRoomMode,
   isTogglingBrse,
   canToggleBrse,
+  canManageAi = true,
+  title,
+  locked = false,
   onChangeLanguage,
   onToggleBrse,
   relayMode,
@@ -69,9 +77,16 @@ export function RoomTopBar({
       <div className="room-header-identity">
         <span className="brand-mark" aria-hidden="true">MQ</span>
         <div className="room-header-text">
-          <h1 className="room-title">{formatMeetingLanguageBridge(meetingLanguages)}</h1>
+          <h1 className="room-title">{title?.trim() || formatMeetingLanguageBridge(meetingLanguages)}</h1>
           <p className="room-meta">
+            {title?.trim() ? <span className="room-meta-item">{formatMeetingLanguageBridge(meetingLanguages)}</span> : null}
             <span className="mono" title="Room ID">{roomId}</span>
+            {locked ? (
+              <span className="room-meta-item" title="Locked by the host: nobody new can join.">
+                <Lock size={13} aria-hidden="true" />
+                Locked
+              </span>
+            ) : null}
             <span className="room-meta-item">
               <Users size={13} aria-hidden="true" />
               {participantCount}
@@ -111,10 +126,11 @@ export function RoomTopBar({
           languageCount={meetingLanguages.length}
           pending={isTogglingBrse}
           disabled={!canToggleBrse}
+          readOnly={!canManageAi}
           onToggle={onToggleBrse}
         />
         {/* Desktop only; on smaller screens the same control lives in Settings → AI relay. */}
-        <div className="room-header-relay-mode">
+        <div className="room-header-relay-mode" title={canManageAi ? undefined : "Only the host or a co-host can change the AI relay mode."}>
           <RelayModeControl
             mode={relayMode}
             modes={relayModes}

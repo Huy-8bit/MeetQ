@@ -177,6 +177,11 @@ export class GatewaySocket {
     });
   }
 
+  /** The user turned their own mic back on after a host mute (clears "Muted by host"). */
+  sendSelfUnmuted(): void {
+    this.sendEnvelope("participant.self_unmuted", {});
+  }
+
   private openSocket(isReconnect: boolean): void {
     this.clearReconnectTimer();
     this.setState(isReconnect ? "reconnecting" : "connecting");
@@ -435,5 +440,6 @@ function buildClientEventId(): string {
 }
 
 function isFatalCloseCode(code: number): boolean {
-  return code === 4401 || code === 4403 || code === 4404 || code === 4410;
+  // 4409: removed from the meeting by the host (never reconnect).
+  return code === 4401 || code === 4403 || code === 4404 || code === 4409 || code === 4410;
 }

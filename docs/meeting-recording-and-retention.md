@@ -24,7 +24,7 @@ Three invariants:
 ## Recording
 
 ```text
-Participant clicks Record → confirm → POST /api/rooms/{id}/recordings
+Host / co-host clicks Record → confirm → POST /api/rooms/{id}/recordings
         │
         ▼
 Gateway RecordingService ──(LiveKit API)──► Egress: Room Composite, layout "speaker"
@@ -41,7 +41,7 @@ recording.* events on the room channel → every participant's REC indicator
 - **Server-side.** The starter can close the tab, lose the network or leave; the recording continues while the room runs. It stops automatically when the meeting ends (room expiry or the last real participant leaving) through a room-end listener plus the reconciler.
 - **Failure isolation.** Egress errors mark the recording `failed`, broadcast `recording.failed` and raise the admin issue `RECORDING_FAILED`. Media, relay and chat are not touched.
 - **Segments.** Start → Stop → Start creates a new recording (own ID, own MP4). All segments share the meeting's retention.
-- **Permission.** Any signed-in real participant in the room (room token + user session). Admins cannot start a recording.
+- **Permission.** Host and co-hosts only (room token + user session; the role is resolved on the server from the user ID, see `docs/room-roles-and-meeting-history.md`). Participants get `403 permission_denied` but still see the REC indicator and every `recording.*` event. Admins cannot start a recording.
 - **Format.** MP4 (H.264/AAC), playable in browsers. The "speaker" layout puts an active screen share in focus.
 - **Reconciler** (every 3 s). It polls Egress for every pending recording. On completion it checks the S3 object and records its size, duration and timestamps. It fails a start that never became active (90 s) and stops recordings of rooms that have ended.
 
@@ -92,7 +92,7 @@ Objects are tagged with identifiers only (`room_id`, `archive_id`, `environment`
 - **Cleanup worker** (hourly; once shortly after start-up). For each archive with `expires_at <= now`:
   1. Mark `deleting`.
   2. Delete every object under the archive prefix (MP4 + JSON + manifest).
-  3. Delete `room_messages`, `meeting_summaries`, `room_participants`, `meeting_recordings` and `rooms` for the room.
+  3. Delete `room_messages`, `meeting_summaries`, `room_participants`, `room_memberships`, `meeting_recordings` and `rooms` for the room (this also removes the meeting from My meetings and from search).
   4. Keep a tombstone with `status=deleted`, `deleted_at` and `deletion_reason`, with no files and no participant IDs.
 
   The job is idempotent: missing objects are fine and a failed run is retried (admin issue `ARCHIVE_DELETE_FAILED`).
@@ -108,7 +108,7 @@ On first start, the gateway records `system_settings.archive_lifecycle.managed_s
 
 | Who | Can |
 | --- | --- |
-| Participant (signed-in user whose ID joined the room) | `/meetings` list and detail: recording play/download, summary, full transcript/relay/chat, people, expiry. Works after leaving, until expiry |
+| Member (signed-in user who created or joined the room, not removed by the host) | `/meetings` list and detail: recording play/download, summary, full transcript/relay/chat, people with roles, search, expiry. Works after leaving, until expiry |
 | Other signed-in users | `404` (display names are never used for access) |
 | After expiry/deletion | `410 meeting_archive_expired` / `410 meeting_archive_deleted`; no URL is issued |
 | Admin | Archive list/detail, retention, Delete now. **No** start-recording endpoint |
@@ -122,7 +122,7 @@ Playback and download use `POST /api/recordings/{id}/playback-url|download-url`.
 | POST | `/api/rooms/{room_id}/recordings` | room token + user |
 | POST | `/api/rooms/{room_id}/recordings/{recording_id}/stop` | room token + user |
 | GET | `/api/rooms/{room_id}/recordings/current` | room token + user |
-| GET | `/api/meetings`, `/api/meetings/{room_id}`, `/api/meetings/{room_id}/messages?kind=` | user (participant) |
+| GET | `/api/meetings`, `/api/meetings/search`, `/api/meetings/{room_id}` and `…/transcript`, `…/relay`, `…/chat`, `…/summary`, `…/participants`, `…/recordings`, `…/search`, `…/messages` | user (member) — see `docs/room-roles-and-meeting-history.md` |
 | GET | `/api/recordings/{recording_id}` | user (participant) |
 | POST | `/api/recordings/{recording_id}/playback-url`, `/download-url` | user (participant) |
 | GET | `/api/admin/recordings?filter=all\|ready\|processing\|failed\|expiring_soon\|expired` | admin |

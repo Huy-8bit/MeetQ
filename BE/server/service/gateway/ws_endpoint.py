@@ -3,7 +3,9 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query
 from server.service.gateway.app_state import app_state
 from server.service.gateway.auth import verify_room_token, ExpiredTokenError, InvalidTokenError, TokenRoomMismatchError
+from server.service.gateway.room_permissions import RoomPermissionError
 from server.service.gateway.room_service import (
+    RoomActionError,
     BrseToggleForbiddenError,
     InvalidChatMessageError,
     InvalidLanguageError,
@@ -11,7 +13,7 @@ from server.service.gateway.room_service import (
     RoomNotFoundError,
     ParticipantNotFoundError,
 )
-from server.events import EventType, build_envelope
+from server.events import build_envelope
 from server.meeting_modes import active_human_participant_count
 
 
@@ -101,12 +103,17 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str, token: str = Qu
         snapshot,
         participant_id,
     )
+    # Role from server state (membership by user ID): restored on every reconnect.
+    permissions = await app_state.room_service.get_permissions(room_id, participant_id, state_participant.session_id)
     snap_payload = {
         "self": {
             "participant_id": participant_id,
             "session_id": claims.get("session_id", ""),
             "display_name": participant.display_name,
-            "language": participant.language
+            "language": participant.language,
+            "role": permissions.role,
+            "permissions": permissions.permissions,
+            "permissions_enforced": permissions.enforced,
         },
         "room": snapshot.room.model_dump(),
         "participants": [p.model_dump() for p in personalized_snapshot.participants],
@@ -239,6 +246,35 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str, token: str = Qu
                             "payload": {
                                 "code": exc.code,
                                 "message": str(exc),
+                            },
+                        })
+
+                elif msg_type == "participant.self_unmuted":
+                    # The user turned their own mic back on after a host mute (allowed).
+                    await app_state.room_service.clear_muted_by_host(
+                        room_id,
+                        participant_id,
+                        state_participant.session_id,
+                    )
+
+                elif msg_type == "moderation.mute_participant":
+                    target = payload.get("target_participant_id") if isinstance(payload, dict) else None
+                    try:
+                        await app_state.room_service.mute_participant(
+                            room_id,
+                            str(target or ""),
+                            actor_participant_id=participant_id,
+                            session_id=state_participant.session_id,
+                        )
+                    except (RoomPermissionError, RoomActionError, RoomNotFoundError, RoomExpiredError) as exc:
+                        await websocket.send_json({
+                            "type": "error",
+                            "event_id": event_id,
+                            "room_id": room_id,
+                            "sent_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                            "payload": {
+                                "code": getattr(exc, "code", "permission_denied"),
+                                "message": str(exc) or "action failed",
                             },
                         })
 

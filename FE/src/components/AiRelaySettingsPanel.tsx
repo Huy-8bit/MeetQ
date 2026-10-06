@@ -18,6 +18,8 @@ interface AiRelaySettingsPanelProps {
   canChangeRelayMode: boolean;
   onChangeRelayMode: (mode: BrseOutputMode) => void;
   relayModeError: string | null;
+  /** Participants see the room's AI relay state but can't change it. */
+  readOnly?: boolean;
 }
 
 /** Settings section bound to the same room state as the header controls. */
@@ -34,6 +36,7 @@ export function AiRelaySettingsPanel({
   canChangeRelayMode,
   onChangeRelayMode,
   relayModeError,
+  readOnly = false,
 }: AiRelaySettingsPanelProps) {
   const fixedModeNote =
     languageCount === 1
@@ -58,11 +61,14 @@ export function AiRelaySettingsPanel({
           <Switch
             checked={brseEnabled}
             onChange={onToggleBrse}
-            disabled={!canToggleBrse}
+            disabled={!canToggleBrse || readOnly}
             label="AI relay"
             hideLabel
           />
         </div>
+        {readOnly ? (
+          <p className="field-helper">Only the host or a co-host can change AI relay for this room.</p>
+        ) : null}
         {relayModes.length > 1 ? (
           <Field
             label="Mode"
@@ -79,7 +85,7 @@ export function AiRelaySettingsPanel({
               mode={relayMode}
               modes={relayModes}
               pending={isUpdatingRelayMode}
-              disabled={!canChangeRelayMode}
+              disabled={!canChangeRelayMode || readOnly}
               onChange={onChangeRelayMode}
             />
           </Field>

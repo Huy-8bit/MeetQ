@@ -10,12 +10,16 @@ from server.service.gateway.room_service import (
     MeetingSummaryNotReadyError,
     MeetingSummaryUnavailableError,
     ParticipantNotFoundError,
+    ParticipantRemovedError,
     RelayModeNotSupportedError,
+    RoomActionError,
     RoomExpiredError,
     RoomFullError,
+    RoomLockedError,
     RoomNotFoundError,
     RoomService,
 )
+from server.service.gateway.room_permissions import RoomPermissionError
 from server.service.auth.dependencies import require_user
 from server.service.gateway.room_access import (
     InvalidRoomPasswordError,
@@ -38,8 +42,12 @@ from server.models import (
     MeetingSummaryResponse,
     ScreenShareStartRequest,
     ScreenShareStateResponse,
+    RoomPermissionsResponse,
+    UpdateParticipantRoleRequest,
     UpdateRelayModeRequest,
+    UpdateRoomPasswordRequest,
 )
+from pydantic import BaseModel
 from typing import Dict, Any
 from typing import Optional
 
@@ -61,10 +69,11 @@ def _error_response(code: str, message: str, status_code: int = 400, details: di
 signed_in = [Depends(require_user)]
 
 
-@router.post("/api/rooms", response_model=CreateRoomResponse, dependencies=signed_in)
+@router.post("/api/rooms", response_model=CreateRoomResponse)
 async def create_room(
     req: Optional[CreateRoomRequest] = Body(default=None),
     service: RoomService = Depends(get_room_service),
+    session: Optional[Dict[str, Any]] = Depends(require_user),
 ):
     try:
         payload = req or CreateRoomRequest()
@@ -74,6 +83,9 @@ async def create_room(
             payload.brse_mode,
             payload.brse_output_mode,
             password=payload.password if payload.access == "password" else None,
+            title=payload.title,
+            # The signed-in creator becomes the room's host (stable user ID, never a name).
+            created_by_user_id=_session_user_id(session),
         )
     except InvalidMeetingLanguagesError as exc:
         return _error_response("invalid_meeting_languages", str(exc), 422, exc.details)
@@ -92,7 +104,12 @@ async def _may_read_protected_room(
     claims: Optional[Dict[str, Any]],
     session: Optional[Dict[str, Any]],
 ) -> bool:
-    """Public rooms: any signed-in user. Protected rooms: a room token, or someone who joined it."""
+    """Public rooms: any signed-in user. Protected rooms: a room token, or someone who joined it.
+
+    Nobody the host removed from the meeting reads it, whatever token they still hold.
+    """
+    if claims is not None and await service.is_removed_participant(room_id, claims.get("participant_id")):
+        return False
     if claims is not None or not await service.is_password_protected(room_id):
         return True
     user_id = _session_user_id(session)
@@ -109,6 +126,9 @@ async def get_room(
     service: RoomService = Depends(get_room_service),
 ):
     try:
+        # A removed participant's room token no longer counts (lobby view only).
+        if claims is not None and await service.is_removed_participant(room_id, claims.get("participant_id")):
+            claims = None
         # Without a room token, a protected room shows only its settings (lobby view).
         snapshot = await service.get_room(room_id, include_private=claims is not None)
         recordings = app_state.recording_service
@@ -197,6 +217,10 @@ async def join_room(
         )
     except RoomNotFoundError:
         return _error_response("room_not_found", "Room not found", 404)
+    except ParticipantRemovedError:
+        return _error_response("removed_from_room", "You were removed from this meeting.", 403)
+    except RoomLockedError:
+        return _error_response("room_locked", "This meeting is locked by the host.", 403)
     except RoomPasswordRequiredError:
         return _error_response("room_password_required", "This meeting requires a password.", 403)
     except InvalidRoomPasswordError:
@@ -368,3 +392,178 @@ async def stop_screen_share(
         return _error_response("room_not_found", "Room not found", 404)
     except ParticipantNotFoundError:
         return _error_response("participant_not_found", "Participant not found in room", 404)
+
+
+# ── Room management (host / co-host) ─────────────────────────────────────────
+# The caller is the participant in the room token; their role is resolved on the
+# server from their stable user ID. No request body ever carries a role for the caller.
+
+
+class MuteParticipantRequest(BaseModel):
+    target_participant_id: str
+
+
+async def _actor(
+    room_id: str,
+    claims: Dict[str, Any],
+    session: Optional[Dict[str, Any]],
+    service: RoomService,
+) -> tuple[str, Optional[str]]:
+    participant_id = claims.get("participant_id")
+    signed_in_user = _session_user_id(session)
+    if signed_in_user:
+        # The room token must belong to the account that is signed in.
+        token_user = await service.members.user_for_participant(room_id, participant_id)
+        if token_user and token_user != signed_in_user:
+            raise RoomPermissionError()
+    return participant_id, claims.get("session_id")
+
+
+async def _manage(operation):
+    try:
+        return await operation
+    except RoomNotFoundError:
+        return _error_response("room_not_found", "Room not found", 404)
+    except RoomExpiredError:
+        return _error_response("room_expired", "This meeting has ended.", 409)
+    except RoomPermissionError as exc:
+        return _error_response(exc.code, str(exc), 403)
+    except RoomActionError as exc:
+        return _error_response(exc.code, exc.message, exc.status_code)
+
+
+@router.get("/api/rooms/{room_id}/permissions", response_model=RoomPermissionsResponse)
+async def get_room_permissions(
+    room_id: str,
+    claims: Dict[str, Any] = Depends(verify_token_dependency),
+    session: Optional[Dict[str, Any]] = Depends(require_user),
+    service: RoomService = Depends(get_room_service),
+):
+    async def run():
+        participant_id, session_id = await _actor(room_id, claims, session, service)
+        return await service.get_permissions(room_id, participant_id, session_id)
+
+    return await _manage(run())
+
+
+@router.post("/api/rooms/{room_id}/lock", response_model=CreateRoomResponseRoom)
+async def lock_room(
+    room_id: str,
+    claims: Dict[str, Any] = Depends(verify_token_dependency),
+    session: Optional[Dict[str, Any]] = Depends(require_user),
+    service: RoomService = Depends(get_room_service),
+):
+    async def run():
+        participant_id, session_id = await _actor(room_id, claims, session, service)
+        return await service.set_room_locked(room_id, True, actor_participant_id=participant_id, session_id=session_id)
+
+    return await _manage(run())
+
+
+@router.post("/api/rooms/{room_id}/unlock", response_model=CreateRoomResponseRoom)
+async def unlock_room(
+    room_id: str,
+    claims: Dict[str, Any] = Depends(verify_token_dependency),
+    session: Optional[Dict[str, Any]] = Depends(require_user),
+    service: RoomService = Depends(get_room_service),
+):
+    async def run():
+        participant_id, session_id = await _actor(room_id, claims, session, service)
+        return await service.set_room_locked(room_id, False, actor_participant_id=participant_id, session_id=session_id)
+
+    return await _manage(run())
+
+
+@router.patch("/api/rooms/{room_id}/password", response_model=CreateRoomResponseRoom)
+async def change_room_password(
+    room_id: str,
+    body: UpdateRoomPasswordRequest,
+    claims: Dict[str, Any] = Depends(verify_token_dependency),
+    session: Optional[Dict[str, Any]] = Depends(require_user),
+    service: RoomService = Depends(get_room_service),
+):
+    async def run():
+        participant_id, session_id = await _actor(room_id, claims, session, service)
+        return await service.set_room_password(
+            room_id, body.password, actor_participant_id=participant_id, session_id=session_id
+        )
+
+    return await _manage(run())
+
+
+@router.delete("/api/rooms/{room_id}/password", response_model=CreateRoomResponseRoom)
+async def remove_room_password(
+    room_id: str,
+    claims: Dict[str, Any] = Depends(verify_token_dependency),
+    session: Optional[Dict[str, Any]] = Depends(require_user),
+    service: RoomService = Depends(get_room_service),
+):
+    async def run():
+        participant_id, session_id = await _actor(room_id, claims, session, service)
+        return await service.set_room_password(room_id, None, actor_participant_id=participant_id, session_id=session_id)
+
+    return await _manage(run())
+
+
+@router.post("/api/rooms/{room_id}/participants/{target_participant_id}/mute")
+async def mute_room_participant(
+    room_id: str,
+    target_participant_id: str,
+    claims: Dict[str, Any] = Depends(verify_token_dependency),
+    session: Optional[Dict[str, Any]] = Depends(require_user),
+    service: RoomService = Depends(get_room_service),
+):
+    async def run():
+        participant_id, session_id = await _actor(room_id, claims, session, service)
+        return await service.mute_participant(
+            room_id, target_participant_id, actor_participant_id=participant_id, session_id=session_id
+        )
+
+    return await _manage(run())
+
+
+@router.post("/api/rooms/{room_id}/moderation/mute")
+async def mute_room_participant_legacy(
+    room_id: str,
+    body: MuteParticipantRequest,
+    claims: Dict[str, Any] = Depends(verify_token_dependency),
+    session: Optional[Dict[str, Any]] = Depends(require_user),
+    service: RoomService = Depends(get_room_service),
+):
+    """Older client contract; same authorization as /participants/{id}/mute."""
+    return await mute_room_participant(room_id, body.target_participant_id, claims, session, service)
+
+
+@router.post("/api/rooms/{room_id}/participants/{target_participant_id}/remove")
+async def remove_room_participant(
+    room_id: str,
+    target_participant_id: str,
+    claims: Dict[str, Any] = Depends(verify_token_dependency),
+    session: Optional[Dict[str, Any]] = Depends(require_user),
+    service: RoomService = Depends(get_room_service),
+):
+    async def run():
+        participant_id, session_id = await _actor(room_id, claims, session, service)
+        return await service.remove_participant(
+            room_id, target_participant_id, actor_participant_id=participant_id, session_id=session_id
+        )
+
+    return await _manage(run())
+
+
+@router.patch("/api/rooms/{room_id}/participants/{target_participant_id}/role")
+async def update_room_participant_role(
+    room_id: str,
+    target_participant_id: str,
+    body: UpdateParticipantRoleRequest,
+    claims: Dict[str, Any] = Depends(verify_token_dependency),
+    session: Optional[Dict[str, Any]] = Depends(require_user),
+    service: RoomService = Depends(get_room_service),
+):
+    async def run():
+        participant_id, session_id = await _actor(room_id, claims, session, service)
+        return await service.set_participant_role(
+            room_id, target_participant_id, body.role, actor_participant_id=participant_id, session_id=session_id
+        )
+
+    return await _manage(run())

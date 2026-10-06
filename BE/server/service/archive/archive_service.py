@@ -48,6 +48,7 @@ ROOMS = "rooms"
 PARTICIPANTS = "room_participants"
 MESSAGES = "room_messages"
 SUMMARIES = "meeting_summaries"
+MEMBERSHIPS = "room_memberships"
 
 ARCHIVE_SCHEMA_VERSION = 1
 CANDIDATE_LOOKBACK = timedelta(days=3)
@@ -204,7 +205,25 @@ class ArchiveService:
         archive = await self.repo.ensure_archive(room_id, room_languages=room.get("room_languages") or [])
         ended_at = as_utc(room.get("ended_at_dt") or room.get("ended_at")) or utcnow()
         participants = await self.db[PARTICIPANTS].find({"room_id": room_id}).to_list(length=1000)
-        user_ids = sorted({p["user_id"] for p in participants if p.get("user_id")})
+        memberships = await self.db[MEMBERSHIPS].find({"room_id": room_id}).to_list(length=1000)
+        removed = {m["user_id"] for m in memberships if m.get("removed_at")}
+        # Everyone who joined plus the room's creator; users removed by the host lose access.
+        user_ids = sorted(
+            ({p["user_id"] for p in participants if p.get("user_id")} | {m["user_id"] for m in memberships})
+            - removed
+        )
+        # Keep the room's history index in step (also covers meetings from before roles
+        # existed): stable user IDs only, sorted by when the meeting ended.
+        await self.db[ROOMS].update_one(
+            {"room_id": room_id},
+            {
+                "$addToSet": {"member_user_ids": {"$each": user_ids}},
+                "$set": {"history_sort_at_dt": ended_at},
+            },
+        )
+        if removed:
+            for user_id in removed:
+                await self.db[ROOMS].update_one({"room_id": room_id}, {"$pull": {"member_user_ids": user_id}})
         base_fields = {
             "status": ARCHIVE_FINALIZING,
             "ended_at": ended_at,
@@ -421,6 +440,7 @@ class ArchiveService:
             await self.db[MESSAGES].delete_many({"room_id": room_id})
             await self.db[SUMMARIES].delete_many({"room_id": room_id})
             await self.db[PARTICIPANTS].delete_many({"room_id": room_id})
+            await self.db[MEMBERSHIPS].delete_many({"room_id": room_id})
             await self.repo.delete_room_recordings(room_id)
             await self.db[ROOMS].delete_many({"room_id": room_id})
         except Exception as exc:

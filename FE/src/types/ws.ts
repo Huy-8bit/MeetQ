@@ -12,6 +12,8 @@ import type {
   ParticipantSnapshot,
   ParticipantReference,
   RelayTargetReference,
+  RoomPermissions,
+  RoomRole,
   ScreenShareSource,
   ScreenShareTrackInfo,
 } from "./api";
@@ -32,9 +34,16 @@ export type RoomSnapshotEvent = WsEnvelope<
       session_id: string;
       display_name: string;
       language: Language;
+      /** Restored from server state on every (re)connect. */
+      role?: RoomRole;
+      permissions?: RoomPermissions;
+      permissions_enforced?: boolean;
     };
     room: {
       state: "created" | "active" | "empty";
+      title?: string | null;
+      locked?: boolean;
+      password_required?: boolean;
       brse_enabled?: boolean;
       brse_mode?: BrseMode;
       brse_output_mode?: BrseOutputMode;
@@ -100,6 +109,7 @@ export type ParticipantJoinedEvent = WsEnvelope<
     is_screen_sharing?: boolean;
     screen_share?: ScreenShareTrackInfo | null;
     is_host?: boolean;
+    role?: RoomRole;
     muted_by_host?: boolean;
   }
 >;
@@ -121,6 +131,7 @@ export type ParticipantUpdatedEvent = WsEnvelope<
     is_screen_sharing?: boolean;
     screen_share?: ScreenShareTrackInfo | null;
     is_host?: boolean;
+    role?: RoomRole;
     muted_by_host?: boolean;
   }
 >;
@@ -293,6 +304,10 @@ export type ServerEvent =
   | RoomHostChangedEvent
   | ModerationForceMutedEvent
   | ModerationParticipantMutedEvent
+  | ParticipantRoleChangedEvent
+  | ParticipantRemovedEvent
+  | RoomLockChangedEvent
+  | RoomAccessUpdatedEvent
   | PongEvent
   | ErrorEvent;
 
@@ -325,6 +340,56 @@ export type RoomHostChangedEvent = WsEnvelope<
     new_host_id: string;
     new_host_display_name: string;
     reason: string;
+  }
+>;
+
+// ─── Room management events (host / co-host) ─────────────────────────────────
+
+export type ParticipantRoleChangedEvent = WsEnvelope<
+  "participant.role_changed",
+  {
+    room_id: string;
+    participant_id: string;
+    /** Every live session of that person (a user can be in a room from two tabs). */
+    participant_ids: string[];
+    old_role: RoomRole;
+    new_role: RoomRole;
+    changed_by: string;
+    changed_by_name?: string;
+    changed_at: string;
+  }
+>;
+
+export type ParticipantRemovedEvent = WsEnvelope<
+  "participant.removed",
+  {
+    participant_id: string;
+    removed_by: string;
+    removed_by_participant_id?: string;
+    removed_at: string;
+    reason: string;
+  }
+>;
+
+export type RoomLockChangedEvent = WsEnvelope<
+  "room.lock_changed",
+  {
+    room_id: string;
+    locked: boolean;
+    changed_by: string;
+    changed_by_name?: string;
+    changed_at: string;
+  }
+>;
+
+export type RoomAccessUpdatedEvent = WsEnvelope<
+  "room.access_updated",
+  {
+    room_id: string;
+    password_required: boolean;
+    changed_by: string;
+    changed_by_name?: string;
+    changed_at: string;
   }
 >;
 
@@ -394,7 +459,11 @@ export type ClientMessage =
   | RoomBrseEnableMessage
   | RoomBrseDisableMessage
   | ChatSendMessage
-  | ModerationMuteMessage;
+  | ModerationMuteMessage
+  | SelfUnmutedMessage;
+
+/** Sent after a host mute when the user turns their own microphone back on. */
+export type SelfUnmutedMessage = WsEnvelope<"participant.self_unmuted", Record<string, never>>;
 
 // ─── Chat client messages ─────────────────────────────────────────────────────
 

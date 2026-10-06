@@ -111,6 +111,33 @@ def test_participant_starts_recording_and_room_snapshot_shows_it(env):
     assert "recording.starting" in published and "recording.started" in published
 
 
+def test_only_host_and_cohost_start_or_stop_recording(env):
+    room_id, huy = _room(env)  # usr_huy created the room: host
+    env.sign_in("usr_kenji", name="Kenji")
+    kenji = env.join(room_id, "Kenji", "ja")
+    res = env.client.post(f"/api/rooms/{room_id}/recordings", headers=_auth(kenji))
+    assert res.status_code == 403 and res.json()["error"]["code"] == "permission_denied"
+    assert env.egress.start_calls == []
+
+    env.sign_in("usr_huy")
+    rec = env.client.post(f"/api/rooms/{room_id}/recordings", headers=_auth(huy)).json()["recording"]
+    stop_url = f"/api/rooms/{room_id}/recordings/{rec['recording_id']}/stop"
+    env.sign_in("usr_kenji", name="Kenji")
+    assert env.client.post(stop_url, headers=_auth(kenji)).status_code == 403
+    # Everyone still sees that the meeting is being recorded.
+    assert env.client.get(f"/api/rooms/{room_id}").json()["room"]["recording"]["status"] == "recording"
+
+    env.sign_in("usr_huy")
+    promote = env.client.patch(
+        f"/api/rooms/{room_id}/participants/{kenji['participant']['participant_id']}/role",
+        headers=_auth(huy),
+        json={"role": "co_host"},
+    )
+    assert promote.status_code == 200, promote.text
+    env.sign_in("usr_kenji", name="Kenji")
+    assert env.client.post(stop_url, headers=_auth(kenji)).status_code == 200
+
+
 def test_recording_requires_a_participant_and_a_signed_in_user(env):
     room_id, huy = _room(env)
     assert env.client.post(f"/api/rooms/{room_id}/recordings").status_code in (401, 403)  # no room token

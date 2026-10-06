@@ -55,7 +55,8 @@ export function RoomControlBar({
   recordControl,
 }: RoomControlBarProps) {
   const screenShareBusy = isStartingScreenShare || isStoppingScreenShare;
-  const micDisabled = isTogglingMic || (isMutedByHost && isMicMuted);
+  // A host can mute you; unmuting again is always your own choice.
+  const micDisabled = isTogglingMic;
 
   return (
     <div className="control-bar" role="toolbar" aria-label="Meeting controls">
@@ -65,7 +66,8 @@ export function RoomControlBar({
           busy={isTogglingMic}
           disabled={micDisabled}
           onClick={onToggleMic}
-          label={isMutedByHost && isMicMuted ? "Muted by host" : isMicMuted ? "Unmute" : "Mute"}
+          label={isMicMuted ? "Unmute" : "Mute"}
+          title={isMutedByHost && isMicMuted ? "The host muted your microphone. Unmute when you're ready." : undefined}
           icon={isMicMuted ? <MicOff size={18} /> : <Mic size={18} />}
         />
         <ControlButton
@@ -137,6 +139,7 @@ function ControlButton({
   label,
   icon,
   unavailableReason,
+  title,
 }: {
   /** "off" = muted/camera off, "active" = presenting. Label text always states it too. */
   state: "on" | "off" | "active";
@@ -150,6 +153,7 @@ function ControlButton({
    * tooltip explaining why still shows on hover/focus.
    */
   unavailableReason?: string;
+  title?: string;
 }) {
   const unavailable = !!unavailableReason;
   return (
@@ -161,7 +165,7 @@ function ControlButton({
       aria-disabled={unavailable || undefined}
       aria-label={unavailable ? `${label} (${unavailableReason})` : label}
       aria-busy={busy || undefined}
-      title={unavailableReason ?? label}
+      title={unavailableReason ?? title ?? label}
     >
       <span className="control-btn-icon" aria-hidden="true">{busy ? <Spinner /> : icon}</span>
       <span className="control-btn-label">{label}</span>

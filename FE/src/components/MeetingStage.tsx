@@ -493,7 +493,8 @@ function StageTile({
     <ParticipantTile
       feed={feed}
       isScreenSharing={!!participant?.is_screen_sharing}
-      isHost={!!participant?.is_host}
+      isHost={!!participant?.is_host || participant?.role === "host"}
+      isCoHost={participant?.role === "co_host"}
       isMutedByHost={!!participant?.muted_by_host}
       isBrseEnabled={brseEnabled}
       brseRoomMode={brseRoomMode}

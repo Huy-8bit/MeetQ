@@ -10,6 +10,8 @@ interface BrseToggleControlProps {
   languageCount?: number;
   pending?: boolean;
   disabled?: boolean;
+  /** The user may see but not change it (only the host or a co-host can). */
+  readOnly?: boolean;
   onToggle: (nextEnabled: boolean) => void;
 }
 
@@ -19,6 +21,7 @@ export function BrseToggleControl({
   languageCount = 0,
   pending = false,
   disabled = false,
+  readOnly = false,
   onToggle,
 }: BrseToggleControlProps) {
   const isCaptionOnly = enabled && mode === "text_only" && languageCount === 1;
@@ -27,9 +30,9 @@ export function BrseToggleControl({
   return (
     <Switch
       checked={enabled}
-      disabled={disabled || pending}
+      disabled={disabled || readOnly || pending}
       onChange={onToggle}
-      title={`AI relay: ${enabled ? description : "off"}`}
+      title={`AI relay: ${enabled ? description : "off"}${readOnly ? ". Only the host or a co-host can change this." : ""}`}
       label={pending ? "Updating…" : isCaptionOnly ? "Captions" : "AI relay"}
     />
   );

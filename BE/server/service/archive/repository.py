@@ -172,7 +172,15 @@ class ArchiveRepository:
         if unset:
             update["$unset"] = {key: "" for key in unset}
         await self.db[ARCHIVES].update_one({"_id": archive_id}, update)
-        return await self.get_archive(archive_id)
+        archive = await self.get_archive(archive_id)
+        if archive is not None and ("expires_at" in fields or "status" in fields):
+            # Mirrored on the room so My meetings and search hide expired content even
+            # before the cleanup worker has deleted it (no ghost results).
+            await self.db["rooms"].update_one(
+                {"room_id": archive["room_id"]},
+                {"$set": {"archive_expires_at_dt": archive.get("expires_at"), "archive_status": archive.get("status")}},
+            )
+        return archive
 
     async def set_retention(self, archive: Dict[str, Any], override_days: Optional[int]) -> Dict[str, Any]:
         if override_days is not None:

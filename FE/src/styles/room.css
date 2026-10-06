@@ -1284,3 +1284,116 @@
   cursor: pointer;
   font-weight: var(--weight-medium);
 }
+
+/* ─── People: role badges and management menu ─────────────────────────── */
+.people-name-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.people-menu {
+  position: relative;
+  flex: none;
+}
+
+.icon-button {
+  display: inline-grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+}
+
+.icon-button:hover,
+.icon-button[aria-expanded="true"] {
+  background: var(--color-surface-muted);
+  color: var(--color-text);
+}
+
+.people-menu-popover {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + 4px);
+  right: 0;
+  display: grid;
+  min-width: 190px;
+  padding: var(--space-1);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-lg);
+}
+
+.people-menu-item {
+  padding: var(--space-2) var(--space-3);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text);
+  font-size: var(--text-sm);
+  text-align: left;
+  cursor: pointer;
+}
+
+.people-menu-item:hover,
+.people-menu-item:focus-visible {
+  background: var(--color-surface-hover);
+}
+
+.people-menu-item.is-danger {
+  color: var(--color-danger-text);
+}
+
+/* ─── Room security (host) ────────────────────────────────────────────── */
+.room-security {
+  display: grid;
+  gap: var(--space-3);
+  margin-bottom: var(--space-3);
+  padding: var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+}
+
+.room-security-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.room-security-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.room-removed {
+  display: grid;
+  min-height: 100vh;
+  place-items: center;
+  padding: var(--space-4);
+}
+
+.room-security .section-title,
+.room-security-note {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.room-security-note {
+  margin-bottom: var(--space-3);
+  font-size: var(--text-sm);
+}
+
+.lobby-meeting-title {
+  margin-top: calc(var(--space-1) * -1);
+  color: var(--color-text-secondary);
+  font-weight: var(--weight-medium);
+}

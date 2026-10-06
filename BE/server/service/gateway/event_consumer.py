@@ -73,11 +73,24 @@ def _is_transcript_visible_to_participant(
     return transcript.listener_id == participant_id
 
 
+REMOVED_CLOSE_CODE = 4409
+
+
 async def _handle_gateway_control(msg_data: dict):
     room_id = msg_data.get("room_id")
     if not room_id or not app_state.ws_hub:
         return
     await app_state.ws_hub.broadcast_to_room(room_id, msg_data)
+    if msg_data.get("type") == EventType.PARTICIPANT_REMOVED:
+        # Whichever gateway holds the removed participant's socket closes it.
+        participant_id = (msg_data.get("payload") or {}).get("participant_id")
+        if participant_id:
+            await app_state.ws_hub.close_participant(
+                room_id,
+                participant_id,
+                code=REMOVED_CLOSE_CODE,
+                reason="Removed from meeting",
+            )
 
 
 async def _handle_interpreter_events(msg_data: dict):

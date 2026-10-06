@@ -160,9 +160,37 @@ export interface RoomSummary {
   audio_routing?: AudioRouting;
   /** Joining needs the meeting password. The password itself is never returned. */
   password_required?: boolean;
+  /** Optional title; show `formatMeetingTitle()` when it's empty. */
+  title?: string | null;
+  /** Locked by the host: nobody new can join. */
+  locked?: boolean;
 }
 
 export type RoomAccess = "link" | "password";
+
+/** Room roles. The server decides them (by signed-in account); the UI only renders them. */
+export type RoomRole = "host" | "co_host" | "participant";
+
+export type RoomPermissionName =
+  | "can_manage_ai"
+  | "can_manage_recording"
+  | "can_mute_participant"
+  | "can_remove_participant"
+  | "can_manage_room_security"
+  | "can_assign_cohost"
+  | "can_manage_password"
+  | "can_lock_room"
+  | "can_extend_room";
+
+export type RoomPermissions = Record<RoomPermissionName, boolean>;
+
+export interface RoomPermissionsResponse {
+  room_id: string;
+  participant_id: string;
+  role: RoomRole;
+  enforced: boolean;
+  permissions: RoomPermissions;
+}
 
 export interface CreateRoomRequest {
   room_languages: MeetingLanguage[];
@@ -174,6 +202,7 @@ export interface CreateRoomRequest {
   brse_output_mode?: BrseOutputMode;
   access?: RoomAccess;
   password?: string;
+  title?: string;
 }
 
 export interface CreateRoomResponse {
@@ -196,7 +225,9 @@ export interface ParticipantSnapshot {
   metadata?: Record<string, unknown>;
   is_screen_sharing?: boolean;
   screen_share?: ScreenShareTrackInfo | null;
+  /** @deprecated use `role`. */
   is_host?: boolean;
+  role?: RoomRole;
   muted_by_host?: boolean;
 }
 
@@ -307,6 +338,7 @@ export interface JoinRoomResponse {
     session_id: string;
     display_name: string;
     language: MeetingLanguage;
+    role?: RoomRole;
   };
   room_token: {
     token: string;

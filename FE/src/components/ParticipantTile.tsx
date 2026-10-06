@@ -9,6 +9,7 @@ interface ParticipantTileProps {
   label?: string;
   isScreenSharing?: boolean;
   isHost?: boolean;
+  isCoHost?: boolean;
   isMutedByHost?: boolean;
   isBrseEnabled?: boolean;
   brseRoomMode?: BrseRoomMode;
@@ -24,6 +25,7 @@ export function ParticipantTile({
   label,
   isScreenSharing = false,
   isHost = false,
+  isCoHost = false,
   isMutedByHost = false,
   isBrseEnabled = true,
   brseRoomMode = "voice_text",
@@ -58,7 +60,7 @@ export function ParticipantTile({
     ? brseCaption
     : [
         feed.isLocal ? "You" : null,
-        isHost ? "Host" : null,
+        isHost ? "Host" : isCoHost ? "Co-host" : null,
         feed.language ? getLanguageLabel(feed.language) : null,
         statusNote,
       ]

@@ -44,6 +44,13 @@ class RoomStore:
         # Password hash for protected rooms (see room_access.py); same lifetime as the room.
         return f"room:{room_id}:access"
 
+    def _members_key(self, room_id: str) -> str:
+        # Roles by stable user ID (see room_membership.py); same lifetime as the room.
+        return f"room:{room_id}:members"
+
+    def _participant_users_key(self, room_id: str) -> str:
+        return f"room:{room_id}:pusers"
+
     async def _refresh_ttl(self, room_id: str):
         pipe = self.client.pipeline()
         pipe.expire(self._meta_key(room_id), self.ttl)
@@ -51,6 +58,8 @@ class RoomStore:
         pipe.expire(self._trans_key(room_id), self.ttl)
         pipe.expire(self._chat_key(room_id), self.ttl)
         pipe.expire(self._access_key(room_id), self.ttl)
+        pipe.expire(self._members_key(room_id), self.ttl)
+        pipe.expire(self._participant_users_key(room_id), self.ttl)
         await pipe.execute()
 
     async def create_room(self, room: RoomState):
@@ -101,6 +110,10 @@ class RoomStore:
             )
 
         participant_count = active_human_participant_count(participants)
+        host_participant_id = next(
+            (p.participant_id for p in participants if p.role == "host" and not p.is_virtual),
+            None,
+        )
 
         trans_data = await self.client.lrange(self._trans_key(room_id), 0, -1)
         transcripts = [TranscriptEvent.model_validate_json(t) for t in trans_data]
@@ -131,7 +144,10 @@ class RoomStore:
             interpreter_mode=room_state.interpreter_mode,
             audio_routing=room_state.audio_routing,
             password_required=room_state.password_required,
+            title=room_state.title,
+            locked=room_state.locked,
             participant_count=participant_count,
+            host_participant_id=host_participant_id,
         )
 
         return RoomSnapshotResponse(
@@ -213,6 +229,8 @@ class RoomStore:
             self._trans_key(room_id),
             self._chat_key(room_id),
             self._access_key(room_id),
+            self._members_key(room_id),
+            self._participant_users_key(room_id),
         )
 
     def _participant_state_to_snapshot(self, participant: ParticipantState) -> ParticipantSnapshot:
@@ -230,4 +248,6 @@ class RoomStore:
             metadata=participant.metadata,
             is_screen_sharing=participant.is_screen_sharing,
             screen_share=participant.screen_share,
+            role=participant.role,
+            muted_by_host=participant.muted_by_host,
         )

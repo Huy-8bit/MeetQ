@@ -187,44 +187,6 @@
 }
 
 /* ─── My meetings ─────────────────────────────────────────────────────── */
-.table-wrap {
-  overflow-x: auto;
-}
-
-.meetings-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: var(--text-sm);
-}
-
-.meetings-table th,
-.meetings-table td {
-  padding: var(--space-3) var(--space-4);
-  border-bottom: 1px solid var(--color-border);
-  text-align: left;
-  vertical-align: middle;
-  white-space: nowrap;
-}
-
-.meetings-table th {
-  color: var(--color-text-tertiary);
-  font-weight: 500;
-}
-
-.meetings-table tbody tr:last-child td {
-  border-bottom: 0;
-}
-
-.meetings-room-link {
-  display: block;
-  color: var(--color-text);
-  font-weight: 600;
-}
-
-.meetings-room-id {
-  font-size: var(--text-xs);
-}
-
 .archive-detail {
   display: grid;
   gap: var(--space-4);
@@ -263,9 +225,235 @@
   gap: var(--space-3);
 }
 
-@media (max-width: 767px) {
-  .meetings-table th:nth-child(3),
-  .meetings-table td:nth-child(3) {
-    display: none;
+
+/* ─── My meetings: toolbar, cards, pager ─────────────────────────────── */
+.meetings-main {
+  display: grid;
+  gap: var(--space-4);
+}
+
+.meetings-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.meetings-search {
+  position: relative;
+  display: flex;
+  flex: 1 1 260px;
+  align-items: center;
+  min-width: 0;
+}
+
+.meetings-search svg {
+  position: absolute;
+  left: var(--space-3);
+  color: var(--color-text-tertiary);
+  pointer-events: none;
+}
+
+.meetings-search .input {
+  width: 100%;
+  padding-left: calc(var(--space-3) * 2 + 16px);
+}
+
+.meetings-range {
+  min-width: 150px;
+}
+
+.meeting-cards {
+  display: grid;
+  gap: var(--space-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.meeting-card-body {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.meeting-card-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.meeting-card-title {
+  min-width: 0;
+  color: var(--color-text);
+  font-size: var(--text-md);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.meeting-card-languages,
+.meeting-card-meta,
+.meeting-card-expiry {
+  color: var(--color-text-secondary);
+  font-size: var(--text-sm);
+  overflow-wrap: anywhere;
+}
+
+.meeting-card-badges {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-sm);
+}
+
+.pager {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-3);
+}
+
+.meetings-content-search {
+  display: grid;
+  gap: var(--space-2);
+}
+
+/* ─── Search results (plain text + <mark>, never HTML from the server) ── */
+.search-results {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.search-results-count {
+  color: var(--color-text-secondary);
+  font-size: var(--text-sm);
+}
+
+.search-result-list {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.search-result {
+  display: grid;
+  gap: var(--space-1);
+  width: 100%;
+  padding: var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  color: var(--color-text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.search-result:hover,
+.search-result:focus-visible {
+  border-color: var(--color-border-strong);
+  background: var(--color-surface-hover);
+}
+
+.search-result-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  color: var(--color-text-tertiary);
+  font-size: var(--text-xs);
+}
+
+.search-result-source {
+  color: var(--color-accent-text);
+  font-weight: 600;
+}
+
+.search-result-text {
+  overflow-wrap: anywhere;
+}
+
+.search-result-text mark,
+.archive-message mark {
+  border-radius: 2px;
+  background: var(--color-warning-soft);
+  color: inherit;
+}
+
+/* ─── Meeting detail ──────────────────────────────────────────────────── */
+.meeting-search {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.archive-tabs {
+  overflow-x: auto;
+}
+
+.archive-message.is-focused {
+  margin: 0 calc(var(--space-2) * -1);
+  padding-right: var(--space-2);
+  padding-left: var(--space-2);
+  border-radius: var(--radius-md);
+  background: var(--color-accent-soft);
+}
+
+.archive-message p {
+  overflow-wrap: anywhere;
+}
+
+.archive-translation {
+  color: var(--color-text-secondary);
+}
+
+.archive-translation-label {
+  display: block;
+  color: var(--color-text-tertiary);
+  font-size: var(--text-xs);
+}
+
+.archive-person {
+  display: grid;
+  gap: 2px;
+}
+
+.archive-person-name {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.overview-list {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0;
+}
+
+.overview-row {
+  display: grid;
+  grid-template-columns: minmax(120px, 180px) 1fr;
+  gap: var(--space-3);
+}
+
+.overview-row dt {
+  color: var(--color-text-tertiary);
+}
+
+.overview-row dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 599px) {
+  .overview-row {
+    grid-template-columns: 1fr;
+    gap: 0;
+  }
+
+  .meetings-range {
+    flex: 1 1 100%;
   }
 }

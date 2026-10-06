@@ -51,6 +51,10 @@ RelayStyle = Literal["normal", "summary"]
 ScreenShareSource = Literal["screen_share"]
 MeetingSummaryStatus = Literal["pending", "completed", "failed", "skipped"]
 MeetingSummaryType = Literal["interim", "final"]
+# Room roles (server/service/gateway/room_permissions.py). Authoritative on the server;
+# clients only use them to decide what to render.
+RoomRole = Literal["host", "co_host", "participant"]
+ROOM_TITLE_MAX_LENGTH = 120
 
 
 class RoomAudioRouting(BaseModel):
@@ -103,6 +107,9 @@ class ParticipantState(BaseModel):
     metadata: Dict[str, Any] = Field(default_factory=dict)
     is_screen_sharing: bool = False
     screen_share: Optional["ScreenShareTrackInfo"] = None
+    role: RoomRole = "participant"
+    # Set when a host/co-host muted this participant; cleared when they unmute themselves.
+    muted_by_host: bool = False
 
 
 class ParticipantSnapshot(BaseModel):
@@ -119,6 +126,9 @@ class ParticipantSnapshot(BaseModel):
     metadata: Dict[str, Any] = Field(default_factory=dict)
     is_screen_sharing: bool = False
     screen_share: Optional["ScreenShareTrackInfo"] = None
+    role: RoomRole = "participant"
+    # Set when a host/co-host muted this participant; cleared when they unmute themselves.
+    muted_by_host: bool = False
 
 
 class ScreenShareTrackInfo(BaseModel):
@@ -155,6 +165,13 @@ class RoomState(BaseModel):
     virtual_participants: List[ParticipantSnapshot] = Field(default_factory=list)
     # True when joining needs the room password. The hash lives in a separate Redis key.
     password_required: bool = False
+    # Optional, user-supplied; clients fall back to the language bridge ("Vietnamese ⇄ Japanese meeting").
+    title: Optional[str] = None
+    # Locked by the host: people already in the meeting stay, new people cannot join.
+    locked: bool = False
+    # Host/co-host roles apply: set for rooms created by a signed-in user. Rooms that were
+    # already running before roles existed keep their old open behaviour until they end.
+    roles_enabled: bool = False
 
     @model_validator(mode="before")
     @classmethod
@@ -292,6 +309,8 @@ class CreateRoomResponseRoom(BaseModel):
     interpreter_mode: InterpreterMode
     audio_routing: RoomAudioRouting
     password_required: bool = False
+    title: Optional[str] = None
+    locked: bool = False
 
 
 class CreateRoomResponseJoin(BaseModel):
@@ -315,9 +334,11 @@ class CreateRoomRequest(BaseModel):
     # "link": anyone with the link can join; "password": joining needs `password`.
     access: Literal["link", "password"] = "link"
     password: Optional[str] = Field(default=None, max_length=128, repr=False)
+    title: Optional[str] = Field(default=None, max_length=ROOM_TITLE_MAX_LENGTH)
 
     @model_validator(mode="after")
     def _check_password(self) -> "CreateRoomRequest":
+        self.title = normalize_room_title(self.title)
         if self.access == "password":
             if not self.password or len(self.password) < 6:
                 raise ValueError("Password must be at least 6 characters.")
@@ -340,8 +361,42 @@ class CreateRoomRequest(BaseModel):
         return list(DEFAULT_ROOM_MEETING_LANGUAGES)
 
 
+def normalize_room_title(value: Optional[str]) -> Optional[str]:
+    """Single line, trimmed, no control characters; empty means "no title"."""
+    if value is None:
+        return None
+    cleaned = "".join(ch if ch.isprintable() else " " for ch in value)
+    cleaned = " ".join(cleaned.split())
+    return cleaned[:ROOM_TITLE_MAX_LENGTH] or None
+
+
 class UpdateRelayModeRequest(BaseModel):
     mode: BrseOutputMode
+
+
+class UpdateRoomPasswordRequest(BaseModel):
+    # Replaces the current password hash. Never logged or echoed back.
+    password: str = Field(..., max_length=128, repr=False)
+
+    @model_validator(mode="after")
+    def _check_password(self) -> "UpdateRoomPasswordRequest":
+        if len(self.password) < 6:
+            raise ValueError("Password must be at least 6 characters.")
+        return self
+
+
+class UpdateParticipantRoleRequest(BaseModel):
+    # The host can only promote to / demote from co-host; host transfer doesn't exist yet.
+    role: Literal["co_host", "participant"]
+
+
+class RoomPermissionsResponse(BaseModel):
+    room_id: str
+    participant_id: str
+    role: RoomRole
+    # False only on servers running without sign-in (no stable identity, no roles).
+    enforced: bool = True
+    permissions: Dict[str, bool]
 
 
 class JoinRoomRequestClient(BaseModel):
@@ -377,6 +432,7 @@ class JoinRoomResponseParticipant(BaseModel):
     session_id: str
     display_name: str
     language: Language
+    role: RoomRole = "participant"
 
 
 class JoinRoomResponseRoomToken(BaseModel):
@@ -417,6 +473,8 @@ class RoomSnapshotResponseRoom(CreateRoomResponseRoom):
     # joining late see that the meeting is being recorded. None when not recording.
     recording: Optional[Dict[str, Any]] = None
     recording_available: bool = False
+    # A connected participant session of the host user, if any (None while the host is away).
+    host_participant_id: Optional[str] = None
 
 
 class RoomSnapshotResponse(BaseModel):

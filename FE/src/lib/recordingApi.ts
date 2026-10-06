@@ -1,11 +1,43 @@
 import { requestJson } from "./api";
 import type {
+  ChatHistoryItem,
+  CursorPage,
   MeetingDetailResponse,
+  MeetingListFilter,
+  MeetingListRange,
   MeetingMessage,
   MeetingRow,
   Paged,
   RecordingState,
+  RelayItem,
+  SearchResults,
+  TranscriptItem,
 } from "../types/recording";
+
+export interface MeetingListQuery {
+  page?: number;
+  pageSize?: number;
+  q?: string;
+  filter?: MeetingListFilter;
+  range?: MeetingListRange;
+}
+
+export interface ContentQuery {
+  cursor?: string | null;
+  before?: string | null;
+  /** Inclusive: open the list at a search result. */
+  start?: string | null;
+  limit?: number;
+}
+
+function queryString(params: Record<string, string | number | null | undefined>): string {
+  const search = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (value !== null && value !== undefined && value !== "") search.set(key, String(value));
+  }
+  const text = search.toString();
+  return text ? `?${text}` : "";
+}
 
 const enc = encodeURIComponent;
 
@@ -37,8 +69,36 @@ export const recordingApi = {
     );
   },
 
-  listMeetings(page = 1) {
-    return requestJson<Paged<MeetingRow>>(`/api/meetings?page=${page}`);
+  listMeetings(query: MeetingListQuery = {}) {
+    return requestJson<Paged<MeetingRow>>(
+      `/api/meetings${queryString({
+        page: query.page ?? 1,
+        page_size: query.pageSize,
+        q: query.q?.trim(),
+        filter: query.filter && query.filter !== "all" ? query.filter : null,
+        range: query.range && query.range !== "all" ? query.range : null,
+      })}`,
+    );
+  },
+
+  transcript(roomId: string, query: ContentQuery = {}) {
+    return requestJson<CursorPage<TranscriptItem>>(`/api/meetings/${enc(roomId)}/transcript${queryString({ ...query })}`);
+  },
+
+  relay(roomId: string, query: ContentQuery = {}) {
+    return requestJson<CursorPage<RelayItem>>(`/api/meetings/${enc(roomId)}/relay${queryString({ ...query })}`);
+  },
+
+  chat(roomId: string, query: ContentQuery = {}) {
+    return requestJson<CursorPage<ChatHistoryItem>>(`/api/meetings/${enc(roomId)}/chat${queryString({ ...query })}`);
+  },
+
+  searchMeeting(roomId: string, q: string, page = 1) {
+    return requestJson<SearchResults>(`/api/meetings/${enc(roomId)}/search${queryString({ q, page })}`);
+  },
+
+  searchAll(q: string, page = 1) {
+    return requestJson<SearchResults>(`/api/meetings/search${queryString({ q, page })}`);
   },
 
   meeting(roomId: string) {

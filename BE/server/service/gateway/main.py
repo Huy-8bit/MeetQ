@@ -16,18 +16,21 @@ from server.service.gateway.api_config import router as config_router
 from server.service.admin.api import router as admin_router
 from server.service.auth.api import admin_auth_router, user_router as auth_router
 from server.service.archive.setup import build_archive_services, install as install_archive_services
-from server.service.archive.api import meetings_router, recordings_router
+from server.service.archive.api import recordings_router
+from server.service.meetings.api import meetings_router
 from server.service.admin.archives_api import router as admin_archives_router
 from server.service.gateway.origins import UNSAFE_METHODS, cors_allowed_origins, origin_is_trusted
 from server.service.admin.dependencies import build_admin_context
 from server.service.admin.errors import AdminApiError
 from server.service.admin.livekit_inspector import LiveKitInspector
+from server.service.gateway.livekit_moderation import LiveKitModerator
 from server.service.ops.recorder import OpsRecorder
 from server.service.gateway.api_rooms import router as rooms_router
 from server.service.gateway.api_test_sessions import router as test_sessions_router
 from server.service.gateway.ws_endpoint import router as ws_router
 from server.service.gateway.ws_test_mic import router as ws_mic_router
 from server.service.gateway.ws_test_translation import router as ws_translation_router
+from server.service.ai_internal.api import router as ai_internal_router
 from server.service.gateway.event_consumer import start_event_consumer
 from server.service.persistence.room_history import MongoRoomHistoryRepository
 import logging
@@ -102,6 +105,8 @@ async def lifespan(app: FastAPI):
         room_history=app_state.room_history,
         ops_recorder=app_state.ops_recorder,
     )
+    # Host / co-host mute and remove are enforced on the LiveKit SFU as well.
+    app_state.room_service.moderator = LiveKitModerator(app_state.settings)
     app_state.admin_context = build_admin_context(inspector=LiveKitInspector(app_state.settings))
     app_state.room_history.schedule(
         app_state.admin_context.history.ensure_indexes,
@@ -288,3 +293,4 @@ app.include_router(test_sessions_router)
 app.include_router(ws_router)
 app.include_router(ws_mic_router)
 app.include_router(ws_translation_router)
+app.include_router(ai_internal_router)

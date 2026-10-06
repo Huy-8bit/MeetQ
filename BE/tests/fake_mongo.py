@@ -11,12 +11,19 @@ _MISSING = object()
 
 def _resolve(doc: Any, path: str) -> Any:
     current = doc
-    for part in path.split("."):
+    parts = path.split(".")
+    for position, part in enumerate(parts):
         if isinstance(current, dict):
             current = current.get(part, _MISSING)
         elif isinstance(current, list) and part.isdigit():
             index = int(part)
             current = current[index] if index < len(current) else _MISSING
+        elif isinstance(current, list):
+            # Like MongoDB: "items.text" reaches into every element of an array.
+            rest = ".".join(parts[position:])
+            values = [_resolve(item, rest) for item in current if isinstance(item, dict)]
+            values = [v for v in values if v is not _MISSING]
+            return values if values else _MISSING
         else:
             return _MISSING
         if current is _MISSING:
@@ -74,7 +81,8 @@ def _match_condition(value: Any, condition: Any) -> bool:
                     return False
             elif op == "$regex":
                 flags = re.IGNORECASE if "i" in options else 0
-                if not isinstance(value, str) or not re.search(operand, value, flags):
+                candidates = value if isinstance(value, list) else [value]
+                if not any(isinstance(c, str) and re.search(operand, c, flags) for c in candidates):
                     return False
             else:
                 raise NotImplementedError(op)
@@ -117,12 +125,15 @@ class FakeCursor:
         self._skip = 0
         self._limit: Optional[int] = None
 
-    def sort(self, key: str, direction: int = 1) -> "FakeCursor":
-        def sort_key(doc: Dict[str, Any]) -> Any:
-            value = _resolve(doc, key)
-            return (value is _MISSING or value is None, value if value not in (_MISSING, None) else 0)
+    def sort(self, key: Any, direction: int = 1) -> "FakeCursor":
+        keys = key if isinstance(key, list) else [(key, direction)]
+        # Stable sorts applied from the last key to the first == multi-key sort.
+        for field, field_direction in reversed(keys):
+            def sort_key(doc: Dict[str, Any], field: str = field) -> Any:
+                value = _resolve(doc, field)
+                return (value is _MISSING or value is None, value if value not in (_MISSING, None) else 0)
 
-        self._docs = sorted(self._docs, key=sort_key, reverse=direction < 0)
+            self._docs = sorted(self._docs, key=sort_key, reverse=field_direction < 0)
         return self
 
     def skip(self, count: int) -> "FakeCursor":
@@ -180,8 +191,24 @@ class FakeCollection:
             doc.pop(key, None)
         for key, value in update.get("$push", {}).items():
             doc.setdefault(key, []).append(copy.deepcopy(value))
+        for key, value in update.get("$addToSet", {}).items():
+            items = value["$each"] if isinstance(value, dict) and "$each" in value else [value]
+            current = doc.setdefault(key, [])
+            for item in items:
+                if item not in current:
+                    current.append(copy.deepcopy(item))
+        for key, value in update.get("$pull", {}).items():
+            if isinstance(doc.get(key), list):
+                doc[key] = [item for item in doc[key] if item != value]
 
-    async def update_one(self, query: Dict[str, Any], update: Dict[str, Any], upsert: bool = False) -> Any:
+    async def find_one_and_update(self, query: Dict[str, Any], update: Dict[str, Any], upsert: bool = False, **_: Any) -> Any:
+        await self.update_one(query, update, upsert=upsert)
+        return await self.find_one({key: value for key, value in query.items() if not key.startswith("$")})
+
+    async def index_information(self) -> Dict[str, Any]:
+        return {index.get("name", "index"): index for index in self.indexes}
+
+    async def update_one(self, query: Dict[str, Any], update: Dict[str, Any], upsert: bool = False, **_: Any) -> Any:
         for doc in self.docs:
             if matches(doc, query):
                 self._apply_update(doc, update)

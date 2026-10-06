@@ -61,9 +61,11 @@ import type {
   MeetingSummaryStatus,
   MeetingSummaryType,
   ParticipantSnapshot,
+  RoomRole,
   RoomSnapshotResponse,
   ScreenShareTrackInfo,
 } from "../../types/api";
+import { normalizeRole, permissionsFor, PERMISSION_DENIED_MESSAGE } from "../../lib/roomRoles";
 import type {
   AudioDeviceOption,
   BrseAudioFeed,
@@ -79,7 +81,11 @@ import type {
   ModerationParticipantMutedEvent,
   ParticipantJoinedEvent,
   ParticipantLeftEvent,
+  ParticipantRemovedEvent,
+  ParticipantRoleChangedEvent,
   ParticipantUpdatedEvent,
+  RoomAccessUpdatedEvent,
+  RoomLockChangedEvent,
   RoomBrseUpdatedEvent,
   RoomExpiredEvent,
   RoomRelayModeUpdatedEvent,
@@ -258,6 +264,15 @@ export function useMeetingRoom({
   const [isMutingParticipant, setIsMutingParticipant] = useState<string | null>(null);
   const [moderationError, setModerationError] = useState<string | null>(null);
 
+  // ─── Role & room management ─────────────────────────────────────────────────
+  // The role comes from the server (join response, snapshot, role events); it only
+  // decides what to render. Every action is authorized again on the server.
+  const [selfRole, setSelfRole] = useState<RoomRole>(() => normalizeRole(session?.participant.role));
+  const [permissionsEnforced, setPermissionsEnforced] = useState(true);
+  const [roleNotice, setRoleNotice] = useState<string | null>(null);
+  const [pendingManagementAction, setPendingManagementAction] = useState<string | null>(null);
+  const [removedFromMeeting, setRemovedFromMeeting] = useState<{ by: string | null } | null>(null);
+
   // ─── Room expiry state ──────────────────────────────────────────────────────
   const [isRoomExpired, setIsRoomExpired] = useState(false);
 
@@ -291,6 +306,7 @@ export function useMeetingRoom({
   const selectedAudioOutputDeviceIdRef = useRef(selectedAudioOutputDeviceId);
   const isSwitchingAudioInputRef = useRef(isSwitchingAudioInput);
   const isMutedByHostRef = useRef(false);
+  const removedFromMeetingRef = useRef(false);
   const pendingChatEventIdsRef = useRef<Set<string>>(new Set());
   const brseEnabledRef = useRef(resolveBrseEnabled(initialRoom?.room ?? session?.room ?? null));
   const meetingSummaryRef = useRef<MeetingSummaryResponse | null>(null);
@@ -454,6 +470,10 @@ export function useMeetingRoom({
     hasSentLeaveRef.current = false;
     manualShutdownRef.current = false;
     expiredShutdownRef.current = false;
+    setSelfRole(normalizeRole(session.participant.role));
+    setRoleNotice(null);
+    setRemovedFromMeeting(null);
+    removedFromMeetingRef.current = false;
     setConnectionError(null);
     setMediaError(null);
     setCameraToggleError(null);
@@ -579,6 +599,11 @@ export function useMeetingRoom({
       },
       onFatalClose: (code, reason) => {
         if (disposed || manualShutdownRef.current) {
+          return;
+        }
+
+        if (code === 4409) {
+          handleRemovedFromMeeting(null);
           return;
         }
 
@@ -1056,6 +1081,11 @@ export function useMeetingRoom({
       const nextMuted = !isMicrophoneMuted(localTrack);
       await setLocalMicrophoneMuted(localTrack, nextMuted);
       setIsMicMuted(nextMuted);
+      if (!nextMuted && isMutedByHostRef.current) {
+        // A host can mute you; turning your own mic back on is up to you.
+        setIsMutedByHost(false);
+        gatewayRef.current?.sendSelfUnmuted();
+      }
     } catch (error) {
       setMicToggleError(
         error instanceof Error ? error.message : "Failed to update microphone mute state.",
@@ -1399,6 +1429,18 @@ export function useMeetingRoom({
       case "moderation.force_muted":
         applyForceMuted(event);
         return;
+      case "participant.role_changed":
+        applyRoleChanged(event);
+        return;
+      case "participant.removed":
+        applyParticipantRemoved(event);
+        return;
+      case "room.lock_changed":
+        applyRoomLockChanged(event);
+        return;
+      case "room.access_updated":
+        applyRoomAccessUpdated(event);
+        return;
       case "moderation.participant_muted":
         applyParticipantMuted(event);
         return;
@@ -1533,6 +1575,8 @@ export function useMeetingRoom({
 
     const snapshotRoomLanguages = normalizeRoomLanguages(event.payload.room);
     setSelfState(event.payload.self);
+    setSelfRole(normalizeRole(event.payload.self.role));
+    setPermissionsEnforced(event.payload.self.permissions_enforced ?? true);
     setParticipantsById(mapParticipants(event.payload.participants));
     syncLocalScreenShareState(event.payload.participants, event.payload.self.participant_id);
     setRoomMeta((current) => ({
@@ -1555,6 +1599,9 @@ export function useMeetingRoom({
         event.payload.room.interpreter_mode ?? current?.interpreter_mode,
       audio_routing:
         event.payload.room.audio_routing ?? current?.audio_routing,
+      password_required: event.payload.room.password_required ?? current?.password_required,
+      title: event.payload.room.title ?? current?.title ?? null,
+      locked: event.payload.room.locked ?? current?.locked ?? false,
       participant_count: countHumanParticipants(event.payload.participants),
     }));
 
@@ -1578,7 +1625,7 @@ export function useMeetingRoom({
 
     // Host state from snapshot
     const snapshotHostId = event.payload.host_participant_id ?? null;
-    const hostFromParticipant = event.payload.participants.find((p) => p.is_host);
+    const hostFromParticipant = event.payload.participants.find((p) => p.role === "host" || p.is_host);
     setHostParticipantId(snapshotHostId || hostFromParticipant?.participant_id || null);
 
     // Chat messages from snapshot
@@ -1614,6 +1661,8 @@ export function useMeetingRoom({
         metadata: event.payload.metadata,
         is_screen_sharing: event.payload.is_screen_sharing ?? false,
         screen_share: event.payload.screen_share ?? null,
+        role: event.payload.role,
+        muted_by_host: event.payload.muted_by_host ?? false,
       },
     }));
     setRoomMeta((current) =>
@@ -1628,7 +1677,7 @@ export function useMeetingRoom({
     );
 
     // Track host from joined event
-    if (event.payload.is_host) {
+    if (event.payload.role === "host" || event.payload.is_host) {
       setHostParticipantId(event.payload.participant_id);
     }
   }
@@ -1653,6 +1702,7 @@ export function useMeetingRoom({
             event.payload.is_screen_sharing ?? existing?.is_screen_sharing ?? false,
           screen_share: event.payload.screen_share ?? existing?.screen_share ?? null,
           is_host: event.payload.is_host ?? existing?.is_host,
+          role: event.payload.role ?? existing?.role,
           muted_by_host: event.payload.muted_by_host ?? existing?.muted_by_host,
         },
       };
@@ -2211,6 +2261,114 @@ export function useMeetingRoom({
     });
   }
 
+  function applyRoleChanged(event: ParticipantRoleChangedEvent): void {
+    const ids = new Set([event.payload.participant_id, ...(event.payload.participant_ids ?? [])]);
+    setParticipantsById((current) => {
+      const next = { ...current };
+      for (const id of ids) {
+        if (next[id]) next[id] = { ...next[id], role: event.payload.new_role };
+      }
+      return next;
+    });
+    const selfId = selfRef.current?.participant_id;
+    if (selfId && ids.has(selfId)) {
+      setSelfRole(event.payload.new_role);
+      const by = event.payload.changed_by_name ?? "The host";
+      setRoleNotice(
+        event.payload.new_role === "co_host"
+          ? `${by} made you a co-host. You can now manage AI relay, recording and participants.`
+          : "You're no longer a co-host.",
+      );
+    }
+  }
+
+  function applyParticipantRemoved(event: ParticipantRemovedEvent): void {
+    if (event.payload.participant_id === selfRef.current?.participant_id) {
+      handleRemovedFromMeeting(event.payload.removed_by ?? null);
+      return;
+    }
+    setParticipantsById((current) => {
+      if (!(event.payload.participant_id in current)) return current;
+      const next = { ...current };
+      delete next[event.payload.participant_id];
+      return next;
+    });
+  }
+
+  function applyRoomLockChanged(event: RoomLockChangedEvent): void {
+    setRoomMeta((current) => (current ? { ...current, locked: event.payload.locked } : current));
+  }
+
+  function applyRoomAccessUpdated(event: RoomAccessUpdatedEvent): void {
+    setRoomMeta((current) =>
+      current ? { ...current, password_required: event.payload.password_required } : current,
+    );
+  }
+
+  /** Removed by the host: leave every connection; the server already refuses a rejoin. */
+  function handleRemovedFromMeeting(by: string | null): void {
+    if (manualShutdownRef.current && removedFromMeetingRef.current) return;
+    removedFromMeetingRef.current = true;
+    manualShutdownRef.current = true;
+    hasLeftRef.current = true;
+    hasSentLeaveRef.current = true;
+    setRemovedFromMeeting({ by });
+    const gateway = gatewayRef.current;
+    gatewayRef.current = null;
+    gateway?.disconnect("Removed from meeting");
+    const lkRoom = livekitRoomRef.current;
+    livekitRoomRef.current = null;
+    localAudioTrackRef.current = null;
+    localVideoTrackRef.current = null;
+    clearLocalScreenTrack(lkRoom);
+    disconnectRoom(lkRoom);
+    sessionInvalidatedRef.current();
+  }
+
+  async function runManagementAction<T>(name: string, action: (token: string) => Promise<T>): Promise<T | null> {
+    if (!session || expiredShutdownRef.current || isRoomExpired) return null;
+    setPendingManagementAction(name);
+    setModerationError(null);
+    try {
+      return await action(session.roomToken);
+    } catch (error) {
+      setModerationError(managementErrorMessage(error));
+      return null;
+    } finally {
+      setPendingManagementAction(null);
+    }
+  }
+
+  async function removeParticipant(participantId: string): Promise<void> {
+    await runManagementAction(`remove:${participantId}`, (token) => api.removeParticipant(roomId, token, participantId));
+  }
+
+  async function setParticipantRole(participantId: string, role: Exclude<RoomRole, "host">): Promise<void> {
+    await runManagementAction(`role:${participantId}`, (token) => api.setParticipantRole(roomId, token, participantId, role));
+  }
+
+  async function setRoomLocked(locked: boolean): Promise<void> {
+    const room = await runManagementAction("lock", (token) => api.setRoomLocked(roomId, token, locked));
+    if (room) setRoomMeta((current) => (current ? { ...current, locked: !!room.locked } : current));
+  }
+
+  /** Throws so the password dialog can show the error next to the field. */
+  async function changeRoomPassword(password: string): Promise<void> {
+    if (!session) return;
+    setPendingManagementAction("password");
+    try {
+      const room = await api.changeRoomPassword(roomId, session.roomToken, password);
+      setRoomMeta((current) => (current ? { ...current, password_required: !!room.password_required } : current));
+    } finally {
+      setPendingManagementAction(null);
+    }
+  }
+
+  async function removeRoomPassword(): Promise<void> {
+    const room = await runManagementAction("password", (token) => api.removeRoomPassword(roomId, token));
+    if (room) setRoomMeta((current) => (current ? { ...current, password_required: !!room.password_required } : current));
+  }
+
   // ─── Moderation handlers ──────────────────────────────────────────────────
 
   function applyForceMuted(event: ModerationForceMutedEvent): void {
@@ -2275,19 +2433,11 @@ export function useMeetingRoom({
     setModerationError(null);
 
     try {
-      // Try REST first
-      try {
-        await api.muteParticipant(roomId, session.roomToken, {
-          target_participant_id: targetParticipantId,
-        });
-      } catch {
-        // Fallback to WS
-        gatewayRef.current?.sendMuteParticipant(targetParticipantId);
-      }
+      await api.muteParticipant(roomId, session.roomToken, {
+        target_participant_id: targetParticipantId,
+      });
     } catch (error) {
-      setModerationError(
-        error instanceof Error ? error.message : "Failed to mute participant.",
-      );
+      setModerationError(managementErrorMessage(error));
     } finally {
       setIsMutingParticipant(null);
     }
@@ -2330,7 +2480,7 @@ export function useMeetingRoom({
     )
     .map((p) => ({
       ...p,
-      is_host: p.participant_id === hostParticipantId || p.is_host,
+      is_host: p.role === "host" || p.participant_id === hostParticipantId || p.is_host,
     }))
     .sort((left, right) =>
       compareParticipants(left, right, selfState?.participant_id),
@@ -2465,7 +2615,22 @@ export function useMeetingRoom({
     prepareFinalSummary,
     // Host
     hostParticipantId,
-    isCurrentUserHost,
+    isCurrentUserHost: selfRole === "host" || isCurrentUserHost,
+    // Roles & room management
+    selfRole,
+    permissions: permissionsFor(selfRole, permissionsEnforced),
+    roomLocked: !!roomMeta?.locked,
+    passwordRequired: !!(roomMeta?.password_required ?? session?.room.password_required),
+    roomTitle: roomMeta?.title ?? session?.room.title ?? null,
+    roleNotice,
+    dismissRoleNotice: () => setRoleNotice(null),
+    pendingManagementAction,
+    removedFromMeeting,
+    removeParticipant,
+    setParticipantRole,
+    setRoomLocked,
+    changeRoomPassword,
+    removeRoomPassword,
     // Moderation
     isMutedByHost,
     isMutingParticipant,
@@ -3040,4 +3205,14 @@ function formatFatalCloseMessage(code: number, reason: string): string {
     return "Session is no longer valid for this room.";
   }
   return reason;
+}
+
+function managementErrorMessage(error: unknown): string {
+  if (error instanceof ApiError) {
+    if (error.status === 403) return PERMISSION_DENIED_MESSAGE;
+    if (error.code === "participant_not_found") return "That person is no longer in the meeting.";
+    if (error.code === "room_expired") return "This meeting has ended.";
+    return error.message || "Couldn't complete that action. Try again.";
+  }
+  return "Couldn't complete that action. Try again.";
 }

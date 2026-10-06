@@ -19,11 +19,12 @@ Tài liệu này ghi lại toàn bộ quá trình làm việc với Claude Code 
 | Tool Database Backup & Restore (MongoDB → S3) | ✅ Xong, có test integration |
 | **Feature A** — Phòng họp có mật khẩu | ✅ Xong (backend + FE + test + doc 03) |
 | **Feature B** — Chia sẻ màn hình chất lượng cao 30/60 FPS + âm thanh | ✅ Xong 2026-10-05 (xem mục 6), chưa test tay trên trình duyệt thật |
+| **Host / Co-host thật + My meetings + lịch sử đầy đủ + search** | ✅ Xong 2026-10-05 (BE + FE + test + doc). Chi tiết: `docs/room-roles-and-meeting-history.md`, doc 03 R-70…R-93, S7. Chưa test tay với LiveKit thật (mute/remove ở SFU) |
 
 Kết quả test tại thời điểm bàn giao:
 
-- Backend: `262 passed`.
-- Frontend: `103 passed` (2026-10-05); `tsc --noEmit` OK; `npm run build` OK.
+- Backend: `292 passed` (2026-10-05; venv tạo bằng `uv venv --python 3.12 BE/.venv` vì máy mới không có python3.12 từ Homebrew).
+- Frontend: `116 passed` (2026-10-05); `npm run typecheck` OK; `npm run build` OK.
   - Trên Node 22+ (máy mới dùng Node 25), `localStorage` toàn cục của Node che mất bản của jsdom làm 13 test auth fail;
     `FE/src/test/setup.ts` đã thay bằng Storage trong bộ nhớ.
 - Tool backup: 28 test (23 unit + 5 integration, integration cần Docker + S3 local).

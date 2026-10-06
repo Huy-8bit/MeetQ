@@ -67,7 +67,7 @@ export function AudioDevicePanel({
           <Switch
             checked={!isMicMuted}
             onChange={onToggleMic}
-            disabled={isTogglingMic || (isMutedByHost && isMicMuted)}
+            disabled={isTogglingMic}
             label="Microphone"
             hideLabel
           />

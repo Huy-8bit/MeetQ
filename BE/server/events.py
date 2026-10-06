@@ -23,6 +23,15 @@ class EventType:
     PARTICIPANT_UPDATED = "participant.updated"
     PARTICIPANT_LEFT = "participant.left"
 
+    # Room management (host / co-host). Roles are server state; clients only render them.
+    PARTICIPANT_ROLE_CHANGED = "participant.role_changed"
+    # Sent to everyone, then the removed participant's websocket is closed (4409).
+    PARTICIPANT_REMOVED = "participant.removed"
+    MODERATION_PARTICIPANT_MUTED = "moderation.participant_muted"
+    ROOM_LOCK_CHANGED = "room.lock_changed"
+    # Password set / changed / removed: carries only `password_required`, never the password.
+    ROOM_ACCESS_UPDATED = "room.access_updated"
+
     TRANSCRIPT_PARTIAL = "transcript.partial"
     TRANSCRIPT_FINAL = "transcript.final"
 

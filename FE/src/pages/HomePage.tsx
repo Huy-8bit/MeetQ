@@ -55,6 +55,7 @@ export function HomePage() {
   );
   // Room password lives only in component state until the create request is sent.
   const [roomAccess, setRoomAccess] = useState<RoomAccess>("link");
+  const [meetingTitle, setMeetingTitle] = useState("");
   const [roomPassword, setRoomPassword] = useState("");
   const [roomPasswordConfirm, setRoomPasswordConfirm] = useState("");
   const [passwordErrors, setPasswordErrors] = useState<RoomPasswordErrors>({});
@@ -104,7 +105,9 @@ export function HomePage() {
         room_languages: selectedLanguages,
         ...buildCreateBrsePayload(brseCreateMode, selectedLanguages),
         ...(roomAccess === "password" ? { access: "password" as const, password: roomPassword } : { access: "link" as const }),
+        ...(meetingTitle.trim() ? { title: meetingTitle.trim() } : {}),
       });
+      setMeetingTitle("");
       setRoomPassword("");
       setRoomPasswordConfirm("");
       navigate(`/rooms/${res.room.room_id}`);
@@ -185,6 +188,24 @@ export function HomePage() {
                 <h2 id="create-room-title" className="card-title">Create a room</h2>
                 <p className="card-description">Pick the languages people will speak.</p>
               </div>
+
+              <Field
+                label="Meeting title (optional)"
+                htmlFor="meeting-title"
+                helper="Helps you find it later in My meetings."
+              >
+                <input
+                  id="meeting-title"
+                  className="input"
+                  value={meetingTitle}
+                  onChange={(event) => setMeetingTitle(event.target.value)}
+                  maxLength={120}
+                  placeholder={
+                    languageCount > 0 ? `${formatRoomLanguageList(selectedLanguages)} meeting` : "e.g. Weekly sync"
+                  }
+                  autoComplete="off"
+                />
+              </Field>
 
               <Field
                 asGroup
