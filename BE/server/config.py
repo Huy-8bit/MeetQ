@@ -112,9 +112,6 @@ class Settings(BaseSettings):
     archive_summary_wait_seconds: int = 300
     deployment_environment: str = "local"
 
-    # Internal service token for Go -> Python AI internal calls
-    python_ai_service_token: Optional[str] = None
-
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
 def get_settings() -> Settings:

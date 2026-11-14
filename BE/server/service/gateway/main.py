@@ -30,7 +30,6 @@ from server.service.gateway.api_test_sessions import router as test_sessions_rou
 from server.service.gateway.ws_endpoint import router as ws_router
 from server.service.gateway.ws_test_mic import router as ws_mic_router
 from server.service.gateway.ws_test_translation import router as ws_translation_router
-from server.service.ai_internal.api import router as ai_internal_router
 from server.service.gateway.event_consumer import start_event_consumer
 from server.service.persistence.room_history import MongoRoomHistoryRepository
 import logging
@@ -293,4 +292,3 @@ app.include_router(test_sessions_router)
 app.include_router(ws_router)
 app.include_router(ws_mic_router)
 app.include_router(ws_translation_router)
-app.include_router(ai_internal_router)
